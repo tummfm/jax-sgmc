@@ -32,7 +32,8 @@ class TestData:
                                               parameters=pa,
                                               batch_size=batch_size)
 
-      test_obs_batch, test_par_batch = data_loader.get_random_batch()
+      batch = data_loader.get_random_batch()
+      test_obs_batch, test_par_batch = batch.mini_batch
 
       # Count of samples is correct
       assert test_obs_batch.shape[0] == batch_size
@@ -60,7 +61,8 @@ class TestData:
     data_loader = data.PreloadReferenceData(obs, par, batch_size=2)
 
     for i in range(100):
-      obs_batch, par_batch = data_loader.get_random_batch()
+      batch = data_loader.get_random_batch()
+      obs_batch, par_batch = batch.mini_batch
 
       assert onp.sum(obs_batch) == onp.sum(par_batch)
 
@@ -70,6 +72,7 @@ class TestData:
 
     data_loader = data.PreloadReferenceData(obs)
 
-    obs_batch, par_batch = data_loader.get_random_batch()
+    batch = data_loader.get_random_batch()
+    obs_batch, par_batch = batch.mini_batch
 
     assert par_batch == None

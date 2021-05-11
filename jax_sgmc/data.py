@@ -1,5 +1,7 @@
 """Data input and output."""
 
+from collections import namedtuple
+
 from typing import Tuple
 
 import jax.numpy as jnp
@@ -13,6 +15,21 @@ from jax_sgmc.util import Array
 # Todo: Implement class to handle reference data without exposing dataloader
 # Todo: Implement basic data loading
 # Todo: Implement data loading with tensorflow
+
+# Define a mini_batch state bundling all information related to the reference
+# data. This includes the total count of observations.
+
+# Todo: Improve naming
+
+mini_batch = namedtuple("mini_batch",
+                        ["observation_count",
+                         "mini_batch"])
+""" Bundling all information about the reference data:
+
+Attributes:
+  observation_count: Total number of observatins
+  mini_batch: List of tuples, tuples consist of ``(observations, parameters)``
+"""
 
 class ReferenceData:
   """Interface to the reference data.
@@ -50,6 +67,7 @@ class PreloadReferenceData(ReferenceData):
     # numpy array
 
     self.observations = onp.array(observations)
+    self.observation_count = self.observations.shape[0]
 
     # If parameters are passed, for each observation sample a parameter sample
     # must exists
@@ -62,7 +80,7 @@ class PreloadReferenceData(ReferenceData):
       assert self.parameters.shape[0] == self.observations.shape[0]
 
 
-  def get_random_batch(self) -> Tuple[Array, Array]:
+  def get_random_batch(self) -> mini_batch:
 
     # Each batch is assembled by draw from all samples with equal probability
 
@@ -92,7 +110,9 @@ class PreloadReferenceData(ReferenceData):
       else:
         parameters_random_batch = jnp.array(self.parameters[sample_selection,::])
 
-    return observations_random_batch, parameters_random_batch
+    return mini_batch(observation_count=self.observation_count,
+                      mini_batch=(observations_random_batch,
+                                  parameters_random_batch))
 
 
 def checkpoint(*args, **kwargs):

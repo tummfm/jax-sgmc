@@ -7,5 +7,6 @@ jax-sgmc.potential
 .. autosummary::
   :toctree: _autosummary
 
-    minibatch_potential_function
-    full_potential_function
+    minibatch_potential
+    full_potential
+    stochastic_potential_gradient

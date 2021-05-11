@@ -68,7 +68,7 @@ class TestPotential():
 
     actual = jnp.sum(jnp.matmul(example_batch.mini_batch[1], example_sample))
     actual = actual - jnp.sum(jnp.sum(example_batch.mini_batch[0]))
-    actual = jnp.float32(actual * 1 / 5)
+    actual = - jnp.float32(actual * 1 / 5)
 
     result_map = potential_fun_map(example_sample, example_batch)
     result_vmap = potential_fun_vmap(example_sample, example_batch)

@@ -12,7 +12,7 @@ making use of jaxs tools ``map``, ``vmap`` and ``pmap``.
 
 from functools import partial
 
-from typing import Callable, Any, AnyStr, Optional, List, Mapping
+from typing import Callable, Any, AnyStr
 
 from jax import vmap, grad
 from jax.lax import scan
@@ -90,7 +90,7 @@ def minibatch_potential(prior: Prior,
       cumsum, _ = scan(single_likelihood_evaluation,
                        startsum,
                        reference_data.mini_batch)
-      stochastic_potential = N / n * cumsum
+      stochastic_potential = - N / n * cumsum
       return stochastic_potential
   elif strategy == 'vmap':
     @partial(vmap, in_axes=(None, 0))
@@ -104,8 +104,8 @@ def minibatch_potential(prior: Prior,
       # full data set size
       N = reference_data.observation_count
       batch_likelihoods = vmap_helper(sample, reference_data.mini_batch)
-      stochastic_potential = N * jnp.mean(batch_likelihoods, axis=0)
-      return jnp.array(stochastic_potential, dtype=jnp.float32)
+      stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
+      return jnp.float32(stochastic_potential)
   else:
     assert False, "Currently not implemented"
 
@@ -121,7 +121,7 @@ def minibatch_potential(prior: Prior,
     # The prior has to be evaluated only once, therefore the extra call
     prior_value = prior(sample)
 
-    return likelihood_value + prior_value
+    return likelihood_value - prior_value
 
   return potential_function
 

@@ -12,3 +12,4 @@ API Documentation
     jax-sgmc.potential
     jax-sgmc.solver
     jax-sgmc.util
+    jax-sgmc.scheduler

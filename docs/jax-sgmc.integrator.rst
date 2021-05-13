@@ -7,3 +7,4 @@ jax-sgmc.integrator
   :toctree: _autosummary
 
     reversible_leapfrog
+    langevin_diffusion

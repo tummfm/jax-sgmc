@@ -38,6 +38,7 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.viewcode',
     'sphinx.ext.intersphinx',
+    'sphinx.ext.doctest',
     'sphinx_autodoc_typehints',
     'sphinx_rtd_theme',
     'myst_nb'

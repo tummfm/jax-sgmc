@@ -9,6 +9,8 @@ from jax_sgmc.data import mini_batch
 from jax_sgmc.potential import minibatch_potential
 from jax_sgmc.potential import stochastic_potential_gradient
 
+# Todo: Test the potential evaluation function on arbitrary pytrees.
+
 class TestPotential():
   # Helper functions
 

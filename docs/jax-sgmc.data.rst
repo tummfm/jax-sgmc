@@ -15,6 +15,8 @@ Data Loaders
 .. autoclass:: jax_sgmc.data.TensorflowDataLoader
     :members:
 
+.. autoclass::jax_sgmc.data.NumpyDataLoader
+    :members:
 
 Data Passing
 -------------

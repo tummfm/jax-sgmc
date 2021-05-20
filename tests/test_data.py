@@ -10,7 +10,13 @@ import numpy as onp
 
 import pytest
 
-class TestData:
+class TestNumpyLoader:
+
+  def setup_numpy_loader(self, batch_size, **kwargs):
+    data_loader = data.NumpyDataLoader(batch_size, **kwargs)
+    chain_id = data_loader.register_random_pipeline()
+    return lambda :data_loader.random_batches(chain_id)
+
   def test_batch_size(self):
     """Generate an array and matrix with different dimensions and test shape of
     the result."""
@@ -28,12 +34,14 @@ class TestData:
            onp.ones((60, 50, 50))]
 
     for ob, pa in zip(obs, par):
-      data_loader = data.PreloadReferenceData(ob,
-                                              parameters=pa,
-                                              batch_size=batch_size)
 
-      batch = data_loader.get_random_batch()
-      test_obs_batch, test_par_batch = batch.mini_batch
+      random_batch_fn = self.setup_numpy_loader(batch_size, obs=ob, par=pa)
+      batch = random_batch_fn()
+
+      print(batch)
+
+      test_obs_batch = batch["obs"][0]
+      test_par_batch = batch["par"][0]
 
       # Count of samples is correct
       assert test_obs_batch.shape[0] == batch_size
@@ -43,14 +51,6 @@ class TestData:
       assert test_obs_batch.shape[1:] == ob.shape[1:]
       assert test_par_batch.shape[1:] == pa.shape[1:]
 
-  def test_different_sample_size(self):
-    """Test that parameters and observations must have same sample count."""
-
-    obs = onp.ones((14, 10))
-    par = onp.ones((15, 10))
-
-    with pytest.raises(AssertionError):
-      data_loader = data.PreloadReferenceData(obs, par)
 
   def test_relation(self):
     """Test if sample and observations are corresponding"""
@@ -58,21 +58,10 @@ class TestData:
     obs = onp.arange(10)
     par = onp.arange(10)
 
-    data_loader = data.PreloadReferenceData(obs, par, batch_size=2)
+    random_batch_fn = self.setup_numpy_loader(batch_size=2, obs=obs, par=par)
 
     for i in range(100):
-      batch = data_loader.get_random_batch()
-      obs_batch, par_batch = batch.mini_batch
+      batch = random_batch_fn()
+      obs_batch, par_batch = batch["obs"], batch["par"]
 
       assert onp.sum(obs_batch) == onp.sum(par_batch)
-
-  def test_no_par(self):
-
-    obs = onp.ones((14, 15))
-
-    data_loader = data.PreloadReferenceData(obs)
-
-    batch = data_loader.get_random_batch()
-    obs_batch, par_batch = batch.mini_batch
-
-    assert par_batch == None

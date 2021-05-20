@@ -11,7 +11,6 @@ PyTree = Any
 
 # Probably not important
 
-@partial(partial, tree_map)
 def tree_multiply(a: PyTree, b: PyTree) -> PyTree:
   """Maps elementwise product over two vectors.
 
@@ -23,7 +22,7 @@ def tree_multiply(a: PyTree, b: PyTree) -> PyTree:
     Returns a PyTree obtained by an element-wise product of all PyTree leaves.
 
   """
-  return jnp.multiply(a, b)
+  return tree_map(jnp.multiply, a, b)
 
 
 def tree_scale(alpha: Array, a: PyTree) -> PyTree:
@@ -37,9 +36,12 @@ def tree_scale(alpha: Array, a: PyTree) -> PyTree:
     Returns a PyTree with all leaves scaled by alpha.
 
   """
-  return tree_map(lambda x: alpha * x, a)
+  @partial(partial, tree_map)
+  def tree_scale_imp(x: PyTree):
+    return alpha * x
+  return tree_scale_imp(a)
 
-@partial(partial, tree_map)
+
 def tree_add(a: PyTree, b: PyTree) -> PyTree:
   """Maps elementwise sum over PyTrees.
 
@@ -50,4 +52,7 @@ def tree_add(a: PyTree, b: PyTree) -> PyTree:
   Returns:
     Returns a PyTree obtained by leave-wise summation.
   """
-  return jnp.add(a, b)
+  @partial(partial, tree_map)
+  def tree_add_imp(leaf_a, leaf_b):
+    return leaf_a + leaf_b
+  return tree_add_imp(a, b)

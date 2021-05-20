@@ -9,3 +9,5 @@ jax-sgmc.util
 
     Array
     tree_multiply
+    tree_add
+    tree_scale

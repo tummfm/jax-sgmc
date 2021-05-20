@@ -3,15 +3,13 @@
 from collections import namedtuple
 from functools import partial
 
-from typing import Tuple, Any, Type, Callable, List
+from typing import Tuple, Any, Callable, List
 
 import jax
 from jax import tree_util, lax
 import jax.numpy as jnp
 from jax import random, tree_util
 from jax.experimental import host_callback as hcb
-
-import numpy as onp
 
 # Tensorflow is only required if the tensorflow dataLoader ist used.
 try:
@@ -38,6 +36,9 @@ MiniBatch = Tuple[Array, mini_batch_format]
 PyTree = Any
 
 # Definition of the data loader class
+
+# Todo: State übergeben bei random batch statt chain id. Damit einfacher
+#       checkpointing
 
 class DataLoader:
   """Abstract class to define required methods of the DataLoader.
@@ -227,7 +228,6 @@ Attributes:
   chain_id: Indentifier of the chain
     
 """
-
 # Todo: Implement checkpoint function
 
 def random_reference_data(data_loader: DataLoader,

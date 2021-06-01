@@ -10,7 +10,7 @@ on:
     branches: [ master ]
 
 jobs:
-  build:
+  test_and_lint:
 
     runs-on: ubuntu-latest
 
@@ -20,14 +20,10 @@ jobs:
       uses: actions/setup-python@v2
       with:
         python-version: 3.8
-    - name: Install dependencies
+    - name: Install tox
       run: |
         python -m pip install --upgrade pip
-        pip install tox pylint .
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Lint with pylint
-      run: |
-        pylint jax_sgmc
-    - name: Test with tox
+        pip install tox
+    - name: Lint and test with tox
       run: |
         tox

@@ -5,13 +5,18 @@ import sys
 sys.path.append('..')
 
 from jax_sgmc import data
-import tensorflow
+
+try:
+  import tensorflow
+except ImportError:
+  print("Tensorflow not found")
 
 import jax
 
 import numpy as onp
 
 import pytest
+
 
 
 @pytest.mark.tensorflow

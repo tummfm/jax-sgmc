@@ -28,7 +28,7 @@ to jit-compile or vmap the entiere function. In the bachground, the data is
 passed sequentially via host_callback.call().
 
 
-.. autoclass:: jax_sgmc.data.mini_batch_format
+.. autoclass:: jax_sgmc.data.mini_batch_information
 
 Random mini-batch access
 __________________________

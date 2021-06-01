@@ -8,9 +8,9 @@ from jax import random, jit, tree_unflatten, tree_flatten
 
 import jax.numpy as jnp
 
-from jax_sgmc.data import ReferenceData, mini_batch
+from jax_sgmc.data import MiniBatch, full_data_state
 from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply
-from jax_sgmc.scheduler import update_parameters
+from jax_sgmc.scheduler import schedule
 
 leapfrog_state = namedtuple("leapfrog_state",
                             ["positions", "momentum", "potential"])
@@ -27,6 +27,10 @@ Attributes:
   adapt_state: Containing quantities such as momentum for adaption
 
 """
+
+# Todo: Correct typing:
+#       - ReferenceData class is replaced by batch_fn()
+#       - MiniBatchState either in integrator state or seperate
 
 PyTree = Any
 LangevinIntegrator = Callable[[langevin_state, Iterable], langevin_state]
@@ -54,7 +58,7 @@ def random_tree(key, a):
 
 def reversible_leapfrog(key: Array,
                         T: Array,
-                        data: ReferenceData,
+                        data: full_data_state,
                         potential_strategy: AnyStr='map'
                         ) -> Callable[[leapfrog_state], leapfrog_state]:
   """Initializes a reversible leapfrog integrator.
@@ -95,7 +99,7 @@ def reversible_leapfrog(key: Array,
 
 def friction_leapfrog(key: Array,
                       T: Array,
-                      data: ReferenceData,
+                      data: full_data_state,
                       potential_strategy: AnyStr='map'
                       ) -> Callable[[leapfrog_state], leapfrog_state]:
   """Initializes the original SGHMC leapfrog integrator.
@@ -135,12 +139,12 @@ def friction_leapfrog(key: Array,
 
 def langevin_diffusion(
         init_sample: PyTree,
-        data: ReferenceData,
-        stochastic_gradient: Callable[[PyTree, mini_batch], PyTree],
+        data: full_data_state,
+        stochastic_gradient: Callable[[PyTree, MiniBatch], PyTree],
         key: Array=None,
         adaption=None,
         strategy='map'
-        ) -> Tuple[langevin_state, LangevinIntegrator]:
+        ) -> Tuple[Callable, Callable, Callable]:
   """Initializes langevin diffusion integrator.
 
   Arguments:
@@ -156,17 +160,41 @@ def langevin_diffusion(
 
   """
 
-  # We need to define an update function. The update function acts on the
-  # flattened version of the pytree, as operations such as elementwise product,
-  # are currently not supported. This is probably going to change with the
+  # We need to define an update function. All array oprations must be
+  # implemented via tree_map. This is probably going to change with the
   # introduction of the tree vectorizing transformation
   # --> https://github.com/google/jax/pull/3263
 
+  # This function is intended to generate initial states. Jax key,
+  # adaption, etc. can be initialized to a default value if not explicitely
+  # provided
+  def init_fn(init_sample):
+    assert False, "Must override"
+
+    # Initializing the initial state here makes it easier to add additional
+    # variables which might be only necessary in special cases
+
+    if key is None:
+      key = random.PRNGKey(0)
+
+    init_state = langevin_state(key=key, latent_variables=init_sample,
+                                adapt_state=None)
+
+  # Returns the important parameters of a state and excludes. Makes information
+  # hiding possible
+
+  def get_fn(init_sample):
+    assert False, "Must override"
+
+  # Update according to the integrator update rule
+
   @jit
   def update_fn(state: langevin_state,
-                parameters: update_parameters,
-                reference_data: mini_batch):
+                parameters: schedule,
+                reference_data: MiniBatch):
     key, split = random.split(state.key)
+
+    # Move the data acquisition here
 
     noise = random_tree(split, state.latent_variables)
     gradient = stochastic_gradient(state.latent_variables,
@@ -208,27 +236,11 @@ def langevin_diffusion(
   # such as step size and temperature
 
   # Todo: Change to support e. g. adaptive step_size?
-  # Todo: Support parallel chain evaluation
+  # Todo: Support parallel chain evaluation:
+  #       - Support multiple schedules with multiple temperatures (parallel
+  #         tempering)
+  #       - Support passing a list of states to vmap
+  #       - Change syntax: Give single pytree and only transform back when
+  #       - necessary (maybe in background?)
 
-  def integrate(state: List[langevin_state], schedule: Iterable) -> langevin_state:
-    # Todo: Here it could be possible to evaluate multiple chains at once. The
-    #       overal method is not jit-able, so we cannot move out the
-    #       parallelization / vectorization on a higher level.
-
-    for step in schedule:
-      mini_batch = data.get_random_batch()
-
-      print(step)
-      state = update_fn(state, step, mini_batch)
-
-    return state
-
-  # Initializing the initial state here makes it easier to add additional
-  # variables which might be only necessary in special cases
-
-  if key is None:
-    key = random.PRNGKey(0)
-
-  init_state = langevin_state(key=key, latent_variables=init_sample, adapt_state=None)
-
-  return init_state, integrate
+  return init_fn, update_fn, get_fn

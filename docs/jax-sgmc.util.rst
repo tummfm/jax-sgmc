@@ -8,3 +8,6 @@ jax-sgmc.util
     :toctree: _autosummary
 
     Array
+    tree_multiply
+    tree_add
+    tree_scale

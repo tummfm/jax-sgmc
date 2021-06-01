@@ -5,15 +5,20 @@ import jax.numpy as jnp
 
 from jax import random, jit
 
-from jax_sgmc.data import mini_batch
+# from jax_sgmc.data import mini_batch
 from jax_sgmc.potential import minibatch_potential
 from jax_sgmc.potential import stochastic_potential_gradient
+from jax_sgmc.data import mini_batch_information
+
+# Todo: Test the potential evaluation function on arbitrary pytrees.
 
 class TestPotential():
   # Helper functions
 
   def linear_potential(self):
-    def likelihood(sample, parameters, observations):
+    def likelihood(sample, ref_data):
+      parameters = ref_data["parameters"]
+      observations = ref_data["observations"]
       return jnp.dot(sample, parameters) - jnp.sum(observations)
 
     def prior(sample):
@@ -37,8 +42,12 @@ class TestPotential():
     split, key = random.split(key)
     observations = random.normal(key, shape=(batch_size, obs_size))
 
-    return mini_batch(observation_count=1,
-                      mini_batch=(observations, parameters)), sample
+    information = mini_batch_information(observation_count=batch_size,
+                                         batch_size=batch_size)
+    data = {"parameters": parameters,
+            "observations": observations}
+
+    return (data, information), sample
 
   # The real tests
 
@@ -66,10 +75,6 @@ class TestPotential():
 
     example_batch, example_sample = self.sample_batch(10, 5, 12)
 
-    actual = jnp.sum(jnp.matmul(example_batch.mini_batch[1], example_sample))
-    actual = actual - jnp.sum(jnp.sum(example_batch.mini_batch[0]))
-    actual = jnp.float32(actual * 1 / 5)
-
     result_map = potential_fun_map(example_sample, example_batch)
     result_vmap = potential_fun_vmap(example_sample, example_batch)
     result_map_gradient = stochastic_gradient_map(example_sample,
@@ -90,9 +95,6 @@ class TestPotential():
                    0.05 * 0.001 * (jnp.abs(result_map_gradient) +
                                    jnp.abs(result_vmap_gradient)))
 
-    # Todo: Include tolerace in tests
-
-    assert jnp.abs(actual - result_vmap) <= 0.5*0.001*(jnp.abs(actual) + jnp.abs(result_vmap))
 
 
 

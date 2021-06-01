@@ -5,10 +5,86 @@ import sys
 sys.path.append('..')
 
 from jax_sgmc import data
+import tensorflow
+
+import jax
 
 import numpy as onp
 
 import pytest
+
+
+@pytest.mark.tensorflow
+class TestTFLoader:
+
+  @pytest.fixture
+  def dataset(self):
+    def generate_dataset():
+      n = 10
+      for i in range(n):
+        yield {"a": i, "b": [i + 0.1 * 1, i + 0.11]}
+    ds = tensorflow.data.Dataset.from_generator(
+      generate_dataset,
+      output_types={'a': tensorflow.float32,
+      'b': tensorflow.float32},
+      output_shapes={'a': tuple(), 'b': (2,)})
+    return ds
+
+  def test_batch_information_caching(self, dataset):
+    mb_size = 2
+    cs = 3
+
+    pipeline = data.TensorflowDataLoader(dataset, mb_size, 100)
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    new_pipe, first_batch = pipeline.register_random_pipeline(cs)
+
+    # Check that format is correct
+    assert batch_info.batch_size == mb_size
+
+    # Check that no new pipe exists
+    print(f"Pipe id {new_pipe}")
+    assert new_pipe == 0
+
+    second_pipe, second_batch = pipeline.register_random_pipeline(3)
+    print(f"Second pipe id {second_pipe}")
+    assert second_pipe != 0
+
+    # Check that two pipelines exist
+    assert len(pipeline._random_pipelines) == 2
+
+    # Check that dtype is correct
+    random_batch = pipeline.random_batches(new_pipe)
+    def assert_fn(x, y):
+      assert x.dtype == y.dtype
+      assert x.shape == y.shape
+    jax.tree_map(assert_fn, random_batch, dtype)
+
+  @pytest.mark.parametrize("exclude", [([],), (["a"],), (["a", "b"],)])
+  def test_exclude_keys(self, dataset, exclude):
+    mb_size = 2
+    cs = 3
+    excluded = ["a"]
+
+    pipeline= data.TensorflowDataLoader(dataset, mb_size, 100,
+                                        exclude_keys=excluded)
+    new_pipe, first_batch = pipeline.register_random_pipeline(cs)
+
+    for key in first_batch.keys():
+      assert key not in excluded
+
+  @pytest.mark.parametrize("cs, mb_size", [(1, 1), (10, 1), (1, 10), (10, 10)])
+  def test_sizes(self, dataset, cs, mb_size):
+
+    pipeline = data.TensorflowDataLoader(dataset, mb_size, 100)
+    _, first_batch = pipeline.register_random_pipeline(cache_size=cs)
+
+    def test_fn(elem):
+      assert elem.shape[0] == cs
+      assert elem.shape[1] == mb_size
+
+    jax.tree_map(test_fn, first_batch)
+
 
 class TestNumpyLoader:
 

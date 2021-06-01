@@ -1,14 +1,15 @@
 """Data input and output."""
 
+import abc
+
 from collections import namedtuple
 from functools import partial
 
 from typing import Tuple, Any, Callable, List
 
 import jax
-from jax import tree_util, lax
+from jax import tree_util, lax, random
 import jax.numpy as jnp
-from jax import random, tree_util
 from jax.experimental import host_callback as hcb
 
 # Tensorflow is only required if the tensorflow dataLoader ist used.
@@ -42,29 +43,99 @@ PyTree = Any
 #       checkpointing
 # Todo: Verwendung von abc
 
-class DataLoader:
+class DataLoader(metaclass=abc.ABCMeta):
   """Abstract class to define required methods of the DataLoader.
 
   A class implementing the data loader must have the functionality to load data
   from storage in an ordered and a random fashion.
   """
 
-  def register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
-    """Registers a data pipeline for random data access."""
-    assert False, "Must override"
+  def __init__(self):
 
-  def register_ordered_pipeline(self, cache_size: int=1, **kwargs) -> int:
+    # The batch information is necessary as before the first data chain is
+    # loaded. Therefore, cache the first random pipeline.
+    self._first_random_pipeline = dict()
+    self._batch_information = dict()
+
+  def register_random_pipeline(self,
+                               cache_size: int=1,
+                               **kwargs
+                               ) -> Tuple[int, Any]:
+    """Registers a data pipeline for random data access.
+
+    Args:
+      cache_size: Number of mini_batches in device memory on the same time
+      **kwargs: Additional information depending on data loader
+
+    Returns:
+      Returns an identifier of the chain and the first cache content.
+
+    """
+
+    first_pipeline = self._first_random_pipeline.get(cache_size)
+    if first_pipeline is not None:
+      pipeline = first_pipeline
+      del self._first_random_pipeline[cache_size]
+      return pipeline
+    else:
+      pipeline = self._register_random_pipeline(cache_size, **kwargs)
+      batch = self.random_batches(pipeline)
+      return (pipeline, batch)
+
+  def register_ordered_pipeline(self,
+                                cache_size: int=1,
+                                **kwargs
+                                ) -> Tuple[int, Any]:
     """Registers a data pipeline for ordered data access.
 
     Ordered data access is required for AMAGOLD to evaluate the true potential
     over all reference data.
+
+    Args:
+      cache_size: Number of mini_batches in device memory on the same time
+      **kwargs: Additional information depending on data loader
+
+    Returns:
+      Returns an identifier of the chain and the first drawn batch.
+
     """
-    assert False, "Must override"
 
-  def batch_format(self) -> mini_batch_information:
-    """Return the form of each batch."""
-    assert False, "Must override"
+  def batch_format(self, cache_size) -> Tuple[mini_batch_information, Any]:
+    batch_info = self._batch_information.get(cache_size)
+    if batch_info is None:
+      # Draw a batch from a random pipeline
+      new_pipeline = self._register_random_pipeline()
+      new_batch = self.random_batches(new_pipeline)
+      # Save the pipeline to be used
+      self._first_random_pipeline[cache_size] = (new_pipeline, new_batch)
+      # Batch information includes the shape of the data as well as mini_batch
+      # size and the total observation count
+      info = self._mini_batch_format()
+      shape = tree_dtype_struct(new_batch)
+      self._batch_information[cache_size] = (info, shape)
+      return (info, shape)
+    else:
+      return batch_info
 
+  @abc.abstractmethod
+  def _register_random_pipeline(self,
+                                cache_size: int=1,
+                                **kwargs
+                                ) -> int:
+    """Registers a data pipeline for random data access."""
+
+  @abc.abstractmethod
+  def _register_ordered_pipeline(self,
+                                 cache_size: int=1,
+                                 **kwargs
+                                 ) -> int:
+    """Registers a data pipeline for ordered data access."""
+
+  @abc.abstractmethod
+  def _mini_batch_format(self):
+    """Return the information about the reference data. """
+
+  @abc.abstractmethod
   def random_batches(self, chain_id: int) -> PyTree:
     """Return random batches"""
     assert False, "Must override"
@@ -78,29 +149,33 @@ class TensorflowDataLoader(DataLoader):
                mini_batch_size: int = 1,
                shuffle_cache: int = 100,
                exclude_keys: List = None):
+    super().__init__()
     # Tensorflow is in general not required to use the library
     assert TFDataSet is not None, "Tensorflow must be installed to use this " \
                                   "feature."
     assert tfds is not None, "Tensorflow datasets must be installed to use " \
                              "this feature."
 
-    self.observation_count = jnp.int32(pipeline.cardinality().numpy())
-    self.pipeline = pipeline
-    self.exclude_keys = exclude_keys
-    self.mini_batch_size = mini_batch_size
-    self.shuffle_cache = shuffle_cache
-    self.random_pipelines = []
-    self.full_data_pipelines = []
+    self._observation_count = jnp.int32(pipeline.cardinality().numpy())
+    self._pipeline = pipeline
+    self._exclude_keys = exclude_keys
+    self._mini_batch_size = mini_batch_size
+    self._shuffle_cache = shuffle_cache
+    self._random_pipelines = []
+    self._full_data_pipelines = []
 
-  def register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
-    # Singleton, as the order of data for multiple pipelines is irrelevant
-    new_chain_id = len(self.random_pipelines)
+  def _mini_batch_format(self):
+    return mini_batch_information(observation_count=self._observation_count,
+                                  batch_size=self._mini_batch_size)
+
+  def _register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
+    new_chain_id = len(self._random_pipelines)
 
     # Randomly draw a number of cache_size mini_batches, where each mini_batch
     # contains self.mini_batch_size elements.
-    random_data = self.pipeline.repeat()
-    random_data = random_data.shuffle(self.shuffle_cache)
-    random_data = random_data.batch(self.mini_batch_size)
+    random_data = self._pipeline.repeat()
+    random_data = random_data.shuffle(self._shuffle_cache)
+    random_data = random_data.batch(self._mini_batch_size)
     random_data = random_data.batch(cache_size)
 
     # The data must be transformed to numpy arrays, as most numpy arrays can
@@ -108,19 +183,25 @@ class TensorflowDataLoader(DataLoader):
     random_data = tfds.as_numpy(random_data)
     random_data = iter(random_data)
 
-    self.random_pipelines.append(random_data)
+    self._random_pipelines.append(random_data)
 
     return new_chain_id
 
+  def _register_ordered_pipeline(self,
+                                 cache_size: int=1,
+                                 **kwargs
+                                 ) -> int:
+    raise NotImplementedError
+
   def random_batches(self, chain_id: int) -> PyTree:
-    assert chain_id < len(self.random_pipelines), f"Pipe {chain_id} does not" \
-                                                  f"exist."
+    assert chain_id < len(self._random_pipelines), f"Pipe {chain_id} does not" \
+                                                   f"exist."
 
     # Not supportet data types, such as strings, must be excluded before
     # transformation to jax types.
-    numpy_batch = next(self.random_pipelines[chain_id])
-    if self.exclude_keys is not None:
-      for key in self.exclude_keys:
+    numpy_batch = next(self._random_pipelines[chain_id])
+    if self._exclude_keys is not None:
+      for key in self._exclude_keys:
         numpy_batch.pop(key)
 
     jax_batch = tree_util.tree_map(lambda leaf: jnp.array(leaf),
@@ -128,15 +209,12 @@ class TensorflowDataLoader(DataLoader):
 
     return jax_batch
 
-  def batch_format(self) -> mini_batch_information:
-    return mini_batch_information(observation_count=self.observation_count,
-                                  batch_size=self.mini_batch_size)
-
 
 class NumpyDataLoader(DataLoader):
   """Load complete dataset into memory from multiple numpy files."""
 
   def __init__(self, mini_batch_size: int, **reference_data):
+    super().__init__()
     assert len(reference_data) > 0, "Observations are required."
 
     first_key = list(reference_data.keys())[0]

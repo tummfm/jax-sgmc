@@ -20,25 +20,25 @@ from jax.lax import scan
 import jax.numpy as jnp
 
 from jax_sgmc import util
-from jax_sgmc.data import ReferenceData, mini_batch
+from jax_sgmc.data import full_data_state, MiniBatch
 
 # Here we define special types
 
 PyTree = Any
 Array = util.Array
-Potential = Callable[[PyTree, ReferenceData], Array]
-Likelihood = Callable[[PyTree, Array, Array], Array]
+Potential = Callable[[PyTree, full_data_state], Array]
+Likelihood = Callable[[PyTree, PyTree], Array]
 Prior = Callable[[PyTree], Array]
-Model = Callable[[PyTree, Array], PyTree]
+Model = Callable[[PyTree, PyTree], PyTree]
 
-# Todo: Implement evaluation via map
-# Todo: Implement evaluation via vmap
+
+# Todo: Possibly support soft-vmap (numpyro)
 # Todo: Implement evaluation via pmap
 
 def minibatch_potential(prior: Prior,
                         likelihood: Likelihood,
                         strategy: AnyStr = "map"
-                        ) -> Callable[[PyTree, mini_batch], Array]:
+                        ) -> Callable[[PyTree, MiniBatch], Array]:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -71,47 +71,46 @@ def minibatch_potential(prior: Prior,
   #       reference data and parameters
 
   if strategy == 'map':
-    def batch_potential(sample, reference_data: mini_batch):
+    def batch_potential(sample, reference_data: MiniBatch):
       # The sample stays the same, therefore, it should be added to the
       # likelihood.
       marginal_likelihood = partial(likelihood, sample)
+      batch_data, batch_information = reference_data
+      N = batch_information.observation_count
+      n = batch_information.batch_size
 
-      def single_likelihood_evaluation(cumsum, reference_data_pair):
-        observations, parameters = reference_data_pair
-        likelihood_value = marginal_likelihood(parameters, observations)
+      def single_likelihood_evaluation(cumsum, observation):
+        likelihood_value = marginal_likelihood(observation)
         next_cumsum = cumsum + likelihood_value
         return next_cumsum, None
 
       # Approximate the potential by taking the average and scaling it to the
       # full data set size
       startsum = jnp.float32(0.0)
-      N = reference_data.observation_count
-      n = reference_data.mini_batch[0].shape[0] # The size of the mini_batch
       cumsum, _ = scan(single_likelihood_evaluation,
                        startsum,
-                       reference_data.mini_batch)
+                       batch_data)
       stochastic_potential = - N / n * cumsum
       return stochastic_potential
   elif strategy == 'vmap':
-    @partial(vmap, in_axes=(None, 0))
-    def vmap_helper(sample, reference_data_pair):
-      observations, parameters = reference_data_pair
-      likelihood_value = likelihood(sample, parameters, observations)
-      return likelihood_value
-
-    def batch_potential(sample, reference_data: mini_batch):
+    batched_likelihood = vmap(likelihood,
+                              in_axes=(None, 0))
+    def batch_potential(sample, reference_data: MiniBatch):
       # Approximate the potential by taking the average and scaling it to the
       # full data set size
-      N = reference_data.observation_count
-      batch_likelihoods = vmap_helper(sample, reference_data.mini_batch)
+      batch_data, batch_information = reference_data
+      N = batch_information.observation_count
+      batch_likelihoods = batched_likelihood(sample, batch_data)
       stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
       return jnp.float32(stochastic_potential)
   else:
     assert False, "Currently not implemented"
 
   def potential_function(sample: PyTree,
-                         reference_data: mini_batch
+                         reference_data: MiniBatch
                          ) -> Array:
+
+    # Todo: The format of the mini_batch has changed
 
     # Evaluate the likelihood and model for each reference data sample
     # liklihood_value = batched_likelihood_and_model(sample, reference_data)
@@ -134,7 +133,7 @@ def minibatch_potential(prior: Prior,
 def full_potential(prior: Callable[[PyTree], Array],
                    likelihood: Callable[[PyTree, PyTree], Array],
                    strategy: AnyStr = "map"
-                   ) -> Callable[[PyTree, ReferenceData], Array]:
+                   ) -> Callable[[PyTree, full_data_state], Array]:
   """Transforms a pdf to compute the full potential over all reference data.
 
   Args:
@@ -169,7 +168,7 @@ def full_potential(prior: Callable[[PyTree], Array],
 def stochastic_potential_gradient(prior: Prior,
                                   likelihood: Likelihood,
                                   strategy: AnyStr = "map"
-                                  ) -> Callable[[PyTree, mini_batch], Array]:
+                                  ) -> Callable[[PyTree, MiniBatch], Array]:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -212,3 +211,4 @@ def stochastic_potential_gradient(prior: Prior,
 
 # Todo: Implement helper function to build the likelihood from the model and a
 #       likelihood distribution.
+

@@ -60,11 +60,10 @@ class TestTFLoader:
       assert x.shape == y.shape
     jax.tree_map(assert_fn, random_batch, dtype)
 
-  @pytest.mark.parametrize("exclude", [([],), (["a"],), (["a", "b"],)])
-  def test_exclude_keys(self, dataset, exclude):
+  @pytest.mark.parametrize("excluded", [[], ["a"], ["a", "b"]])
+  def test_exclude_keys(self, dataset, excluded):
     mb_size = 2
     cs = 3
-    excluded = ["a"]
 
     pipeline= data.TensorflowDataLoader(dataset, mb_size, 100,
                                         exclude_keys=excluded)

@@ -202,7 +202,7 @@ class TensorflowDataLoader(DataLoader):
     numpy_batch = next(self._random_pipelines[chain_id])
     if self._exclude_keys is not None:
       for key in self._exclude_keys:
-        numpy_batch.pop(key)
+        del numpy_batch[key]
 
     jax_batch = tree_util.tree_map(lambda leaf: jnp.array(leaf),
                                    numpy_batch)

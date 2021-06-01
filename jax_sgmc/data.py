@@ -22,9 +22,10 @@ except ModuleNotFoundError:
 
 from jax_sgmc.util import Array
 
-mini_batch_format = namedtuple(
-  "mini_batch_format",
-  ["observation_count"])
+mini_batch_information = namedtuple(
+  "mini_batch_information",
+  ["observation_count",
+   "batch_size"])
 """ Bundling all information about the reference data:
 
 Attributes:
@@ -32,13 +33,14 @@ Attributes:
   mini_batch: List of tuples, tuples consist of ``(observations, parameters)``
 """
 
-MiniBatch = Tuple[Array, mini_batch_format]
+MiniBatch = Tuple[Array, mini_batch_information]
 PyTree = Any
 
 # Definition of the data loader class
 
 # Todo: State übergeben bei random batch statt chain id. Damit einfacher
 #       checkpointing
+# Todo: Verwendung von abc
 
 class DataLoader:
   """Abstract class to define required methods of the DataLoader.
@@ -59,7 +61,7 @@ class DataLoader:
     """
     assert False, "Must override"
 
-  def batch_format(self) -> mini_batch_format:
+  def batch_format(self) -> mini_batch_information:
     """Return the form of each batch."""
     assert False, "Must override"
 
@@ -126,8 +128,9 @@ class TensorflowDataLoader(DataLoader):
 
     return jax_batch
 
-  def batch_format(self) -> mini_batch_format:
-    return mini_batch_format(observation_count=self.observation_count)
+  def batch_format(self) -> mini_batch_information:
+    return mini_batch_information(observation_count=self.observation_count,
+                                  batch_size=self.mini_batch_size)
 
 
 class NumpyDataLoader(DataLoader):
@@ -192,6 +195,10 @@ class NumpyDataLoader(DataLoader):
 
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
+
+  def batch_format(self) -> mini_batch_information:
+    return mini_batch_information(observation_count=self.observation_count,
+                                  batch_size=self.mini_batch_size)
 
 
 random_data_state = namedtuple("random_data_state",
@@ -363,7 +370,7 @@ def random_reference_data(data_loader: DataLoader,
 #
 #   # The format of the mini batch is static, thus it must not be passed
 #   # in form of a state.
-#   mini_batch_format = data_loader.batch_format()
+#   mini_batch_information = data_loader.batch_format()
 #
 #   # The implementation is based on the experimental host_callback module.
 #

@@ -17,7 +17,7 @@ Welcome to jax-sgmc's documentation!
    :maxdepth: 2
    :caption: Developer
 
-   jax-sgmc
+   jax_sgmc
 
 
 

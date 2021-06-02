@@ -57,6 +57,9 @@ class DataLoader(metaclass=abc.ABCMeta):
     self._first_random_pipeline = dict()
     self._batch_information = dict()
 
+  # Todo: Add a checkpoint function returning the current state
+  #       def checkpoint(self, ...):
+
   def register_random_pipeline(self,
                                cache_size: int=1,
                                **kwargs
@@ -164,7 +167,7 @@ class TensorflowDataLoader(DataLoader):
     self._random_pipelines = []
     self._full_data_pipelines = []
 
-  def _mini_batch_format(self):
+  def _mini_batch_format(self) -> mini_batch_information:
     return mini_batch_information(observation_count=self._observation_count,
                                   batch_size=self._mini_batch_size)
 
@@ -220,51 +223,55 @@ class NumpyDataLoader(DataLoader):
     first_key = list(reference_data.keys())[0]
     observation_count = reference_data[first_key].shape[0]
 
-    self.reference_data = dict()
+    self._reference_data = dict()
     for name, array in reference_data.items():
       assert array.shape[0] == observation_count, "Number of observations is" \
                                                   "ambiguous."
-      self.reference_data[name] = array
+      self._reference_data[name] = array
 
-    self.PRNGKeys = []
-    self.cache_sizes = []
-    self.observation_count = observation_count
-    self.mini_batch_size = mini_batch_size
+    self._PRNGKeys = []
+    self._cache_sizes = []
+    self._observation_count = observation_count
+    self._mini_batch_size = mini_batch_size
 
-  def register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
+  def _mini_batch_format(self) -> mini_batch_information:
+    return mini_batch_information(observation_count=self._observation_count,
+                                  batch_size=self._mini_batch_size)
+
+  def _register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
     # The random state of each chain can be defined unambiguously via the
     # PRNGKey
     if "key" not in kwargs:
-      if len(self.PRNGKeys) == 0:
+      if len(self._PRNGKeys) == 0:
         new_key = random.PRNGKey(0)
       else:
-        new_key, = random.split(self.PRNGKeys[-1], 1)
+        new_key, = random.split(self._PRNGKeys[-1], 1)
     else:
       new_key = random.split(kwargs["key"])
 
-    chain_id = len(self.PRNGKeys)
-    self.PRNGKeys.append(new_key)
-    self.cache_sizes.append(cache_size)
+    chain_id = len(self._PRNGKeys)
+    self._PRNGKeys.append(new_key)
+    self._cache_sizes.append(cache_size)
 
     return chain_id
 
   def random_batches(self, chain_id: int) -> PyTree:
-    assert chain_id < len(self.PRNGKeys), f"Chain {chain_id} does not exist."
+    assert chain_id < len(self._PRNGKeys), f"Chain {chain_id} does not exist."
 
-    self.PRNGKeys[chain_id], *splits = random.split(
-      self.PRNGKeys[chain_id],
-      self.cache_sizes[chain_id] + 1)
+    self._PRNGKeys[chain_id], *splits = random.split(
+      self._PRNGKeys[chain_id],
+      self._cache_sizes[chain_id] + 1)
     splits = jnp.array(splits)
-    sample_count = self.observation_count
+    sample_count = self._observation_count
     @jax.vmap
     def sample_selection(split):
       sample_selection = random.choice(split,
                                        jnp.arange(sample_count),
-                                       shape=(self.mini_batch_size,))
+                                       shape=(self._mini_batch_size,))
       return sample_selection
     selected_observations_index = sample_selection(splits)
     selected_observations = dict()
-    for key, data in self.reference_data.items():
+    for key, data in self._reference_data.items():
       if data.ndim == 1:
         selection = data[selected_observations_index,]
       else:
@@ -274,9 +281,11 @@ class NumpyDataLoader(DataLoader):
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
 
-  def batch_format(self) -> mini_batch_information:
-    return mini_batch_information(observation_count=self.observation_count,
-                                  batch_size=self.mini_batch_size)
+  def _register_ordered_pipeline(self,
+                                 cache_size: int = 1,
+                                 **kwargs
+                                 ) -> int:
+    raise NotImplementedError
 
 
 random_data_state = namedtuple("random_data_state",
@@ -288,8 +297,8 @@ random_data_state = namedtuple("random_data_state",
 
 Attributes:
   cached_batches: An array of mini-batches
-  cached_batches_count: Number of cached mini-batches. Equals the first 
-    dimension of the cached batches
+  cached_batches_count: Number of cached mini-batches. Equals the first
+  dimension of the cached batches
   current_line: Marks the next batch to be returned.
   chain_id: Identifier of the chain to associate random state
 
@@ -305,13 +314,12 @@ full_data_state = namedtuple("full_data_state",
 
 Attributes:
   cached_batches: An array of mini-batches
-  cached_batches_count: Number of cached mini-batches. Equals the first 
+  cached_batches_count: Number of cached mini-batches. Equals the first
     dimension of the cached batches
   current_line: Marks the next batch to be returned.
   batch_information: Additional information for each bach, such as whether each
     sample is valid or has already been passed before.
   chain_id: Indentifier of the chain
-    
 """
 # Todo: Implement checkpoint function
 

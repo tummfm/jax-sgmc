@@ -1,10 +1,6 @@
 """Test the data loaders. """
-
-import sys
-
-sys.path.append('..')
-
-from jax_sgmc import data
+# Pylint complains about the fixtures, because they are static
+# pylint: disable=R
 
 try:
   import tensorflow
@@ -12,10 +8,13 @@ except ImportError:
   print("Tensorflow not found")
 
 import jax
+import jax.numpy as jnp
 
 import numpy as onp
 
 import pytest
+
+from jax_sgmc import data
 
 
 
@@ -42,7 +41,7 @@ class TestTFLoader:
     pipeline = data.TensorflowDataLoader(dataset, mb_size, 100)
 
     batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, first_batch = pipeline.register_random_pipeline(cs)
+    new_pipe, _ = pipeline.register_random_pipeline(cs)
 
     # Check that format is correct
     assert batch_info.batch_size == mb_size
@@ -51,7 +50,7 @@ class TestTFLoader:
     print(f"Pipe id {new_pipe}")
     assert new_pipe == 0
 
-    second_pipe, second_batch = pipeline.register_random_pipeline(3)
+    second_pipe, _ = pipeline.register_random_pipeline(3)
     print(f"Second pipe id {second_pipe}")
     assert second_pipe != 0
 
@@ -72,7 +71,7 @@ class TestTFLoader:
 
     pipeline= data.TensorflowDataLoader(dataset, mb_size, 100,
                                         exclude_keys=excluded)
-    new_pipe, first_batch = pipeline.register_random_pipeline(cs)
+    _, first_batch = pipeline.register_random_pipeline(cs)
 
     for key in first_batch.keys():
       assert key not in excluded
@@ -92,56 +91,69 @@ class TestTFLoader:
 
 class TestNumpyLoader:
 
-  def setup_numpy_loader(self, batch_size, **kwargs):
-    data_loader = data.NumpyDataLoader(batch_size, **kwargs)
-    chain_id = data_loader.register_random_pipeline()
-    return lambda :data_loader.random_batches(chain_id)
+  @pytest.fixture
+  def dataset(self):
+    n = 10
+    def generate_a(n):
+      for i in range(n):
+        yield i
+    def generate_b(n):
+      for i in range(n):
+        yield [i + 0.1 * 1, i + 0.11]
+    dataset = {'a': onp.array(list(generate_a(n))),
+               'b': onp.array(list(generate_b(n)))}
+    return dataset
 
-  def test_batch_size(self):
-    """Generate an array and matrix with different dimensions and test shape of
-    the result."""
+  def test_batch_information_caching(self, dataset):
+    mb_size = 2
+    cs = 3
 
-    batch_size = 10
+    pipeline = data.NumpyDataLoader(mb_size, **dataset)
 
-    obs = [onp.ones((4,)),
-           onp.ones((40,)),
-           onp.ones((50, 60)),
-           onp.ones((60, 70, 80))]
+    batch_info, dtype = pipeline.batch_format(cs)
+    new_pipe, _ = pipeline.register_random_pipeline(cs)
 
-    par = [onp.ones((4,)),
-           onp.ones((40,)),
-           onp.ones((50,50)),
-           onp.ones((60, 50, 50))]
+    # Check that format is correct
+    assert batch_info.batch_size == mb_size
 
-    for ob, pa in zip(obs, par):
+    # Check that no new pipe exists
+    print(f"Pipe id {new_pipe}")
+    assert new_pipe == 0
 
-      random_batch_fn = self.setup_numpy_loader(batch_size, obs=ob, par=pa)
-      batch = random_batch_fn()
+    second_pipe, _ = pipeline.register_random_pipeline(3)
+    print(f"Second pipe id {second_pipe}")
+    assert second_pipe != 0
 
-      print(batch)
+    # Check that two pipelines exist
+    assert len(pipeline._PRNGKeys) == 2
 
-      test_obs_batch = batch["obs"][0]
-      test_par_batch = batch["par"][0]
+    # Check that dtype is correct
+    random_batch = pipeline.random_batches(new_pipe)
+    def assert_fn(x, y):
+      assert x.dtype == y.dtype
+      assert x.shape == y.shape
+    jax.tree_map(assert_fn, random_batch, dtype)
 
-      # Count of samples is correct
-      assert test_obs_batch.shape[0] == batch_size
-      assert test_par_batch.shape[0] == batch_size
-
-      # Shape of samples is correct
-      assert test_obs_batch.shape[1:] == ob.shape[1:]
-      assert test_par_batch.shape[1:] == pa.shape[1:]
-
-
-  def test_relation(self):
+  @pytest.mark.parametrize("mb_size, cs", [(1, 3), (3, 1), (3, 2), (1, 1)])
+  def test_relation(self, dataset, mb_size, cs):
     """Test if sample and observations are corresponding"""
 
-    obs = onp.arange(10)
-    par = onp.arange(10)
+    pipeline = data.NumpyDataLoader(mb_size, **dataset)
+    new_pipe, _ = pipeline.register_random_pipeline(cs)
 
-    random_batch_fn = self.setup_numpy_loader(batch_size=2, obs=obs, par=par)
+    def check_fn(a, b):
+      for i, mb in enumerate(a):
+        for j, sample in enumerate(mb):
+          a = sample
+          b_target = onp.array([a + 0.1, a + 0.11])
+          b_is = b[i, j, ::]
 
-    for i in range(100):
-      batch = random_batch_fn()
-      obs_batch, par_batch = batch["obs"], batch["par"]
+          print(f"a: {a}")
+          print(f"b should be: {b_target}")
+          print(f"b is: {b_is}")
 
-      assert onp.sum(obs_batch) == onp.sum(par_batch)
+          assert jnp.all(b_is == b_target)
+
+    for _ in range(100):
+      batch = pipeline.random_batches(new_pipe)
+      jax.tree_map(check_fn, batch['a'], batch['b'])

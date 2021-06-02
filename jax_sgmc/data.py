@@ -347,11 +347,7 @@ def random_reference_data(data_loader: DataLoader,
   # The format of the mini batch is static, thus it must not be passed
   # in form of a state.
 
-  init_chain_id = data_loader.register_random_pipeline(cached_batches_count)
-
-  mini_batch_format = data_loader.batch_format()
-  initial_state = data_loader.random_batches(init_chain_id)
-  returned_data_format = tree_dtype_struct(initial_state)
+  mini_batch_format, hcb_format = data_loader.batch_format(cached_batches_count)
 
   # The definition requires passing an argument to the host function. The shape
   # of the returned data must be known before the first call
@@ -362,7 +358,7 @@ def random_reference_data(data_loader: DataLoader,
   def get_data(chain_id):
     data =  hcb.call(host_function,
                      chain_id,
-                     result_shape=returned_data_format)
+                     result_shape=hcb_format)
     return data
 
   def new_cache_fn(state: random_data_state) -> random_data_state:
@@ -384,10 +380,9 @@ def random_reference_data(data_loader: DataLoader,
   def init_fn(**kwargs) -> random_data_state:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
-
-    chain_id = data_loader.register_random_pipeline(cached_batches_count,
-                                                    **kwargs)
-
+    chain_id, initial_state = data_loader.register_random_pipeline(
+      cached_batches_count,
+      **kwargs)
     inital_cache_state=random_data_state(
       cached_batches=initial_state,
       cached_batches_count=cached_batches_count,
@@ -400,14 +395,14 @@ def random_reference_data(data_loader: DataLoader,
               ) -> Tuple[random_data_state, MiniBatch]:
     """Draws a new random batch (hides data transfer between devices)."""
 
-    # Refresh the cache if necessary
-
-    current_line = jnp.mod(data_state.current_line,
-                           data_state.cached_batches_count)
-    data_state = lax.cond(current_line == 0,
+    # Refresh the cache if necessary, after all cached batches have been used.
+    data_state = lax.cond(data_state.current_line
+                          == data_state.cached_batches_count,
                           new_cache_fn,
                           old_cache_fn,
                           data_state)
+    current_line = jnp.mod(data_state.current_line,
+                           data_state.cached_batches_count)
 
     # Read the current line from the cache and
     random_mini_batch = tree_index(data_state.cached_batches, current_line)

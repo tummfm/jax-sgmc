@@ -3,8 +3,7 @@
 # pylint: disable=R
 
 from collections import namedtuple
-
-from unittest import mock
+from functools import partial
 
 try:
   import tensorflow
@@ -19,9 +18,7 @@ import numpy as onp
 
 import pytest
 
-from jax_sgmc import data
-
-
+from jax_sgmc import data, util
 
 @pytest.mark.tensorflow
 class TestTFLoader:
@@ -44,8 +41,6 @@ class TestTFLoader:
   def dataloader(self, request, dataset):
     pipeline = data.TensorflowDataLoader(dataset, request.param, 100)
     return pipeline, request.param
-
-
 
   def test_batch_information_caching(self, dataloader):
     cs = 3
@@ -100,7 +95,6 @@ class TestTFLoader:
 
     jax.tree_map(test_fn, first_batch)
 
-
 class TestNumpyLoader:
 
   @pytest.fixture(scope='class')
@@ -153,11 +147,26 @@ class TestNumpyLoader:
       assert x.shape == y.shape
     jax.tree_map(assert_fn, random_batch, dtype)
 
+  @pytest.mark.parametrize("cs_small, cs_big", [(5,7), (7, 11)])
+  def test_cache_size_order(self, dataloader, cs_small, cs_big):
+    pipeline, _ = dataloader
+
+    _, small_batch = pipeline.register_random_pipeline(
+      cs_small, key=jax.random.PRNGKey(0))
+    _, big_batch = pipeline.register_random_pipeline(
+      cs_big, key=jax.random.PRNGKey(0))
+
+    def check_fn(a, b):
+      for idx in range(cs_small):
+        assert jnp.all(a[idx, ::] == b[idx, ::])
+
+    jax.tree_map(check_fn, small_batch, big_batch)
+
   @pytest.mark.parametrize("cs", [1, 2, 4])
   def test_relation(self, dataloader, cs):
     """Test if sample and observations are corresponding"""
 
-    pipeline, mb_size = dataloader
+    pipeline, _ = dataloader
     new_pipe, _ = pipeline.register_random_pipeline(cs)
 
     def check_fn(a, b):
@@ -184,11 +193,11 @@ class TestRandomAccess:
                            ["mb_size",
                             "cs"])
 
-  @pytest.fixture(scope='class', params=[data_format(1, 1),
+  @pytest.fixture(scope='function', params=[data_format(1, 1),
                                          data_format(1, 7),
                                          data_format(19, 1),
                                          data_format(19, 7)])
-  def data_loader_mock(self, request):
+  def data_loader_mock(self, request, mocker):
     """Construct tensorflow dataset without shuffling."""
     def generate_dataset():
       n = 5
@@ -205,12 +214,13 @@ class TestRandomAccess:
     init_value = jax.tree_map(jnp.array, next(iter(tensorflow_datasets.as_numpy(ds_cache))))
     ds_cache = iter(tensorflow_datasets.as_numpy(ds_cache))
 
-    ml = mock.Mock(data.DataLoader)
+    ml = mocker.Mock(data.DataLoader)
 
     ml.batch_format.return_value = None, data.tree_dtype_struct(init_value)
     ml.register_random_pipeline.return_value = (0, jax.tree_map(jnp.array,
                                                             next(ds_cache)))
-    def get_batch(*args):
+    def get_batch(chain_id):
+      del chain_id
       return jax.tree_map(jnp.array, next(ds_cache))
 
     ml.register_ordered_pipeline.return_value = 0
@@ -220,6 +230,7 @@ class TestRandomAccess:
 
   def test_cache_order(self, data_loader_mock):
     """Test that the cache does not change the order """
+
     DL, format, dataset = data_loader_mock
     iterations = int(format.cs * 4.1)
 
@@ -228,7 +239,7 @@ class TestRandomAccess:
 
     # Check that the values are returned in the correct order
     state = init_fn()
-    for idx in range(iterations):
+    for _ in range(iterations):
       compare_batch = jax.tree_map(jnp.array, next(ds))
       state, (batch, _) = batch_fn(state)
       for key in compare_batch.keys():
@@ -239,3 +250,28 @@ class TestRandomAccess:
     # Check that random batches are not drawn more often than necessary
 
     assert DL.random_batches.call_count == int(4.1 - 1.0)
+
+  # Todo: Improve this test
+  @pytest.mark.xfail
+  def test_vmap(self, pmap_setup, data_loader_mock):
+    DL, format, _ = data_loader_mock
+
+    init_fn, batch_fn = data.random_reference_data(DL, format.cs)
+
+    def test_function_data_loader(state):
+      state, (batch, _) = batch_fn(state)
+      return jax.tree_map(jnp.sum, batch)
+
+    init_states = [init_fn() for _ in range(pmap_setup.host_count)]
+    transform_fn, _ = util.pytree_list_transform(
+      init_states
+    )
+    init_states = transform_fn(init_states)
+
+    helper_fn = jax.jit(data.vmap_helper(batch_fn))
+    _, (batches, _) = helper_fn(init_states)
+
+    vmap_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)
+    pmap_result = jax.pmap(test_function_data_loader)(init_states)
+
+    assert vmap_result == pmap_result

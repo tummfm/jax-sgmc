@@ -41,7 +41,10 @@ PyTree = Any
 
 # Todo: State übergeben bei random batch statt chain id. Damit einfacher
 #       checkpointing
-# Todo: Verwendung von abc
+
+# Todo: Funktion mit vmap leider eingeschränkt, aber pmap funktioniert.
+#       Beibehalten oder nochmals überarbeiten? -> Reference_data soweit wie
+#       möglich nach draußen ziehen (wmgl. weit vor vmap)
 
 class DataLoader(metaclass=abc.ABCMeta):
   """Abstract class to define required methods of the DataLoader.
@@ -247,7 +250,7 @@ class NumpyDataLoader(DataLoader):
       else:
         new_key, = random.split(self._PRNGKeys[-1], 1)
     else:
-      new_key = random.split(kwargs["key"])
+      new_key = kwargs["key"]
 
     chain_id = len(self._PRNGKeys)
     self._PRNGKeys.append(new_key)
@@ -258,10 +261,13 @@ class NumpyDataLoader(DataLoader):
   def random_batches(self, chain_id: int) -> PyTree:
     assert chain_id < len(self._PRNGKeys), f"Chain {chain_id} does not exist."
 
-    self._PRNGKeys[chain_id], *splits = random.split(
-      self._PRNGKeys[chain_id],
-      self._cache_sizes[chain_id] + 1)
-    splits = jnp.array(splits)
+    # Using scan ensures that the generated keys are independent of the cache
+    # size.
+    _, keys = jax.lax.scan(lambda state, _: tuple(random.split(state)),
+                           self._PRNGKeys[chain_id],
+                           jnp.arange(self._cache_sizes[chain_id] + 1))
+    self._PRNGKeys[chain_id] = keys[0, :]
+    splits = keys[1:, :]
     sample_count = self._observation_count
     @jax.vmap
     def sample_selection(split):
@@ -505,3 +511,30 @@ def tree_index(pytree: PyTree, index):
     else:
       return leaf[index, ::]
   return split_tree_imp(pytree)
+
+
+def vmap_helper(batch_fn):
+  """Sequentially load a minibatch.
+
+  host_callback.call() currently does not support vmap(). Therefore, this helper
+  function can be used to load the reference data before a call to vmap.
+
+  Args:
+    batch_fn: Function returned by ``random_reference_data`` or
+    ``ordered_reference_data```
+
+  Returns:
+    Returns a function taking a batch of reference_data states and returns a
+    batch of mini-batches.
+
+  """
+
+  def get_fn(_, state):
+    state, minibatch = batch_fn(state)
+    return None, {"states": state, "minibatches": minibatch}
+
+  def vmap_batch_fn(states):
+    _, minibatches = lax.scan(get_fn, None, states)
+    return minibatches["states"], minibatches["minibatches"]
+
+  return vmap_batch_fn

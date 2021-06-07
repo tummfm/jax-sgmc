@@ -4,6 +4,7 @@ API Documentation
 .. toctree::
     :maxdepth: 1
 
+    jax_sgmc.adaption
     jax_sgmc.data
     jax_sgmc.solver
     jax_sgmc.distributions

@@ -10,6 +10,8 @@ try:
   import tensorflow_datasets
 except ImportError:
   print("Tensorflow not found")
+  tensorflow = None
+  tensorflow_datasets = None
 
 import jax
 import jax.numpy as jnp
@@ -202,12 +204,13 @@ class TestRandomAccess:
     def generate_dataset():
       n = 5
       for i in range(n):
-        yield {"a": i, "b": [i + 0.1 * 1, i + 0.11]}
+        yield {"a": i, "b": [i + 0.1 * 1, i + 0.11], "c": [[1*i, 2*i], [3*i, 4*i]]}
     ds = tensorflow.data.Dataset.from_generator(
       generate_dataset,
       output_types={'a': tensorflow.float32,
-      'b': tensorflow.float32},
-      output_shapes={'a': tuple(), 'b': (2,)})
+                    'b': tensorflow.float32,
+                    'c': tensorflow.float32},
+      output_shapes={'a': tuple(), 'b': (2,), 'c': (2, 2)},)
     ds = ds.repeat().batch(request.param.mb_size)
     ds_cache = ds.batch(request.param.cs)
 
@@ -235,6 +238,7 @@ class TestRandomAccess:
     iterations = int(format.cs * 4.1)
 
     init_fn, batch_fn = data.random_reference_data(DL, format.cs)
+    batch_fn = jax.jit(batch_fn)
     ds = iter(tensorflow_datasets.as_numpy(dataset))
 
     # Check that the values are returned in the correct order
@@ -252,7 +256,6 @@ class TestRandomAccess:
     assert DL.random_batches.call_count == int(4.1 - 1.0)
 
   # Todo: Improve this test
-  @pytest.mark.xfail
   def test_vmap(self, pmap_setup, data_loader_mock):
     DL, format, _ = data_loader_mock
 
@@ -262,16 +265,27 @@ class TestRandomAccess:
       state, (batch, _) = batch_fn(state)
       return jax.tree_map(jnp.sum, batch)
 
-    init_states = [init_fn() for _ in range(pmap_setup.host_count)]
+    init_states = [
+      init_fn(key=jax.random.PRNGKey(idx))
+      for idx in range(pmap_setup.host_count)
+    ]
     transform_fn, _ = util.pytree_list_transform(
       init_states
     )
+
+    # Init states vorspulen
+    for idx in range(pmap_setup.host_count):
+      for i in range(idx):
+        init_states[idx], _ = batch_fn(init_states[idx])
     init_states = transform_fn(init_states)
 
     helper_fn = jax.jit(data.vmap_helper(batch_fn))
     _, (batches, _) = helper_fn(init_states)
 
-    vmap_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)
-    pmap_result = jax.pmap(test_function_data_loader)(init_states)
+    vmap_helper_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)
+    vmap_result = jax.vmap(test_function_data_loader)(init_states)
 
-    assert vmap_result == pmap_result
+    def check_fn(a, b):
+      assert jnp.all(a == b)
+
+    jax.tree_map(check_fn, vmap_helper_result, vmap_result)

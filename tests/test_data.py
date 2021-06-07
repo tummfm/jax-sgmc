@@ -256,7 +256,6 @@ class TestRandomAccess:
     assert DL.random_batches.call_count == int(4.1 - 1.0)
 
   # Todo: Improve this test
-  # @pytest.mark.xfail
   def test_vmap(self, pmap_setup, data_loader_mock):
     DL, format, _ = data_loader_mock
 
@@ -266,7 +265,10 @@ class TestRandomAccess:
       state, (batch, _) = batch_fn(state)
       return jax.tree_map(jnp.sum, batch)
 
-    init_states = [init_fn(key=jax.random.PRNGKey(idx)) for idx in range(pmap_setup.host_count)]
+    init_states = [
+      init_fn(key=jax.random.PRNGKey(idx))
+      for idx in range(pmap_setup.host_count)
+    ]
     transform_fn, _ = util.pytree_list_transform(
       init_states
     )
@@ -277,16 +279,13 @@ class TestRandomAccess:
         init_states[idx], _ = batch_fn(init_states[idx])
     init_states = transform_fn(init_states)
 
-    print("Init state")
-    print(init_states)
-
     helper_fn = jax.jit(data.vmap_helper(batch_fn))
     _, (batches, _) = helper_fn(init_states)
 
-    vmap_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)
-    pmap_result = jax.vmap(test_function_data_loader)(init_states)
+    vmap_helper_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)
+    vmap_result = jax.vmap(test_function_data_loader)(init_states)
 
-    print(vmap_result)
-    print(pmap_result)
+    def check_fn(a, b):
+      assert jnp.all(a == b)
 
-    assert vmap_result == pmap_result
+    jax.tree_map(check_fn, vmap_helper_result, vmap_result)

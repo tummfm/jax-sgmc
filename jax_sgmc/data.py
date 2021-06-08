@@ -106,11 +106,14 @@ class DataLoader(metaclass=abc.ABCMeta):
 
     """
 
-  def batch_format(self, cache_size) -> Tuple[mini_batch_information, Any]:
+  def batch_format(self,
+                   cache_size:int,
+                   **kwargs: Any
+                   ) -> Tuple[mini_batch_information, Any]:
     batch_info = self._batch_information.get(cache_size)
     if batch_info is None:
       # Draw a batch from a random pipeline
-      new_pipeline = self._register_random_pipeline()
+      new_pipeline = self._register_random_pipeline(cache_size, **kwargs)
       new_batch = self.random_batches(new_pipeline)
       # Save the pipeline to be used
       self._first_random_pipeline[cache_size] = (new_pipeline, new_batch)
@@ -328,6 +331,7 @@ Attributes:
   chain_id: Indentifier of the chain
 """
 # Todo: Implement checkpoint function
+# Todo: Deal with kwargs for first chain
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int=100

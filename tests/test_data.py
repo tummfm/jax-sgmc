@@ -112,13 +112,45 @@ class TestNumpyLoader:
         yield [i + 0.1 * 1, i + 0.11]
     dataset = {'a': onp.array(list(generate_a(n))),
                'b': onp.array(list(generate_b(n)))}
+    print(dataset)
     return dataset
 
-  @pytest.fixture(params=[1, 3, 5])
+  @pytest.fixture(scope='function', params=[1, 3, 5])
   def dataloader(self, request, dataset):
     """Construct a numpy data loader."""
     pipeline = data.NumpyDataLoader(request.param, **dataset)
     return pipeline, request.param
+
+  def test_batch_size(self, dataloader):
+    pipeline, mb_size = dataloader
+
+    cs = 3
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    new_pipe, batch = pipeline.register_random_pipeline(cs)
+
+    print(dtype)
+    print(batch)
+
+    def check_fn(leaf):
+      assert leaf.shape[0] == cs
+      assert leaf.shape[1] == batch_info.batch_size
+
+    jax.tree_map(check_fn, batch)
+
+    cs = 30
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    new_pipe, batch = pipeline.register_random_pipeline(cs)
+
+    print(dtype)
+    print(batch)
+
+    def check_fn(leaf):
+      assert leaf.shape[0] == cs
+      assert leaf.shape[1] == batch_info.batch_size
+
+    jax.tree_map(check_fn, batch)
 
   def test_batch_information_caching(self, dataloader):
     cs = 3

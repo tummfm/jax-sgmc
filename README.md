@@ -1,4 +1,4 @@
-[![Tests](https://github.com/pfuxs/jax-sgmc/actions/workflows/check.yml/badge.svg)](https://github.com/pfuxs/jax-sgmc/actions/workflows/check.yml)
+[![Tests](https://github.com/pfuxs/jax-sgmc/actions/workflows/ci.yml/badge.svg)](https://github.com/pfuxs/jax-sgmc/actions/workflows/ci.yml)
 
 Jax SGMC
 =========

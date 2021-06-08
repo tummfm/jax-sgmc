@@ -44,6 +44,37 @@ class TestTFLoader:
     pipeline = data.TensorflowDataLoader(dataset, request.param, 100)
     return pipeline, request.param
 
+  def test_batch_size(self, dataloader):
+    pipeline, mb_size = dataloader
+
+    cs = 3
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    new_pipe, batch = pipeline.register_random_pipeline(cs)
+
+    print(dtype)
+    print(batch)
+
+    def check_fn(leaf):
+      assert leaf.shape[0] == cs
+      assert leaf.shape[1] == batch_info.batch_size
+
+    jax.tree_map(check_fn, batch)
+
+    cs = 30
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    new_pipe, batch = pipeline.register_random_pipeline(cs)
+
+    print(dtype)
+    print(batch)
+
+    def check_fn(leaf):
+      assert leaf.shape[0] == cs
+      assert leaf.shape[1] == batch_info.batch_size
+
+    jax.tree_map(check_fn, batch)
+
   def test_batch_information_caching(self, dataloader):
     cs = 3
 

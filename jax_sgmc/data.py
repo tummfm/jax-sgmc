@@ -78,12 +78,14 @@ class DataLoader(metaclass=abc.ABCMeta):
 
     """
 
-    first_pipeline = self._first_random_pipeline.get(cache_size)
-    if first_pipeline is not None:
-      pipeline = first_pipeline
+    try:
+      pipeline, passed_kwargs = self._first_random_pipeline[cache_size]
       del self._first_random_pipeline[cache_size]
+      # Check that the kwargs match to start from the right state
+      if passed_kwargs != kwargs:
+        raise KeyError("Batch information obtained with different kwargs")
       return pipeline
-    else:
+    except KeyError:
       pipeline = self._register_random_pipeline(cache_size, **kwargs)
       batch = self.random_batches(pipeline)
       return (pipeline, batch)
@@ -116,7 +118,8 @@ class DataLoader(metaclass=abc.ABCMeta):
       new_pipeline = self._register_random_pipeline(cache_size, **kwargs)
       new_batch = self.random_batches(new_pipeline)
       # Save the pipeline to be used
-      self._first_random_pipeline[cache_size] = (new_pipeline, new_batch)
+      self._first_random_pipeline[cache_size] = ((new_pipeline, new_batch),
+                                                 kwargs)
       # Batch information includes the shape of the data as well as mini_batch
       # size and the total observation count
       info = self._mini_batch_format()
@@ -178,6 +181,10 @@ class TensorflowDataLoader(DataLoader):
                                   batch_size=self._mini_batch_size)
 
   def _register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
+    # Assert that not kwargs are passed with the intention to control the
+    # initial state of the tensorflow data loader
+    assert kwargs == {}, "Tensorflow data loader does not accept additional "\
+                         "kwargs"
     new_chain_id = len(self._random_pipelines)
 
     # Randomly draw a number of cache_size mini_batches, where each mini_batch

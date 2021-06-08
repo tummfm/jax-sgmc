@@ -45,33 +45,29 @@ class TestTFLoader:
     return pipeline, request.param
 
   def test_batch_size(self, dataloader):
-    pipeline, mb_size = dataloader
+    pipeline, _ = dataloader
 
     cs = 3
-
-    batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, batch = pipeline.register_random_pipeline(cs)
-
-    print(dtype)
-    print(batch)
 
     def check_fn(leaf):
       assert leaf.shape[0] == cs
       assert leaf.shape[1] == batch_info.batch_size
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    _, batch = pipeline.register_random_pipeline(cs)
+
+    print(dtype)
+    print(batch)
 
     jax.tree_map(check_fn, batch)
 
     cs = 30
 
     batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, batch = pipeline.register_random_pipeline(cs)
+    _, batch = pipeline.register_random_pipeline(cs)
 
     print(dtype)
     print(batch)
-
-    def check_fn(leaf):
-      assert leaf.shape[0] == cs
-      assert leaf.shape[1] == batch_info.batch_size
 
     jax.tree_map(check_fn, batch)
 
@@ -152,34 +148,46 @@ class TestNumpyLoader:
     pipeline = data.NumpyDataLoader(request.param, **dataset)
     return pipeline, request.param
 
+  def test_kwargs(self, dataloader):
+
+    key = jax.random.PRNGKey(10)
+    pipeline, _ = dataloader
+
+    _, _ = pipeline.batch_format(10)
+    _, batch_a = pipeline.register_random_pipeline(10, key=key)
+    _, batch_b = pipeline.register_random_pipeline(10, key=key)
+
+    def check_fn(a, b):
+      assert jnp.all(a == b)
+
+    jax.tree_map(check_fn, batch_a, batch_b)
+
+
+
   def test_batch_size(self, dataloader):
-    pipeline, mb_size = dataloader
+    pipeline, _ = dataloader
 
     cs = 3
-
-    batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, batch = pipeline.register_random_pipeline(cs)
-
-    print(dtype)
-    print(batch)
 
     def check_fn(leaf):
       assert leaf.shape[0] == cs
       assert leaf.shape[1] == batch_info.batch_size
+
+    batch_info, dtype = pipeline.batch_format(cs)
+    _, batch = pipeline.register_random_pipeline(cs)
+
+    print(dtype)
+    print(batch)
 
     jax.tree_map(check_fn, batch)
 
     cs = 30
 
     batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, batch = pipeline.register_random_pipeline(cs)
+    _, batch = pipeline.register_random_pipeline(cs)
 
     print(dtype)
     print(batch)
-
-    def check_fn(leaf):
-      assert leaf.shape[0] == cs
-      assert leaf.shape[1] == batch_info.batch_size
 
     jax.tree_map(check_fn, batch)
 
@@ -338,7 +346,7 @@ class TestRandomAccess:
 
     # Init states vorspulen
     for idx in range(pmap_setup.host_count):
-      for i in range(idx):
+      for _ in range(idx):
         init_states[idx], _ = batch_fn(init_states[idx])
     init_states = transform_fn(init_states)
 

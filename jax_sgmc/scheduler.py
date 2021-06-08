@@ -26,10 +26,9 @@ to the scheduler.
 
 # Todo: Correct typing
 
-from functools import partial
 from collections import namedtuple
 
-from typing import Callable, Any, Tuple
+from typing import Callable, Tuple
 
 import jax.numpy as jnp
 from jax import lax
@@ -64,7 +63,7 @@ Attributes:
 """
 
 scheduler_state = namedtuple("scheduler_state",
-                             ["self",
+                             ["state",
                               "step_size_state",
                               "temperature_state",
                               "burn_in_state"])
@@ -110,7 +109,7 @@ def init_scheduler(step_size: specific_scheduler = None,
   if temperature is None:
     temperature = constant_temperature(1.0)
   if burn_in is None:
-    burn_in = init_burn_in(0)
+    burn_in = initial_burn_in(0)
 
   init_step_size, update_step_size, get_step_size = step_size
   init_temp, update_temp, get_temp = temperature
@@ -122,10 +121,10 @@ def init_scheduler(step_size: specific_scheduler = None,
   # Todo: Complete
 
   def update_fn(state: scheduler_state, **kwargs) -> scheduler_state:
-    iteration, = scheduler_state.self
+    iteration, = scheduler_state.state # pylint: disable=E0633
     current_iteration = iteration + 1
 
-    current_step_size = update_step_size(scheduler_state.iteration)
+    current_step_size = update_step_size(iteration)
 
     new_self = (current_iteration,)
 
@@ -235,14 +234,13 @@ def polynomial_step_size_first_last(first: jnp.float32=1.0,
   """Initializes polynomial step size schedule via first and last step."""
 
   # Calculates the required coefficients of the polynomial
-  @partial(first, last, gamma)
-  def find_ab(fst, lst, gamma, its):
+  def find_ab(its):
     ginv = jnp.power(gamma, -1.0)
-    fpow = jnp.power(fst, -ginv)
-    lpow = jnp.power(lst, -ginv)
+    fpow = jnp.power(first, -ginv) # pylint: disable=E1130
+    lpow = jnp.power(last, -ginv) # pylint: disable=E1130
     apow = jnp.divide(lpow - fpow, its - 1)
     a = jnp.power(apow, -gamma)
-    b = jnp.power(jnp.divide(fst, a), -ginv)
+    b = jnp.power(jnp.divide(first, a), -ginv) # pylint: disable=E1130
     return a, b
 
   def init_fn(iterations: int) -> Array:
@@ -283,7 +281,8 @@ def cyclic_step_size(alpha: jnp.float32=1.0, k: int=1):
 def cyclic_burn_in(beta: jnp.float32=1.0, k:int=1):
   raise NotImplementedError
 
-def init_burn_in(n: int=0):
+
+def initial_burn_in(n: int=0):
   """Discard the first n steps."""
 
   def init_fn(iterations: int) -> None:

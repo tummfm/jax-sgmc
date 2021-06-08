@@ -157,23 +157,23 @@ static_conditioning_state = namedtuple(
   ["matrix"]
 )
 
-def static_conditioning(sample, matrix
-                        ) -> Tuple[Callable[[Any, Any], Tuple[Any, Any, Any]], Any]:
-  """Condition the model by a static matrix.
-
-  This is the default adaption. The simplest form is to choose the matrix to be
-  the identity.
-
-  Arguments:
-    sample: Defines the shape of the samples.
-    Gamma: The preconditining matrix. Must allow multiplication of the potential
-      gradient with itself.
-
-  Returns:
-    Returns a function which adapts its internal states and returns the
-    preconditioning matrix and the drift vector consisting of Gamme term and
-    possible additional drifts.
-
-  """
-
-  # Get a zero pytree
+# def static_conditioning(sample, matrix
+#                         ) -> Tuple[Callable[[Any, Any], Tuple[Any, Any, Any]], Any]:
+#   """Condition the model by a static matrix.
+#
+#   This is the default adaption. The simplest form is to choose the matrix to be
+#   the identity.
+#
+#   Arguments:
+#     sample: Defines the shape of the samples.
+#     Gamma: The preconditining matrix. Must allow multiplication of the potential
+#       gradient with itself.
+#
+#   Returns:
+#     Returns a function which adapts its internal states and returns the
+#     preconditioning matrix and the drift vector consisting of Gamme term and
+#     possible additional drifts.
+#
+#   """
+#
+#   # Get a zero pytree

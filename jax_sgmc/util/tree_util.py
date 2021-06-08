@@ -1,8 +1,5 @@
 """Defines types special to jax.edited.bak or this library. """
 
-import os
-import re
-
 from typing import Any
 from functools import partial
 
@@ -14,7 +11,7 @@ PyTree = Any
 
 # Probably not important
 
-def tree_multiply(a: PyTree, b: PyTree) -> PyTree:
+def tree_multiply(tree_a: PyTree, tree_b: PyTree) -> PyTree:
   """Maps elementwise product over two vectors.
 
   Args:
@@ -25,10 +22,10 @@ def tree_multiply(a: PyTree, b: PyTree) -> PyTree:
     Returns a PyTree obtained by an element-wise product of all PyTree leaves.
 
   """
-  return tree_util.tree_map(jnp.multiply, a, b)
+  return tree_util.tree_map(jnp.multiply, tree_a, tree_b)
 
 
-def tree_scale(alpha: Array, a: PyTree) -> PyTree:
+def tree_scale(alpha: Array, tree: PyTree) -> PyTree:
   """Scalar-Pytree product via tree_map.
 
   Args:
@@ -42,10 +39,10 @@ def tree_scale(alpha: Array, a: PyTree) -> PyTree:
   @partial(partial, tree_util.tree_map)
   def tree_scale_imp(x: PyTree):
     return alpha * x
-  return tree_scale_imp(a)
+  return tree_scale_imp(tree)
 
 
-def tree_add(a: PyTree, b: PyTree) -> PyTree:
+def tree_add(tree_a: PyTree, tree_b: PyTree) -> PyTree:
   """Maps elementwise sum over PyTrees.
 
   Arguments:
@@ -58,7 +55,7 @@ def tree_add(a: PyTree, b: PyTree) -> PyTree:
   @partial(partial, tree_util.tree_map)
   def tree_add_imp(leaf_a, leaf_b):
     return leaf_a + leaf_b
-  return tree_add_imp(a, b)
+  return tree_add_imp(tree_a, tree_b)
 
 def pytree_list_transform(pytrees):
 
@@ -98,4 +95,3 @@ def pytree_list_transform(pytrees):
     return unlist(pytrees)
 
   return pytree_list_to_leaves, pytree_leaves_to_list
-

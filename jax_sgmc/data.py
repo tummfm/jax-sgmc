@@ -10,7 +10,6 @@ from typing import Tuple, Any, Callable, List
 import jax
 from jax import tree_util, lax, random
 import jax.numpy as jnp
-from jax_sgmc.util import host_callback as hcb
 
 # Tensorflow is only required if the tensorflow dataLoader ist used.
 try:
@@ -21,6 +20,7 @@ except ModuleNotFoundError:
   TFDataSet = None
   tfds = None
 
+from jax_sgmc.util import host_callback as hcb
 from jax_sgmc.util import Array
 
 mini_batch_information = namedtuple(

@@ -152,18 +152,18 @@ def full_potential(prior: Callable[[PyTree], Array],
   # Will be needed here as this function just loops over all minibatches
   # Todo: Implement strategy to evaluate mini-batches for full data
 
-  minibatch_eval = minibatch_potential()
+  # minibatch_eval = minibatch_potential()
 
   assert False, "Currently not implemented"
 
   # The final function to evaluate the potential including likelihood and prio
 
-  def potential_function(sample: PyTree,
-                         refernce_data: ReferenceData
-                         ) -> Array:
-    pass
+  # def potential_function(sample: PyTree,
+  #                        refernce_data: ReferenceData
+  #                        ) -> Array:
+  #   pass
 
-  return potential_function
+  # return potential_function
 
 def stochastic_potential_gradient(prior: Prior,
                                   likelihood: Likelihood,

@@ -19,6 +19,7 @@ extension-pkg-whitelist=numpy
 # --disable=W"
 disable=missing-docstring,
         too-many-locals,
+        too-many-lines,
         invalid-name,
         redefined-outer-name,
         redefined-builtin,
@@ -30,6 +31,7 @@ disable=missing-docstring,
         blacklisted-name,
         too-few-public-methods,
         unnecessary-lambda,
+        anomalous-backslash-in-string,
 
 
 # Enable the message, report, category or checker with the given id(s). You can

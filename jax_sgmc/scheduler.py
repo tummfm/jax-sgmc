@@ -1,3 +1,17 @@
+# Copyright 2021 Multiscale Modeling of Fluid Materials, TU Munich
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Handles the independent variables of the update equqation.
 
 The scheduler organizes the independent variables of the update equation, such
@@ -37,9 +51,9 @@ from jax import random
 from jax_sgmc.util import Array
 
 specific_scheduler = namedtuple("specific_scheduler",
-                                ["init_fn",
-                                 "update_fn",
-                                 "get_fn"])
+                                ["init",
+                                 "update",
+                                 "get"])
 """Bundles the specific scheduler as described above.
 
 Attributes:
@@ -52,13 +66,15 @@ Attributes:
 schedule = namedtuple("schedule",
                       ["step_size",
                        "temperature",
-                       "burn_in"])
+                       "burn_in",
+                       "accept"])
 """Auxillary variables for integrator.
 
 Attributes:
   step_size: Learning rate
   temperature: Scaling the magnitude of the additional noise
   burn_in: Bool, whether current step can be accepted
+  accept: Bool, whether current sample should be saved
 
 """
 
@@ -66,7 +82,8 @@ scheduler_state = namedtuple("scheduler_state",
                              ["state",
                               "step_size_state",
                               "temperature_state",
-                              "burn_in_state"])
+                              "burn_in_state",
+                              "thinning_state"])
 """Collects the states of the specific schedulers.
 
 Attributes:
@@ -87,7 +104,8 @@ Attributes:
 
 def init_scheduler(step_size: specific_scheduler = None,
                    temperature: specific_scheduler = None,
-                   burn_in: specific_scheduler = None
+                   burn_in: specific_scheduler = None,
+                   thinning: specific_scheduler = None
                    ) -> Tuple[Callable, Callable, Callable]:
   """Initialize the scheduler.
 
@@ -99,50 +117,99 @@ def init_scheduler(step_size: specific_scheduler = None,
     step_size: Triplet from step-size scheduler initialization
     temperature: Triplet from temperature scheduler initialization
     burn_in: Triplet from burn-in scheduler initialization
+    thinning: Triplet from thinning scheduler initialization
 
   Returns:
     Returns a triplet of ``(init_fn, update_fn, get_fn)``.
   """
 
+  # Define the default values
   if step_size is None:
-    step_size = polynomial_step_size(1, 0, 0.0)
+    step_size = (polynomial_step_size(1, 1, 0.0))
   if temperature is None:
     temperature = constant_temperature(1.0)
   if burn_in is None:
     burn_in = initial_burn_in(0)
-
-  init_step_size, update_step_size, get_step_size = step_size
-  init_temp, update_temp, get_temp = temperature
-  init_burn_in, update_burn_in, get_burn_in = burn_in
+  if thinning is None:
+    # Accept all samples
+    thinning = specific_scheduler(
+      lambda *args: None,
+      lambda *args, **kwargs: None,
+      lambda *args, **kwargs: True)
 
   def init_fn(iterations: int) -> scheduler_state:
-    step_size_state = init_step_size(iterations)
-
-  # Todo: Complete
+    # Initialize all the specific schedulers
+    state = (0,) # Start with iteration 0
+    init_state = scheduler_state(
+      state=state,
+      step_size_state=step_size.init(iterations),
+      temperature_state=temperature.init(iterations),
+      burn_in_state=burn_in.init(iterations),
+      thinning_state=thinning.init(iterations, step_size, burn_in)
+    )
+    return init_state
 
   def update_fn(state: scheduler_state, **kwargs) -> scheduler_state:
-    iteration, = scheduler_state.state # pylint: disable=E0633
+    # Keep track of current iteration
+    iteration, = state.state
     current_iteration = iteration + 1
+    # Update the states
+    step_size_state = step_size.update(state.step_size_state,
+                                       iteration,
+                                       **kwargs)
+    temperature_state = temperature.update(state.temperature_state,
+                                           iteration,
+                                           **kwargs)
+    burn_in_state = burn_in.update(state.burn_in_state,
+                                   iteration,
+                                   **kwargs)
+    thinning_state = thinning.update(state.thinning_state,
+                                     iteration,
+                                     **kwargs)
+    state = (current_iteration,)
+    updated_scheduler_state = scheduler_state(
+      state=state,
+      step_size_state=step_size_state,
+      temperature_state=temperature_state,
+      burn_in_state=burn_in_state,
+      thinning_state=thinning_state
+    )
+    return updated_scheduler_state
 
-    current_step_size = update_step_size(iteration)
-
-    new_self = (current_iteration,)
-
-  def get_fn(state: scheduler_state) -> schedule:
-    pass
+  def get_fn(state: scheduler_state, **kwargs) -> schedule:
+    iteration, = state.state
+    current_step_size = step_size.get(state.step_size_state,
+                                      iteration,
+                                      **kwargs)
+    current_temperature = temperature.get(state.temperature_state,
+                                          iteration,
+                                          **kwargs)
+    current_burn_in = burn_in.get(state.burn_in_state,
+                                  iteration,
+                                  **kwargs)
+    current_thinning = thinning.get(state.thinning_state,
+                                    iteration,
+                                    **kwargs)
+    current_schedule = schedule(
+      step_size=jnp.array(current_step_size),
+      temperature=jnp.array(current_temperature),
+      burn_in=jnp.array(current_burn_in),
+      accept=jnp.array(current_thinning)
+    )
+    return current_schedule
 
   return init_fn, update_fn, get_fn
 
 
 ################################################################################
 #
-# Temperature scheduling
+# Temperature
 #
 ################################################################################
 
 # Todo: Implement constant temperature scheduler
 
-def constant_temperature(tau: jnp.float32=1.0) -> specific_scheduler:
+def constant_temperature(tau: Array=1.0) -> specific_scheduler:
   """Scale the added noise with an unchanged constant.
 
   Args:
@@ -153,19 +220,24 @@ def constant_temperature(tau: jnp.float32=1.0) -> specific_scheduler:
 
   """
 
-  def init_fn(iterations:int) -> None:
+  def init_fn(unused_iterations:int) -> None:
     return None
 
-  def update_fn(state: None, **unused_kwargs) -> None:
+  def update_fn(unused_state: None,
+                unused_iteration: int,
+                **unused_kwargs) -> None:
     return None
 
-  def get_fn(state: None, iteration: int, **unused_kwargs) -> Array:
+  def get_fn(unused_state: None,
+             unused_iteration: int,
+             **unused_kwargs
+             ) -> Array:
     return tau
 
   return specific_scheduler(init_fn, update_fn, get_fn)
 
 
-def cyclic_temperature(beta: jnp.float32=1.0, k: int=1) -> specific_scheduler:
+def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
   """Cylic switch of the temperature between 0.0 and 1.0.
 
   Switches temperature form 0.0 (SGD) to 1.0 (SGLD) when ratio of initial step
@@ -179,19 +251,19 @@ def cyclic_temperature(beta: jnp.float32=1.0, k: int=1) -> specific_scheduler:
   Returns:
     Returns a triplet as described above
   """
-  pass
+  raise NotImplementedError
 
 ################################################################################
 #
-# Temperature scheduling
+# Step Size
 #
 ################################################################################
 
 # Todo: Implement basic schedulers:
 
-def polynomial_step_size(a: jnp.float32=1.0,
-                         b:jnp.float32=1.0,
-                         gamma:jnp.float32=0.33
+def polynomial_step_size(a: Array=1.0,
+                         b: Array=1.0,
+                         gamma:Array=0.33
                          ) -> specific_scheduler:
   """Polynomial descresing step size schedule.
 
@@ -207,6 +279,9 @@ def polynomial_step_size(a: jnp.float32=1.0,
     Returns triplet as described above.
 
   """
+  assert gamma >= 0, f"Gamma must be positive: gamma = {gamma}"
+  assert a > 0, f"a must be positive: a = {a}"
+  assert b > 0, f"b must be greater than zero: b = {b}"
 
   # The internal state is just an array, which holds the step size for all the
   # iterations
@@ -217,21 +292,36 @@ def polynomial_step_size(a: jnp.float32=1.0,
     scaled = jnp.multiply(a, unscaled)
     return scaled
 
-  def update_fn(state: Array) -> Array:
+  def update_fn(state: Array, unused_iteration: int, **unused_kwargs) -> Array:
     return state
 
-  def get_fn(state: Array, iteration:int, **unused_kwargs) -> Array:
+  def get_fn(state: Array, iteration: int, **unused_kwargs) -> Array:
     del unused_kwargs
     return state[iteration]
 
-  return init_fn, update_fn, get_fn
+  return specific_scheduler(init_fn, update_fn, get_fn)
 
 
-def polynomial_step_size_first_last(first: jnp.float32=1.0,
-                                    last: jnp.float32=1.0,
-                                    gamma: jnp.float32=0.33
+def polynomial_step_size_first_last(first: Array=1.0,
+                                    last: Array=1.0,
+                                    gamma: Array=0.33
                                     ) -> specific_scheduler:
-  """Initializes polynomial step size schedule via first and last step."""
+  """Initializes polynomial step size schedule via first and last step.
+
+  Args:
+    first: Step size in the first iteration
+    last: Step size in the last iteration
+    gamma: Rate of decay
+
+  Returns:
+    Returns a polynomial step size schedule defined via the first and the last
+    step size.
+
+  """
+  # Check for valid parameters
+  assert gamma > 0, f"Gamma must be bigger than 0, is {gamma}"
+  assert first > last, f"The first step size must be larger than the last: "\
+                       f"{first} !> {last}"
 
   # Calculates the required coefficients of the polynomial
   def find_ab(its):
@@ -248,17 +338,17 @@ def polynomial_step_size_first_last(first: jnp.float32=1.0,
     init_fn, _, _ = polynomial_step_size(a, b, gamma)
     return init_fn(iterations)
 
-  def update_fn(state: Array) -> Array:
+  def update_fn(state: Array, unused_iteration: int, **unused_kwargs) -> Array:
     return state
 
-  def get_fn(state: Array, iteration:int, **unused_kwargs) -> Array:
+  def get_fn(state: Array, iteration: int, **unused_kwargs) -> Array:
     del unused_kwargs
     return state[iteration]
 
   return specific_scheduler(init_fn, update_fn, get_fn)
 
 
-def cyclic_step_size(alpha: jnp.float32=1.0, k: int=1):
+def cyclic_step_size(alpha: Array=1.0, k: int=1):
   """Step size cyclically decreasing from alpha.
 
   Implements a step size schedule folllowing:
@@ -272,57 +362,96 @@ def cyclic_step_size(alpha: jnp.float32=1.0, k: int=1):
 
 ################################################################################
 #
-# Implement burn in scheduling
+# Burn In
 #
 ################################################################################
 
 # Burn in: Return 1.0 if the sample should be accepted and 0.0 otherwise
 
-def cyclic_burn_in(beta: jnp.float32=1.0, k:int=1):
+def cyclic_burn_in(beta: Array=1.0, k:int=1):
+  """Discard samples at the beginning of each cycle.
+
+  Args:
+    beta: Ratio of current and initial step size up to which burn in should be
+      applied
+    k: Number of cycles
+
+  Returns:
+    Returns a burn in schedule, which applies burn in to the beginning of each
+    cycle.
+
+  """
   raise NotImplementedError
 
 
 def initial_burn_in(n: int=0):
-  """Discard the first n steps."""
+  """Discard the first n steps.
 
-  def init_fn(iterations: int) -> None:
+  Args:
+    n: Count of inital steps which should be discarded
+
+  Returns:
+    Returns specific scheduler.
+
+  """
+
+  def init_fn(unused_iterations: int) -> None:
     return None
 
-  def update_fn(state: None, **unused_kwargs) -> None:
+  def update_fn(unused_state: None,
+                unused_iteration: int,
+                **unused_kwargs) -> None:
     return None
 
-  def get_fn(state: None, iteration: int, **unused_kwargs) -> Array:
-    return jnp.where(n < iteration, 0.0, 1.0)
+  def get_fn(unused_state: None, iteration: int, **unused_kwargs) -> Array:
+    return jnp.where(n <= iteration, 1.0, 0.0)
 
   return specific_scheduler(init_fn, update_fn, get_fn)
 
 ################################################################################
 #
-# Implement thinning
+# Thinning
 #
 ################################################################################
 
 def random_thinning(step_size_schedule: specific_scheduler,
                     burn_in_schedule: specific_scheduler):
-  """Randomly select n elements with probability weighted by the step size."""
+  """Random thinning weighted by the step size.
+
+  Randomly select samples not subject to burn in. The probability of selection
+  is proportional to the step size to deal with the issue of the decaying step
+  size. This only works for static step size and burn in schedules.
+
+  Args:
+    step_size_schedule: Static step size schedule
+    burn_in_schedule: Static burn in schedule
+
+  Returns:
+    Returns a scheduler marking the accepted samples.
+
+  """
 
   def init_fn(iterations: int,
               selections: int,
               key=random.PRNGKey(0)) -> Array:
-    step_size_state = step_size_schedule.init_fn(iterations)
-    burn_in_state = burn_in_schedule.init_fn(iterations)
+    step_size_state = step_size_schedule.init(iterations)
+    burn_in_state = burn_in_schedule.init(iterations)
 
-    def update_fn(state, _):
+    def update_fn(state, iteration):
       step_size_state, burn_in_state = state
-      step_size = step_size_schedule.get_fn(step_size_state)
-      burn_in = burn_in_schedule.get_fn(burn_in_state)
+      step_size = step_size_schedule.get(step_size_state, iteration)
+      burn_in = burn_in_schedule.get(burn_in_state, iteration)
       probability = step_size * burn_in
-      new_state = (step_size_schedule.update_fn(step_size_state),
-                   burn_in_schedule.update_fn(burn_in_state))
+      new_state = (step_size_schedule.update(step_size_state, iteration),
+                   burn_in_schedule.update(burn_in_state, iteration))
       return new_state, probability
 
-    _, probs = lax.scan(update_fn, (step_size_state, burn_in_state), iterations)
+    _, probs = lax.scan(update_fn,
+                        (step_size_state, burn_in_state),
+                        jnp.arange(iterations))
 
+    # Check that a sufficient number of elements can be drawn
+    # assert jnp.count_nonzero(probs) >= selections, "Cannot select enough values"
     # Draw the iterations which should be accepted
     accepted_its = random.choice(key,
                                  jnp.arange(iterations),
@@ -331,7 +460,7 @@ def random_thinning(step_size_schedule: specific_scheduler,
                                  p=probs)
     return accepted_its
 
-  def update_fn(state: Array, **kwargs) -> Array:
+  def update_fn(state: Array, unused_iteration: int, **unused_kwargs) -> Array:
     return state
 
   def get_fn(state: Array, iteration: int, **unused_kwargs) -> jnp.bool_:

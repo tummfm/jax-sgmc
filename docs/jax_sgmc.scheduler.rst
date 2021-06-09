@@ -39,4 +39,12 @@ ________
     :toctree: _autosummary
 
     cyclic_burn_in
-    init_burn_in
+    initial_burn_in
+
+Thinning
+__________
+
+.. autosummary::
+    :toctree: _autosummary
+
+    random_thinning

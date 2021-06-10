@@ -1,13 +1,16 @@
 """Test the evaluation of the potential."""
 
+import itertools
+
 import jax
 import jax.numpy as jnp
 
-from jax import random, jit
+from jax import random, jit, test_util
+
+import pytest
 
 # from jax_sgmc.data import mini_batch
 from jax_sgmc.potential import minibatch_potential
-from jax_sgmc.potential import stochastic_potential_gradient
 from jax_sgmc.data import mini_batch_information
 
 # Todo: Test the potential evaluation function on arbitrary pytrees.
@@ -15,87 +18,182 @@ from jax_sgmc.data import mini_batch_information
 class TestPotential():
   # Helper functions
 
-  def linear_potential(self):
-    def likelihood(sample, ref_data):
-      parameters = ref_data["parameters"]
-      observations = ref_data["observations"]
-      return jnp.dot(sample, parameters) - jnp.sum(observations)
+  @pytest.fixture
+  def potential(self):
+    """Define likelihood with pytree sample and pytree reference data."""
+
+    def likelihood(sample, reference_data):
+      scale = sample["scale"]
+      bases = sample["base"]
+      powers = reference_data["power"]
+      ref_scale = reference_data["scale"]
+      return scale * ref_scale * jnp.sum(jnp.power(bases, powers))
 
     def prior(sample):
-      return jnp.float32(0.0)
+      return jnp.exp(-sample["scale"])
 
-    # def result(sample, parameters, observations):
+    return prior, likelihood
 
-    self.likelihood = likelihood
-    self.prior = prior
+  @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
+  def test_stochastic_potential_zero(self, potential, obs, dim):
+    # Set device count for pmap
+    test_util.set_host_platform_device_count(obs)
+    _, likelihood = potential
+    prior = lambda _: 0.0
+    # Setup potential
 
-  @staticmethod
-  def sample_batch(sample_size, batch_size, obs_size):
+    scan_pot = minibatch_potential(prior, likelihood, strategy="map")
+    vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap")
+    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
+
+    # Setup reference data
     key = random.PRNGKey(0)
 
-    split, key = random.split(key)
-    sample = random.normal(key, shape=(sample_size,))
+    split1, split2 = random.split(key, 2)
+    observations = {"scale": random.exponential(split1, shape=(obs,)),
+                    "power": random.exponential(split2, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(observation_count=obs,
+                                                          batch_size=obs)
+    sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
-    split, key = random.split(key)
-    parameters = random.normal(key, shape=(batch_size, sample_size))
+    zero_array = jnp.array(-0.0)
+    scan_result = scan_pot(sample, reference_data)
+    vmap_result = vmap_pot(sample, reference_data)
+    pmap_result = pmap_pot(sample, reference_data)
 
-    split, key = random.split(key)
-    observations = random.normal(key, shape=(batch_size, obs_size))
+    test_util.check_close(scan_result, zero_array)
+    test_util.check_close(vmap_result, zero_array)
+    test_util.check_close(pmap_result, zero_array)
 
-    information = mini_batch_information(observation_count=batch_size,
-                                         batch_size=batch_size)
-    data = {"parameters": parameters,
-            "observations": observations}
+  @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
+  def test_stochastic_potential_jit(self, potential, obs, dim):
+    # Set device count for pmap
+    test_util.set_host_platform_device_count(obs)
+    _, likelihood = potential
+    prior = lambda _: 0.0
+    # Setup potential
 
-    return (data, information), sample
+    scan_pot = jit(minibatch_potential(prior, likelihood, strategy="map"))
+    vmap_pot = jit(minibatch_potential(prior, likelihood, strategy="vmap"))
+    pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
 
-  # The real tests
+    # Setup reference data
+    key = random.PRNGKey(0)
 
-  def test_map(self):
+    split1, split2 = random.split(key, 2)
+    observations = {"scale": random.exponential(split1, shape=(obs,)),
+                    "power": random.exponential(split2, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(
+      observation_count=obs,
+      batch_size=obs)
+    sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
-    self.linear_potential()
+    zero_array = jnp.array(-0.0)
+    scan_result = scan_pot(sample, reference_data)
+    vmap_result = vmap_pot(sample, reference_data)
+    pmap_result = pmap_pot(sample, reference_data)
 
-    potential_fun_map = minibatch_potential(self.prior,
-                                            self.likelihood,
-                                            strategy='map')
-    potential_fun_vmap = minibatch_potential(self.prior,
-                                             self.likelihood,
-                                             strategy='vmap')
-    stochastic_gradient_map = stochastic_potential_gradient(self.prior,
-                                                            self.likelihood,
-                                                            strategy='map')
-    stochastic_gradient_vmap = stochastic_potential_gradient(self.prior,
-                                                             self.likelihood,
-                                                             strategy='vmap')
+    test_util.check_close(scan_result, zero_array)
+    test_util.check_close(vmap_result, zero_array)
+    test_util.check_close(pmap_result, zero_array)
 
-    potential_fun_map = jit(potential_fun_map)
-    potential_fun_vmap = jit(potential_fun_vmap)
-    stochastic_gradient_map = jit(stochastic_gradient_map)
-    stochastic_gradient_vmap = jit(stochastic_gradient_vmap)
+  @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
+  def test_stochastic_potential_equal(self, potential, obs, dim):
+    # Set device count for pmap
+    test_util.set_host_platform_device_count(obs)
+    prior, likelihood = potential
+    # Setup potential
 
-    example_batch, example_sample = self.sample_batch(10, 5, 12)
+    scan_pot = jit(minibatch_potential(prior, likelihood, strategy="map"))
+    vmap_pot = jit(minibatch_potential(prior, likelihood, strategy="vmap"))
+    pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
 
-    result_map = potential_fun_map(example_sample, example_batch)
-    result_vmap = potential_fun_vmap(example_sample, example_batch)
-    result_map_gradient = stochastic_gradient_map(example_sample,
-                                                  example_batch)
-    result_vmap_gradient = stochastic_gradient_vmap(example_sample,
-                                                    example_batch)
+    # Setup reference data
+    key = random.PRNGKey(0)
 
-    # Check that the ouput is scalar
-    assert result_map.shape == tuple()
-    assert result_vmap.shape == tuple()
+    split1, split2, split3 = random.split(key, 3)
+    observations = {"scale": random.exponential(split1, shape=(obs,)),
+                    "power": random.exponential(split2, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(
+      observation_count=obs,
+      batch_size=obs)
+    sample = {"scale": 0.5, "base": random.uniform(split3, (dim, ))}
 
-    print(result_map_gradient)
-    print(result_vmap_gradient)
+    scan_result = scan_pot(sample, reference_data)
+    vmap_result = vmap_pot(sample, reference_data)
+    pmap_result = pmap_pot(sample, reference_data)
 
-    # Check that the ouput is the same
-    assert result_map == result_vmap
-    assert jnp.all(jnp.abs(result_map_gradient - result_vmap_gradient) <
-                   0.05 * 0.001 * (jnp.abs(result_map_gradient) +
-                                   jnp.abs(result_vmap_gradient)))
+    test_util.check_close(scan_result, vmap_result)
+    test_util.check_close(scan_result, pmap_result)
 
+  @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
+  def test_stochastic_potential_gradient_equal(self, potential, obs, dim):
+    # Set device count for pmap
+    test_util.set_host_platform_device_count(obs)
+    prior, likelihood = potential
+    # Setup potential
 
+    scan_grad = jit(
+      jax.grad(minibatch_potential(prior, likelihood, strategy="map")))
+    vmap_grad = jit(
+      jax.grad(minibatch_potential(prior, likelihood, strategy="vmap")))
+    pmap_grad = jit(
+      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap")))
 
+    # Setup reference data
+    key = random.PRNGKey(0)
 
+    split1, split2, split3 = random.split(key, 3)
+    observations = {"scale": random.exponential(split1, shape=(obs,)),
+                    "power": random.exponential(split2, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(
+      observation_count=obs,
+      batch_size=obs)
+    sample = {"scale": 0.5, "base": random.uniform(split3, (dim,))}
 
+    scan_result = scan_grad(sample, reference_data)
+    vmap_result = vmap_grad(sample, reference_data)
+    pmap_result = pmap_grad(sample, reference_data)
+
+    test_util.check_close(scan_result, vmap_result)
+    test_util.check_close(scan_result, pmap_result)
+
+  @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
+  def test_stochastic_potential_gradient_shape(self, potential, obs, dim):
+    # Set device count for pmap
+    test_util.set_host_platform_device_count(obs)
+    _, likelihood = potential
+    prior = lambda _: 0.0
+    # Setup potential
+
+    scan_grad = jit(
+      jax.grad(minibatch_potential(prior, likelihood, strategy="map")))
+    vmap_grad = jit(
+      jax.grad(minibatch_potential(prior, likelihood, strategy="vmap")))
+    pmap_grad = jit(
+      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap")))
+
+    # Setup reference data
+    key = random.PRNGKey(0)
+
+    # Set scale to zero to get zero gradient
+    split1, split2 = random.split(key, 2)
+    observations = {"scale": jnp.zeros(obs),
+                    "power": random.exponential(split1, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(
+      observation_count=obs,
+      batch_size=obs)
+    sample = {"scale": 0.5, "base": random.uniform(split2, (dim,))}
+
+    zero_gradient = jax.tree_map(jnp.zeros_like, sample)
+    scan_result = scan_grad(sample, reference_data)
+    vmap_result = vmap_grad(sample, reference_data)
+    pmap_result = pmap_grad(sample, reference_data)
+
+    print(scan_result)
+    print(vmap_result)
+    print(pmap_result)
+
+    test_util.check_close(scan_result, zero_gradient)
+    test_util.check_close(vmap_result, zero_gradient)
+    test_util.check_close(pmap_result, zero_gradient)

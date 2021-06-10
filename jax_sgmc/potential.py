@@ -1,9 +1,9 @@
 """Utility to evaluate stochastic or real potential.
 
 Stochastic gradient monte carlo requires to evaluate the potential and the model
-for a multiple of observations or all observations. However, the likelihood and model
-funtion only accept a singe observation and parameter set. Therefore, this
-module maps the evaluation over the mini-batch or even all observations by
+for a multiple of observations or all observations. However, the likelihood and
+model function only accept a singe observation and parameter set. Therefore,
+this module maps the evaluation over the mini-batch or even all observations by
 making use of jaxs tools ``map``, ``vmap`` and ``pmap``.
 
 """
@@ -14,8 +14,8 @@ from functools import partial
 
 from typing import Callable, Any, AnyStr
 
-from jax import vmap, grad
-from jax.lax import scan
+from jax import vmap, pmap
+from jax import lax
 
 import jax.numpy as jnp
 
@@ -27,10 +27,12 @@ from jax_sgmc.data import full_data_state, MiniBatch
 PyTree = Any
 Array = util.Array
 Potential = Callable[[PyTree, full_data_state], Array]
-Likelihood = Callable[[PyTree, PyTree], Array]
-Prior = Callable[[PyTree], Array]
-Model = Callable[[PyTree, PyTree], PyTree]
 
+Likelihood = Callable[[PyTree, MiniBatch], Array]
+Prior = Callable[[PyTree], Array]
+
+StochasticPotential = Callable[[PyTree, MiniBatch], Array]
+FullPotential = Callable[[PyTree, full_data_state], Array]
 
 # Todo: Possibly support soft-vmap (numpyro)
 # Todo: Implement evaluation via pmap
@@ -38,7 +40,7 @@ Model = Callable[[PyTree, PyTree], PyTree]
 def minibatch_potential(prior: Prior,
                         likelihood: Likelihood,
                         strategy: AnyStr = "map"
-                        ) -> Callable[[PyTree, MiniBatch], Array]:
+                        ) -> StochasticPotential:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -52,17 +54,12 @@ def minibatch_potential(prior: Prior,
 
       - ``'map'`` sequential evaluation
       - ``'vmap'`` parallel evaluation via vectorization
-      - ``'pmap'`` parallel evaluation
-
-  Notes:
-    The sample is a dict of the form ``dict(model=model_latent_variables,
-    likelihood_latent_varaiables)``.
+      - ``'pmap'`` parallel evaluation on multiple devices
 
   Returns:
     Returns a function which evaluates the stochastic potential for a mini-batch
     of data. The first argument are the latent variables and the second is the
-    minibatch.
-
+    mini-batch.
   """
 
   # The final function to evaluate the potential including likelihood and prio
@@ -78,7 +75,6 @@ def minibatch_potential(prior: Prior,
       batch_data, batch_information = reference_data
       N = batch_information.observation_count
       n = batch_information.batch_size
-
       def single_likelihood_evaluation(cumsum, observation):
         likelihood_value = marginal_likelihood(observation)
         next_cumsum = cumsum + likelihood_value
@@ -86,15 +82,19 @@ def minibatch_potential(prior: Prior,
 
       # Approximate the potential by taking the average and scaling it to the
       # full data set size
-      startsum = jnp.float32(0.0)
-      cumsum, _ = scan(single_likelihood_evaluation,
-                       startsum,
-                       batch_data)
+      startsum = jnp.array([0.0])
+      cumsum, _ = lax.scan(single_likelihood_evaluation,
+                           startsum,
+                           batch_data)
       stochastic_potential = - N / n * cumsum
       return stochastic_potential
-  elif strategy == 'vmap':
-    batched_likelihood = vmap(likelihood,
-                              in_axes=(None, 0))
+  elif strategy in ('vmap', 'pmap'):
+    if strategy == 'pmap':
+      batched_likelihood = pmap(likelihood,
+                                in_axes=(None, 0))
+    if strategy == 'vmap':
+      batched_likelihood = vmap(likelihood,
+                                in_axes=(None, 0))
     def batch_potential(sample, reference_data: MiniBatch):
       # Approximate the potential by taking the average and scaling it to the
       # full data set size
@@ -102,25 +102,27 @@ def minibatch_potential(prior: Prior,
       N = batch_information.observation_count
       batch_likelihoods = batched_likelihood(sample, batch_data)
       stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
-      return jnp.float32(stochastic_potential)
+      return stochastic_potential
   else:
-    assert False, "Currently not implemented"
+    raise NotImplementedError(f"Strategy {strategy} is unknown")
 
   def potential_function(sample: PyTree,
                          reference_data: MiniBatch
                          ) -> Array:
-
-    # Todo: The format of the mini_batch has changed
+    # Never differentiate w. r. t. reference data
+    reference_data = lax.stop_gradient(reference_data)
 
     # Evaluate the likelihood and model for each reference data sample
-    # liklihood_value = batched_likelihood_and_model(sample, reference_data)
+    # likelihood_value = batched_likelihood_and_model(sample, reference_data)
+    # It is also possible to combine the prior and the likelihood into a single
+    # callable.
 
     likelihood_value = batch_potential(sample, reference_data)
 
     # The prior has to be evaluated only once, therefore the extra call
     prior_value = prior(sample)
 
-    return likelihood_value - prior_value
+    return jnp.squeeze(likelihood_value - prior_value)
 
   return potential_function
 
@@ -165,50 +167,5 @@ def full_potential(prior: Callable[[PyTree], Array],
 
   # return potential_function
 
-def stochastic_potential_gradient(prior: Prior,
-                                  likelihood: Likelihood,
-                                  strategy: AnyStr = "map"
-                                  ) -> Callable[[PyTree, MiniBatch], Array]:
-  """Initializes the potential function for a minibatch of data.
-
-  Args:
-    prior: Probability density function which is evaluated for a single
-      sample.
-    likelihood: Probability density function which is evaluated for a single
-      first argument but multiple second arguments. The likelihood includes the
-      model evaluation.
-    strategy: Determines hwo to evaluate the model function with respect for
-      sample:
-
-      - ``'map'`` sequential evaluation
-      - ``'vmap'`` parallel evaluation via vectorization
-      - ``'pmap'`` parallel evaluation
-
-  Notes:
-    The sample is a dict of the form ``dict(model=model_latent_variables,
-    likelihood_latent_varaiables)``.
-
-    Returns:
-      Returns a function which evaluates the stochastic gradient of the
-      potential for a mini-batch of data. The first argument are the latent
-      variables and the second is the minibatch.
-
-    """
-
-  # The stochastic potential gradient ist a wrapper around the potential fuction
-  # to simplify the gradient computation. Therefore, the potential function must
-  # be initialized first
-
-  potential_fn = minibatch_potential(prior,
-                                     likelihood,
-                                     strategy)
-
-  # Only the gradient over the sample values is important
-
-  gradient = grad(potential_fn, argnums=0)
-
-  return gradient
-
 # Todo: Implement helper function to build the likelihood from the model and a
 #       likelihood distribution.
-

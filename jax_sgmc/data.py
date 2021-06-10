@@ -34,7 +34,8 @@ Attributes:
   mini_batch: List of tuples, tuples consist of ``(observations, parameters)``
 """
 
-MiniBatch = Tuple[Array, mini_batch_information]
+PyTree = Any
+MiniBatch = Tuple[PyTree, mini_batch_information]
 PyTree = Any
 
 # Definition of the data loader class

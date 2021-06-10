@@ -327,8 +327,10 @@ class TestRandomAccess:
     assert DL.random_batches.call_count == int(4.1 - 1.0)
 
   # Todo: Improve this test
-  def test_vmap(self, pmap_setup, data_loader_mock):
+  def test_vmap(self, data_loader_mock):
     DL, format, _ = data_loader_mock
+
+    states_count = 5
 
     init_fn, batch_fn = data.random_reference_data(DL, format.cs)
 
@@ -338,14 +340,14 @@ class TestRandomAccess:
 
     init_states = [
       init_fn(key=jax.random.PRNGKey(idx))
-      for idx in range(pmap_setup.host_count)
+      for idx in range(states_count)
     ]
     transform_fn, _ = util.pytree_list_transform(
       init_states
     )
 
     # Init states vorspulen
-    for idx in range(pmap_setup.host_count):
+    for idx in range(states_count):
       for _ in range(idx):
         init_states[idx], _ = batch_fn(init_states[idx])
     init_states = transform_fn(init_states)

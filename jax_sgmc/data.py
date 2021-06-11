@@ -224,9 +224,7 @@ class TensorflowDataLoader(DataLoader):
       for key in self._exclude_keys:
         del numpy_batch[key]
 
-    jax_batch = tree_util.tree_map(lambda leaf: jnp.array(leaf),
-                                   numpy_batch)
-
+    jax_batch = tree_util.tree_map(jnp.array, numpy_batch)
     return jax_batch
 
 
@@ -248,7 +246,8 @@ class NumpyDataLoader(DataLoader):
     for name, array in reference_data.items():
       assert array.shape[0] == observation_count, "Number of observations is" \
                                                   "ambiguous."
-      self._reference_data[name] = array
+      # Transform if jax arrays are passed by mistake
+      self._reference_data[name] = onp.array(array)
 
     self._rng = []
     self._cache_sizes = []
@@ -276,7 +275,6 @@ class NumpyDataLoader(DataLoader):
 
     # Get the random state of the chain, do some random operations and then save
     # the random state of the chain.
-
     def generate_selections():
       for _ in range(self._cache_sizes[chain_id]):
         mb_idx = self._rng[chain_id].choice(
@@ -293,7 +291,6 @@ class NumpyDataLoader(DataLoader):
       else:
         selection = data[selected_observations_index,::]
       selected_observations[key] = selection
-
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
 

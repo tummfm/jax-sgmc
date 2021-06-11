@@ -9,4 +9,3 @@ jax-sgmc.potential
 
     minibatch_potential
     full_potential
-    stochastic_potential_gradient

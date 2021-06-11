@@ -12,13 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Todo: Müssen gradient und sample noch ein weiteres mal übergeben werden?
 """Adapt conditioning matrix
 
-The adaption gets three arguments passed:
+Initialize adaption
 
-1. parameters
-2. stochastic gradient
-3. reference data
+::
+
+  state = adaption_init(init_sample, *args, **kwargs)
+
+
+Update the adaption state
+
+::
+
+  state = adaption_update(state, sample, sample_grad, mini_batch; *args, **kwargs)
+
+Get the adapted manifold
+
+::
+
+  g_inv, sqrt_g_inv, gamma = adaption_get(state, sample, sample_grad,
+                                          mini_batch, *args, **kwargs)
 
 Mostly, only the second argument is important, otherwise, argument 1. and 3.
 allow to derive further quantities, such as the stochastic hessian of the

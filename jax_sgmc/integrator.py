@@ -2,14 +2,16 @@
 
 from collections import namedtuple
 
-from typing import AnyStr, Callable, Any, Tuple, Iterable, List
+from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict
 
-from jax import random, jit, tree_unflatten, tree_flatten
+from jax import random, tree_unflatten, tree_flatten, grad
 
 import jax.numpy as jnp
 
-from jax_sgmc.data import MiniBatch, full_data_state
-from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply
+from jax_sgmc.adaption import AdaptionStrategy
+from jax_sgmc.potential import StochasticPotential
+from jax_sgmc.data import RandomBatch, full_data_state
+from jax_sgmc.util import Array, tree_scale, tree_add
 from jax_sgmc.scheduler import schedule
 
 leapfrog_state = namedtuple("leapfrog_state",
@@ -18,13 +20,15 @@ leapfrog_state = namedtuple("leapfrog_state",
 langevin_state = namedtuple("langevin_state",
                             ["latent_variables",
                              "key",
-                             "adapt_state"])
+                             "adapt_state",
+                             "data_state"])
 """State of the langevin diffusion integrator.
 
 Attributes:
   latent_variables: Current latent variables
   key: PRNGKey
   adapt_state: Containing quantities such as momentum for adaption
+  data_state: State of the reference data cache
 
 """
 
@@ -48,8 +52,8 @@ def random_tree(key, a):
   """
   leaves, tree_def = tree_flatten(a)
   splits = random.split(key, len(leaves))
-  noise_leaves = [random.normal(split, leave.shape)
-                  for split, leave in zip(splits, leaves)]
+  noise_leaves = [random.normal(split, leaf.shape)
+                  for split, leaf in zip(splits, leaves)]
   noise_tree = tree_unflatten(tree_def, noise_leaves)
   return noise_tree
 
@@ -132,33 +136,36 @@ def friction_leapfrog(key: Array,
 
   return integrate
 
-  # Todo: Implement Langevin diffusin integrator
   # Todo: Find a general method to deal with direct hessian inversion (e. g.
-  # fisher scoring) or iterative inversion. -> Two different solvers
-  # For langevin diffusion is might be possible to implement an adaption step.
+  #   fisher scoring) or iterative inversion. -> Two different solvers
+  #   For langevin diffusion is might be possible to implement an adaption step.
 
 def langevin_diffusion(
-        init_sample: PyTree,
-        data: full_data_state,
-        stochastic_gradient: Callable[[PyTree, MiniBatch], PyTree],
-        key: Array=None,
-        adaption=None,
-        strategy='map'
-        ) -> Tuple[Callable, Callable, Callable]:
+        potential_fn: StochasticPotential,
+        batch_fn: RandomBatch,
+        adaption: AdaptionStrategy = None,
+) -> Tuple[Callable, Callable, Callable]:
   """Initializes langevin diffusion integrator.
 
   Arguments:
-    key: PRNGKey
-    init_sample: Latent variables to start with
-    data: Reference Data object
-    stochastic_gradient: Stochastic gradient function
-    adaption: A function to adapt the state and get the the parameters M, Gamma
-      and D
+    potential_fn: Likelihood and prior applied over a minibatch of data
+    batch_fn: Function to draw a mini-batch of reference data
+    adaption: Adaption of manifold for faster inference
 
   Returns:
-    Returns a tuple consisting of the integrator function and the initial state.
+    Returns a tuple consisting of ``ini_fn``, ``update_fn``, ``get_fn``.
+    The init_fn takes the arguments
+
+    - key: Initial PRNGKey
+    - adaption_kwargs: Additional arguments to determine the initial manifold
+      state
+    - batch_kwargs: Determine the state of the random data chain
 
   """
+  if adaption is not None:
+    adapt_init, adapt_update, adapt_get = adaption
+  batch_init, batch_get = batch_fn
+  stochastic_gradient = grad(potential_fn)
 
   # We need to define an update function. All array oprations must be
   # implemented via tree_map. This is probably going to change with the
@@ -168,50 +175,93 @@ def langevin_diffusion(
   # This function is intended to generate initial states. Jax key,
   # adaption, etc. can be initialized to a default value if not explicitely
   # provided
-  def init_fn(init_sample):
-    assert False, "Must override"
+
+  def init_fn(init_sample: PyTree,
+              key: Array = random.PRNGKey(0),
+              adaption_kwargs: Dict = None,
+              batch_kwargs: Dict = None
+              ):
+    """Initializes the initial state of the integrator.
+
+    Args:
+      init_sample: Initial latent variables
+      key: Initial PRNGKey
+      adaption_kwargs: Determine the inital state of the adaption
+      batch_kwargs: Determine the inital state of the random data chain
+
+    Returns:
+      Returns the initial state of the integrator.
+
+    """
 
     # Initializing the initial state here makes it easier to add additional
-    # variables which might be only necessary in special cases
+    # variables which might be only necessary in special case
+    if adaption_kwargs is None:
+      adaption_kwargs = {}
+    if batch_kwargs is None:
+      batch_kwargs = {}
 
-    if key is None:
-      key = random.PRNGKey(0)
+    # Adaption is not required in the most general case
+    if adaption is None:
+      adaption_state = None
+    else:
+      adaption_state = adapt_init(init_sample, **adaption_kwargs)
 
-    init_state = langevin_state(key=key, latent_variables=init_sample,
-                                adapt_state=None)
+    reference_data_state = batch_init(**batch_kwargs)
+
+    init_state = langevin_state(
+      key=key,
+      latent_variables=init_sample,
+      adapt_state=adaption_state,
+      data_state=reference_data_state)
+
+    return init_state
 
   # Returns the important parameters of a state and excludes. Makes information
   # hiding possible
 
-  def get_fn(init_sample):
-    assert False, "Must override"
+  def get_fn(state: langevin_state):
+    """Returns the latent variables."""
+    return state.latent_variables
 
   # Update according to the integrator update rule
 
-  @jit
   def update_fn(state: langevin_state,
-                parameters: schedule,
-                reference_data: MiniBatch):
-    key, split = random.split(state.key)
+                parameters: schedule):
+    """Updates the integrator state according to a schedule.
 
-    # Move the data acquisition here
+    Args:
+      state: Integrator state
+      parameters: Schedule containig step_size and temperature
+
+    Returns:
+      Returns a new step calculated by applying langevin diffusion.
+    """
+    key, split = random.split(state.key)
+    data_state, mini_batch = batch_get(state.data_state)
 
     noise = random_tree(split, state.latent_variables)
-    gradient = stochastic_gradient(state.latent_variables,
-                                   reference_data)
+    gradient = stochastic_gradient(state.latent_variables, mini_batch)
 
     if adaption is None:
-      scaled_gradient = tree_scale(- parameters.step_size, gradient)
-      print(scaled_gradient)
-      scaled_noise = tree_scale(jnp.sqrt(2 * parameters.temperature
-                                * parameters.step_size),
-                                noise)
+      scaled_gradient = tree_scale(-parameters.step_size, gradient)
+      scaled_noise = tree_scale(
+        jnp.sqrt(2 * parameters.temperature * parameters.step_size), noise)
       update_step = tree_add(scaled_gradient, scaled_noise)
+      adapt_state = None
     else:
-      # Adapt the state
-      new_adapt_state, manifold, drift = adaption(state.adapt_state,
-                                                  stochastic_gradient=gradient,
-                                                  sample=state.latent_variables)
+      # Update the adaption
+      adapt_state = adapt_update(
+        state.adapt_state,
+        state.latent_variables,
+        gradient,
+        mini_batch)
+      # Get the adaption
+      g_inv, sqrt_g_inv, gamma = adapt_get(
+        adapt_state,
+        state.latent_variables,
+        gradient,
+        mini_batch)
 
       # Todo: Implement the adaption update step with tree_map
       # Todo: Think of a way to support matrix-vector and vector-vector product
@@ -219,28 +269,15 @@ def langevin_diffusion(
 
       update_step = jnp.zeros_like(state.latent_variables)
 
+    # Conclude the variable update by adding the step to the current samples
     new_sample = tree_add(state.latent_variables, update_step)
-    new_state = langevin_state(key=key,
-                               latent_variables=new_sample,
-                               adapt_state=None)
+    new_state = langevin_state(
+      key=key,
+      latent_variables=new_sample,
+      adapt_state=adapt_state,
+      data_state=data_state
+    )
 
     return new_state
-
-  # if strategy == 'map':
-  #   def update_fn(state: List[langevin_state],
-  #                 parameters: update_parameters,
-  #                 refernce_data: List[mini_batch]):
-  #     pass
-
-  # The integrate function iterates over a schedule, which provides information
-  # such as step size and temperature
-
-  # Todo: Change to support e. g. adaptive step_size?
-  # Todo: Support parallel chain evaluation:
-  #       - Support multiple schedules with multiple temperatures (parallel
-  #         tempering)
-  #       - Support passing a list of states to vmap
-  #       - Change syntax: Give single pytree and only transform back when
-  #       - necessary (maybe in background?)
 
   return init_fn, update_fn, get_fn

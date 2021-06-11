@@ -5,7 +5,7 @@ import abc
 from collections import namedtuple
 from functools import partial
 
-from typing import Tuple, Any, Callable, List
+from typing import Tuple, Any, Callable, List, Optional
 
 import jax
 from jax import tree_util, lax, random
@@ -36,6 +36,8 @@ Attributes:
 
 PyTree = Any
 MiniBatch = Tuple[PyTree, mini_batch_information]
+RandomBatch = Tuple[Callable[[Optional[Any], Optional[Any]], Tuple],
+                    Callable[[Tuple], Tuple[Tuple, MiniBatch]]]
 PyTree = Any
 
 # Definition of the data loader class

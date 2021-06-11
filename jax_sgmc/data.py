@@ -8,8 +8,10 @@ from functools import partial
 from typing import Tuple, Any, Callable, List, Optional
 
 import jax
-from jax import tree_util, lax, random
+from jax import tree_util, lax
 import jax.numpy as jnp
+
+import numpy as onp
 
 # Tensorflow is only required if the tensorflow dataLoader ist used.
 try:
@@ -21,7 +23,6 @@ except ModuleNotFoundError:
   tfds = None
 
 from jax_sgmc.util import host_callback as hcb
-from jax_sgmc.util import Array
 
 mini_batch_information = namedtuple(
   "mini_batch_information",
@@ -239,13 +240,17 @@ class NumpyDataLoader(DataLoader):
     first_key = list(reference_data.keys())[0]
     observation_count = reference_data[first_key].shape[0]
 
+    assert mini_batch_size <= observation_count, "There cannot be more samples"\
+                                                 "in the minibatch than there"\
+                                                 "are observations."
+
     self._reference_data = dict()
     for name, array in reference_data.items():
       assert array.shape[0] == observation_count, "Number of observations is" \
                                                   "ambiguous."
       self._reference_data[name] = array
 
-    self._PRNGKeys = []
+    self._rng = []
     self._cache_sizes = []
     self._observation_count = observation_count
     self._mini_batch_size = mini_batch_size
@@ -257,38 +262,30 @@ class NumpyDataLoader(DataLoader):
   def _register_random_pipeline(self, cache_size: int=1, **kwargs) -> int:
     # The random state of each chain can be defined unambiguously via the
     # PRNGKey
-    if "key" not in kwargs:
-      if len(self._PRNGKeys) == 0:
-        new_key = random.PRNGKey(0)
-      else:
-        new_key, = random.split(self._PRNGKeys[-1], 1)
-    else:
-      new_key = kwargs["key"]
+    seed = kwargs.get("seed", len(self._rng))
+    rng = onp.random.default_rng(
+      onp.random.SeedSequence(seed).spawn(1)[0])
 
-    chain_id = len(self._PRNGKeys)
-    self._PRNGKeys.append(new_key)
+    chain_id = len(self._rng)
+    self._rng.append(rng)
     self._cache_sizes.append(cache_size)
-
     return chain_id
 
   def random_batches(self, chain_id: int) -> PyTree:
-    assert chain_id < len(self._PRNGKeys), f"Chain {chain_id} does not exist."
+    assert chain_id < len(self._rng), f"Chain {chain_id} does not exist."
 
-    # Using scan ensures that the generated keys are independent of the cache
-    # size.
-    _, keys = jax.lax.scan(lambda state, _: tuple(random.split(state)),
-                           self._PRNGKeys[chain_id],
-                           jnp.arange(self._cache_sizes[chain_id] + 1))
-    self._PRNGKeys[chain_id] = keys[0, :]
-    splits = keys[1:, :]
-    sample_count = self._observation_count
-    @jax.vmap
-    def sample_selection(split):
-      sample_selection = random.choice(split,
-                                       jnp.arange(sample_count),
-                                       shape=(self._mini_batch_size,))
-      return sample_selection
-    selected_observations_index = sample_selection(splits)
+    # Get the random state of the chain, do some random operations and then save
+    # the random state of the chain.
+
+    def generate_selections():
+      for _ in range(self._cache_sizes[chain_id]):
+        mb_idx = self._rng[chain_id].choice(
+          onp.arange(0, self._observation_count),
+          size=self._mini_batch_size,
+          replace=False
+        )
+        yield mb_idx
+    selected_observations_index = onp.array(list(generate_selections()))
     selected_observations = dict()
     for key, data in self._reference_data.items():
       if data.ndim == 1:

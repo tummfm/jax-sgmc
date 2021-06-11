@@ -130,7 +130,7 @@ class TestNumpyLoader:
   def dataset(self):
     """Construct a dataset for the numpy data loader."""
 
-    n = 4
+    n = 17
     def generate_a(n):
       for i in range(n):
         yield i
@@ -150,12 +150,12 @@ class TestNumpyLoader:
 
   def test_kwargs(self, dataloader):
 
-    key = jax.random.PRNGKey(10)
+    seed = 10
     pipeline, _ = dataloader
 
     _, _ = pipeline.batch_format(10)
-    _, batch_a = pipeline.register_random_pipeline(10, key=key)
-    _, batch_b = pipeline.register_random_pipeline(10, key=key)
+    _, batch_a = pipeline.register_random_pipeline(10, seed=seed)
+    _, batch_b = pipeline.register_random_pipeline(10, seed=seed)
 
     def check_fn(a, b):
       assert jnp.all(a == b)
@@ -211,7 +211,7 @@ class TestNumpyLoader:
     assert second_pipe != 0
 
     # Check that two pipelines exist
-    assert len(pipeline._PRNGKeys) == 2
+    assert len(pipeline._rng) == 2
 
     # Check that dtype is correct
     random_batch = pipeline.random_batches(new_pipe)
@@ -225,9 +225,9 @@ class TestNumpyLoader:
     pipeline, _ = dataloader
 
     _, small_batch = pipeline.register_random_pipeline(
-      cs_small, key=jax.random.PRNGKey(0))
+      cs_small, seed=0)
     _, big_batch = pipeline.register_random_pipeline(
-      cs_big, key=jax.random.PRNGKey(0))
+      cs_big, seed=0)
 
     def check_fn(a, b):
       for idx in range(cs_small):

@@ -42,9 +42,9 @@ jobs:
         pip install tox
     - name: Test with tox
       run: |
-        tox -e pytest pytest_tensorflow
+        tox -e pytest
         
-  test with tensorflow:
+  test-with-tensorflow:
 
     runs-on: ubuntu-latest
 

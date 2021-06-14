@@ -32,8 +32,7 @@ Get the adapted manifold
 
 ::
 
-  g_inv, sqrt_g_inv, gamma = adaption_get(state, sample, sample_grad,
-                                          mini_batch, *args, **kwargs)
+  manifold = adaption_get(state, sample, sample_grad, mini_batch, *args, **kwargs)
 
 Mostly, only the second argument is important, otherwise, argument 1. and 3.
 allow to derive further quantities, such as the stochastic hessian of the
@@ -48,6 +47,7 @@ from typing import Any, Optional, Callable, Tuple
 from collections import namedtuple
 
 from jax import tree_util, flatten_util
+import jax.numpy as jnp
 
 from jax_sgmc.util import Array
 
@@ -65,7 +65,7 @@ AdaptionStrategy = [Callable[[PyTree], AdaptionState],
                     Callable[[AdaptionState, PyTree, PyTree, Any, Any],
                              AdaptionState],
                     Callable[[AdaptionState, PyTree, PyTree, Any, Any],
-                             Tuple[PyTree, PyTree, PyTree]]]
+                             PyTree]]
 
 # Todo: Initializing the adaption shold return an init_function, update_function
 #       and get_function
@@ -84,6 +84,22 @@ Attributes:
   state: State of the adaption strategy
   ravel_fn: Jax-partial function to transform pytree to 1D array
   unravel_fn: Jax-partial function to undo ravelling of pytree
+"""
+
+manifold = namedtuple(
+  "manifold",
+  ["ndim",
+   "g_inv",
+   "sqrt_g_inv",
+   "gamma"]
+)
+"""Adapted manifold.
+
+Attributes:
+  ndim: Diagonal or full adaption.
+  g_inv: Adaption matrix for gradient
+  sqrt_g_inv: Adaption matrix for noise
+  gamma: Diffusion due to positional dependence of manifold
 """
 
 # Todo: Make tree hashable and add caching
@@ -154,16 +170,23 @@ def adaption(adaption_fn: Adaption):
       grad_flat = state.ravel_fn(grad_x)
 
       # Get with flattened arguments
-      manifold, sqrt_manifold, gamma = get(state.state,
-                                           x_flat,
-                                           grad_flat,
-                                           mini_batch,
-                                           *get_args,
-                                           **get_kwargs)
+      g_inv, sqrt_g_inv, gamma = get(state.state,
+                                     x_flat,
+                                     grad_flat,
+                                     mini_batch,
+                                     *get_args,
+                                     **get_kwargs)
+
+      if g_inv.ndim == 1 and sqrt_g_inv.ndim == 1:
+        unraveled_manifold = manifold(
+          ndim=1,
+          g_inv=state.unravel_fn(g_inv),
+          sqrt_g_inv=sqrt_g_inv,
+          gamma=gamma
+        )
 
       # Unravel the results
-      # Todo: Distinguish whether matrices or vectors are returned
-      return state.unravel_fn(manifold), state.unravel_fn(sqrt_manifold), state.unravel_fn(gamma)
+      return manifold
     return new_init, new_update, new_get
   return pytree_adaption
 
@@ -192,3 +215,23 @@ static_conditioning_state = namedtuple(
 #   """
 #
 #   # Get a zero pytree
+
+def rms_prop():
+  """RMSProp adaption."""
+
+  def init(sample, alpha=0.9, lmbd=1e-5):
+    v = jnp.ones_like(sample)
+    g = jnp.ones_like(sample)
+    return (v, g, alpha, lmbd)
+
+  def update(state, sample, sample_grad, *unused_args, **unused_kwargs):
+    v, g, alpha, lmbd = state
+    new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
+    new_g = jnp.power(lmbd + jnp.sqrt(new_v), -1.0)
+    return (new_v, new_g, alpha, lmbd)
+
+  def get(state, sample, sample_grad, *unused_args, **unused_kwargs):
+    v, g, alpha, lmbd = state
+    return g, jnp.sqrt(g), jnp.zeros_like(g)
+
+  return init, update, get

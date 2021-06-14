@@ -42,7 +42,7 @@ potential.
 
 import functools
 
-from typing import Any, Optional, Callable, Tuple
+from typing import Any, Callable, Tuple
 
 from collections import namedtuple
 
@@ -53,8 +53,9 @@ from jax_sgmc.util import Array
 
 # Todo: Correctly specify the return type
 
-PartialFn = tree_util.Partial
+PartialFn = Any
 PyTree = Any
+
 Adaption = Callable[[Any, Any],
   Tuple[Callable[[Array, Any,Any], PyTree],
                  Callable[[PyTree, Array, Array, PyTree, Any, Any], PyTree],
@@ -181,12 +182,14 @@ def adaption(adaption_fn: Adaption):
         unraveled_manifold = manifold(
           ndim=1,
           g_inv=state.unravel_fn(g_inv),
-          sqrt_g_inv=sqrt_g_inv,
-          gamma=gamma
+          sqrt_g_inv=state.unravel_fn(sqrt_g_inv),
+          gamma=state.unravel_fn(gamma)
         )
+      else:
+        raise NotImplementedError
 
       # Unravel the results
-      return manifold
+      return unraveled_manifold
     return new_init, new_update, new_get
   return pytree_adaption
 
@@ -216,22 +219,69 @@ static_conditioning_state = namedtuple(
 #
 #   # Get a zero pytree
 
-def rms_prop():
-  """RMSProp adaption."""
+@adaption
+def rms_prop() -> AdaptionStrategy:
+  """RMSprop adaption.
 
-  def init(sample, alpha=0.9, lmbd=1e-5):
+  Adapt a diagonal matrix to the local curvature requiring only the stochastic
+  gradient.
+
+  Returns:
+    Returns RMSprop adaption strategy.
+
+  [1] https://arxiv.org/abs/1512.07666
+  """
+
+  def init(sample: Array,
+           alpha: Array = 0.9,
+           lmbd: Array = 1e-5):
+    """Initializes RMSprop algorithm.
+
+    Args:
+      sample: Initial sample to derive the sample size
+      alpha: Adaption speed
+      lmbd: Stabilization constant
+
+    Returns:
+      Returns the inital adaption state
+    """
     v = jnp.ones_like(sample)
-    g = jnp.ones_like(sample)
-    return (v, g, alpha, lmbd)
+    return (v, alpha, lmbd)
 
-  def update(state, sample, sample_grad, *unused_args, **unused_kwargs):
-    v, g, alpha, lmbd = state
+  def update(state: Tuple[Array, Array, Array],
+             unused_sample: Array,
+             sample_grad: Array,
+             *unused_args: Any,
+             **unused_kwargs: Any):
+    """Updates the RMSprop adaption.
+
+    Args:
+      state: Adaption state
+      sample_grad: Stochastic gradient
+
+    Returns:
+      Returns adapted RMSprop state.
+    """
+
+    v, alpha, lmbd = state
     new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
-    new_g = jnp.power(lmbd + jnp.sqrt(new_v), -1.0)
-    return (new_v, new_g, alpha, lmbd)
+    return new_v, alpha, lmbd
 
-  def get(state, sample, sample_grad, *unused_args, **unused_kwargs):
-    v, g, alpha, lmbd = state
+  def get(state: Tuple[Array, Array, Array],
+          unused_sample: Array,
+          unused_sample_grad: Array,
+          *unused_args: Any,
+          **unused_kwargs: Any):
+    """Calculates the current manifold of the RMSprop adaption.
+
+    Args:
+      state: Current RMSprop adaption state
+
+    Returns:
+      Returns a manifold tuple with ``ndim == 1``.
+    """
+    v, _, lmbd = state
+    g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
     return g, jnp.sqrt(g), jnp.zeros_like(g)
 
   return init, update, get

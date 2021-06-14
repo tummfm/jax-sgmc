@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jax_sgmc.adaption import AdaptionStrategy
 from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.data import RandomBatch, full_data_state
-from jax_sgmc.util import Array, tree_scale, tree_add
+from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply
 from jax_sgmc.scheduler import schedule
 
 leapfrog_state = namedtuple("leapfrog_state",
@@ -243,10 +243,11 @@ def langevin_diffusion(
     noise = random_tree(split, state.latent_variables)
     gradient = stochastic_gradient(state.latent_variables, mini_batch)
 
+    scaled_gradient = tree_scale(-parameters.step_size, gradient)
+    scaled_noise = tree_scale(
+      jnp.sqrt(2 * parameters.temperature * parameters.step_size), noise)
+
     if adaption is None:
-      scaled_gradient = tree_scale(-parameters.step_size, gradient)
-      scaled_noise = tree_scale(
-        jnp.sqrt(2 * parameters.temperature * parameters.step_size), noise)
       update_step = tree_add(scaled_gradient, scaled_noise)
       adapt_state = None
     else:
@@ -257,17 +258,28 @@ def langevin_diffusion(
         gradient,
         mini_batch)
       # Get the adaption
-      g_inv, sqrt_g_inv, gamma = adapt_get(
+      manifold = adapt_get(
         adapt_state,
         state.latent_variables,
         gradient,
         mini_batch)
 
-      # Todo: Implement the adaption update step with tree_map
-      # Todo: Think of a way to support matrix-vector and vector-vector product
-      #       on pytrees.
-
-      update_step = jnp.zeros_like(state.latent_variables)
+      if manifold.ndim == 1:
+        adapted_gradient = tree_multiply(
+          manifold.g_inv,
+          scaled_gradient
+        )
+        adapted_noise = tree_multiply(
+          manifold.sqrt_g_inv,
+          scaled_noise
+        )
+        update_step = tree_add(
+          tree_add(manifold.gamma, adapted_gradient),
+          adapted_noise
+        )
+      else:
+        raise NotImplementedError("Adaption with full matrices currently not "
+                                  "supported")
 
     # Conclude the variable update by adding the step to the current samples
     new_sample = tree_add(state.latent_variables, update_step)

@@ -46,10 +46,6 @@ PyTree = Any
 # Todo: State übergeben bei random batch statt chain id. Damit einfacher
 #       checkpointing
 
-# Todo: Funktion mit vmap leider eingeschränkt, aber pmap funktioniert.
-#       Beibehalten oder nochmals überarbeiten? -> Reference_data soweit wie
-#       möglich nach draußen ziehen (wmgl. weit vor vmap)
-
 class DataLoader(metaclass=abc.ABCMeta):
   """Abstract class to define required methods of the DataLoader.
 
@@ -335,7 +331,6 @@ Attributes:
   chain_id: Indentifier of the chain
 """
 # Todo: Implement checkpoint function
-# Todo: Deal with kwargs for first chain
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int=100

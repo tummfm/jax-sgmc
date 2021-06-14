@@ -64,9 +64,6 @@ def minibatch_potential(prior: Prior,
 
   # The final function to evaluate the potential including likelihood and prio
 
-  # Todo: Possibly distinguish between constant/none parameters and pairs of
-  #       reference data and parameters
-
   if strategy == 'map':
     def batch_potential(sample, reference_data: MiniBatch):
       # The sample stays the same, therefore, it should be added to the

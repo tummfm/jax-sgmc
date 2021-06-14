@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # Todo: Müssen gradient und sample noch ein weiteres mal übergeben werden?
+
 """Adapt conditioning matrix
 
 Initialize adaption

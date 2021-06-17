@@ -1,3 +1,17 @@
+# Copyright 2021 Multiscale Modeling of Fluid Materials, TU Munich
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Defines integrators which form the core of the solvers."""
 
 from collections import namedtuple
@@ -11,7 +25,7 @@ import jax.numpy as jnp
 from jax_sgmc.adaption import AdaptionStrategy
 from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.data import RandomBatch, full_data_state
-from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply
+from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tree_matmul
 from jax_sgmc.scheduler import schedule
 
 leapfrog_state = namedtuple("leapfrog_state",
@@ -265,21 +279,17 @@ def langevin_diffusion(
         mini_batch)
 
       if manifold.ndim == 1:
-        adapted_gradient = tree_multiply(
-          manifold.g_inv,
-          scaled_gradient
-        )
-        adapted_noise = tree_multiply(
-          manifold.sqrt_g_inv,
-          scaled_noise
-        )
-        update_step = tree_add(
-          tree_add(manifold.gamma, adapted_gradient),
-          adapted_noise
-        )
+        adapted_gradient = tree_multiply(manifold.g_inv, scaled_gradient)
+        adapted_noise = tree_multiply(manifold.sqrt_g_inv, scaled_noise)
       else:
-        raise NotImplementedError("Adaption with full matrices currently not "
-                                  "supported")
+        adapted_gradient = tree_matmul(manifold.g_inv, scaled_gradient)
+        adapted_noise = tree_matmul(manifold.sqrt_g_inv, scaled_noise)
+
+      scaled_gamma = tree_scale(parameters.temperature, manifold.gamma)
+      update_step = tree_add(
+        tree_add(scaled_gamma, adapted_gradient),
+        adapted_noise
+      )
 
     # Conclude the variable update by adding the step to the current samples
     new_sample = tree_add(state.latent_variables, update_step)

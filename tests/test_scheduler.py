@@ -138,10 +138,14 @@ class TestThinning():
     burn_in, non_zero, iterations = burn_in
     step_size = scheduler.polynomial_step_size(1.0, 1.0, 1.0)
 
-    thinning = scheduler.random_thinning(step_size, burn_in)
-    state = thinning.init(iterations, int(0.5 * non_zero.size))
+    thinning = scheduler.random_thinning(
+      step_size, burn_in, int(0.5 * non_zero.size))
+    state = thinning.init(iterations)
 
+    accepted = 0
     for idx in range(iterations):
       # If the state is accepted, it must also be not subject to burn in
       if thinning.get(state, idx):
         assert (idx in non_zero)
+        accepted += 1
+    assert accepted == int(0.5 * non_zero.size)

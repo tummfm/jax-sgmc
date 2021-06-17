@@ -91,6 +91,7 @@ Attributes:
   step_size_state: State of the step size scheduler
   temperature_state: State of the temperature scheduler
   burn_in_state: State of the burn in scheduler
+  thinnin_state: State of thinning
 
 """
 
@@ -145,7 +146,7 @@ def init_scheduler(step_size: specific_scheduler = None,
       step_size_state=step_size.init(iterations),
       temperature_state=temperature.init(iterations),
       burn_in_state=burn_in.init(iterations),
-      thinning_state=thinning.init(iterations, step_size, burn_in)
+      thinning_state=thinning.init(iterations)
     )
     return init_state
 
@@ -415,7 +416,9 @@ def initial_burn_in(n: int=0):
 ################################################################################
 
 def random_thinning(step_size_schedule: specific_scheduler,
-                    burn_in_schedule: specific_scheduler):
+                    burn_in_schedule: specific_scheduler,
+                    selections: int,
+                    key: Array = None):
   """Random thinning weighted by the step size.
 
   Randomly select samples not subject to burn in. The probability of selection
@@ -425,15 +428,19 @@ def random_thinning(step_size_schedule: specific_scheduler,
   Args:
     step_size_schedule: Static step size schedule
     burn_in_schedule: Static burn in schedule
+    selections: Number of selected samples
+    key: PRNGKey for drawing selections
 
   Returns:
     Returns a scheduler marking the accepted samples.
 
   """
 
-  def init_fn(iterations: int,
-              selections: int,
-              key=random.PRNGKey(0)) -> Array:
+  if key is None:
+    key = random.PRNGKey(0)
+
+  def init_fn(iterations: int) -> Array:
+
     step_size_state = step_size_schedule.init(iterations)
     burn_in_state = burn_in_schedule.init(iterations)
 

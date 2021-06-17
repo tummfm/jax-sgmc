@@ -53,15 +53,29 @@ class DataLoader(metaclass=abc.ABCMeta):
   from storage in an ordered and a random fashion.
   """
 
-  def __init__(self):
+  def __init__(self, data_collector: Any = None):
 
     # The batch information is necessary as before the first data chain is
     # loaded. Therefore, cache the first random pipeline.
     self._first_random_pipeline = dict()
     self._batch_information = dict()
 
+    if data_collector is not None:
+      # Allows the data collector to save and restore the dataloader state
+      data_collector.register_data_loader(self)
+
   # Todo: Add a checkpoint function returning the current state
   #       def checkpoint(self, ...):
+
+  def save_state(self):
+    """Returns all necessary information to restore the dataloader state."""
+    raise NotImplementedError("This method must be overwritten to allow "
+                              "checkpointing of the data loader.")
+
+  def load_state(self, data):
+    """Restores dataloader state from previously computed checkpoint."""
+    raise NotImplementedError("This method must be overwritten to allow "
+                              "checkpointing of the data loader.")
 
   def register_random_pipeline(self,
                                cache_size: int=1,

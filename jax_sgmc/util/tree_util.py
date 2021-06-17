@@ -4,6 +4,7 @@ from typing import Any
 from functools import partial
 
 from jax import tree_util
+from jax import flatten_util
 import jax.numpy as jnp
 
 Array = jnp.ndarray
@@ -56,6 +57,22 @@ def tree_add(tree_a: PyTree, tree_b: PyTree) -> PyTree:
   def tree_add_imp(leaf_a, leaf_b):
     return leaf_a + leaf_b
   return tree_add_imp(tree_a, tree_b)
+
+
+def tree_matmul(tree_mat: Array, tree_vec: PyTree):
+  """Matrix tree product for LD on manifold.
+
+  Arguments:
+    tree_mat: Matrix to be multiplied with flattened tree
+    tree_vec: Tree representing vector
+
+  Returns:
+    Returns the un-flattened product of the matrix and the flattened tree.
+  """
+  # Todo: Redefine without need for flatten util
+  vec_flat, unravel_fn = flatten_util.ravel_pytree(tree_vec)
+  return unravel_fn(jnp.matmul(tree_mat, vec_flat))
+
 
 def pytree_list_transform(pytrees):
 

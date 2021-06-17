@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Todo: Müssen gradient und sample noch ein weiteres mal übergeben werden?
-
 """Adapt conditioning matrix
 
 Initialize adaption
@@ -76,7 +74,8 @@ adaption_state = namedtuple(
   "adaption_state",
   ["state",
    "ravel_fn",
-   "unravel_fn"])
+   "unravel_fn",
+   "flat_potential"])
 """State of the manifold adaption.
 
 This tuple stores functions to ravel and unravel the parameter and gradient
@@ -86,6 +85,7 @@ Attributes:
   state: State of the adaption strategy
   ravel_fn: Jax-partial function to transform pytree to 1D array
   unravel_fn: Jax-partial function to undo ravelling of pytree
+  flat_potential: Potential function on the flattened pytree
 """
 
 manifold = namedtuple(
@@ -136,9 +136,22 @@ def adaption(adaption_fn: Adaption):
       unravel_fn = get_unravel_fn(x0)
       x0_flat = ravel_fn(x0)
       state = init(x0_flat, *init_args, **init_kwargs)
+
+      # Wrap the potential in a flatten function if potential is provided as
+      # kwarg
+      minibatch_potential = kwargs.get("minibatch_potential")
+      if minibatch_potential is not None:
+        @tree_util.Partial
+        def flat_potential(sample, mini_batch):
+          sample_tree = unravel_fn(sample)
+          return minibatch_potential(sample_tree, mini_batch)
+      else:
+        flat_potential = None
+
       return adaption_state(state=state,
                             ravel_fn=ravel_fn,
-                            unravel_fn=unravel_fn)
+                            unravel_fn=unravel_fn,
+                            flat_potential=flat_potential)
 
     @functools.wraps(update)
     def new_update(state: adaption_state,
@@ -152,13 +165,21 @@ def adaption(adaption_fn: Adaption):
       grad_flat = state.ravel_fn(grad_x)
 
       # Update with flattened arguments
-      new_state = update(
-        state.state, x_flat, grad_flat, mini_batch,
-        *update_args, *update_kwargs
-      )
+      if state.flat_potential is None:
+        new_state = update(
+          state.state, x_flat, grad_flat,
+          *update_args, **update_kwargs
+        )
+      else:
+        new_state = update(
+          state.state, x_flat, grad_flat,
+          mini_batch, state.flat_potential,
+          *update_args, **update_kwargs)
+
       return adaption_state(state=new_state,
                             ravel_fn=state.ravel_fn,
-                            unravel_fn=state.unravel_fn)
+                            unravel_fn=state.unravel_fn,
+                            flat_potential=state.flat_potential)
 
     @functools.wraps(get)
     def new_get(state: adaption_state,
@@ -172,12 +193,20 @@ def adaption(adaption_fn: Adaption):
       grad_flat = state.ravel_fn(grad_x)
 
       # Get with flattened arguments
-      g_inv, sqrt_g_inv, gamma = get(state.state,
-                                     x_flat,
-                                     grad_flat,
-                                     mini_batch,
-                                     *get_args,
-                                     **get_kwargs)
+      if state.flat_potential is None:
+        g_inv, sqrt_g_inv, gamma = get(state.state,
+                                       x_flat,
+                                       grad_flat,
+                                       *get_args,
+                                       **get_kwargs)
+      else:
+        g_inv, sqrt_g_inv, gamma = get(state.state,
+                                       x_flat,
+                                       grad_flat,
+                                       mini_batch,
+                                       state.flat_potential,
+                                       *get_args,
+                                       **get_kwargs)
 
       if g_inv.ndim == 1 and sqrt_g_inv.ndim == 1:
         unraveled_manifold = manifold(
@@ -187,7 +216,12 @@ def adaption(adaption_fn: Adaption):
           gamma=state.unravel_fn(gamma)
         )
       else:
-        raise NotImplementedError
+        unraveled_manifold = manifold(
+          ndim=2,
+          g_inv=g_inv,
+          sqrt_g_inv=sqrt_g_inv,
+          gamma=state.unravel_fn(gamma)
+        )
 
       # Unravel the results
       return unraveled_manifold

@@ -36,8 +36,6 @@ class TestPotential():
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_zero(self, potential, obs, dim):
-    # Set device count for pmap
-    test_util.set_host_platform_device_count(obs)
     _, likelihood = potential
     prior = lambda _: 0.0
     # Setup potential
@@ -67,8 +65,6 @@ class TestPotential():
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_jit(self, potential, obs, dim):
-    # Set device count for pmap
-    test_util.set_host_platform_device_count(obs)
     _, likelihood = potential
     prior = lambda _: 0.0
     # Setup potential
@@ -99,8 +95,6 @@ class TestPotential():
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_equal(self, potential, obs, dim):
-    # Set device count for pmap
-    test_util.set_host_platform_device_count(obs)
     prior, likelihood = potential
     # Setup potential
 
@@ -128,8 +122,6 @@ class TestPotential():
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_gradient_equal(self, potential, obs, dim):
-    # Set device count for pmap
-    test_util.set_host_platform_device_count(obs)
     prior, likelihood = potential
     # Setup potential
 
@@ -160,8 +152,6 @@ class TestPotential():
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_gradient_shape(self, potential, obs, dim):
-    # Set device count for pmap
-    test_util.set_host_platform_device_count(obs)
     _, likelihood = potential
     prior = lambda _: 0.0
     # Setup potential

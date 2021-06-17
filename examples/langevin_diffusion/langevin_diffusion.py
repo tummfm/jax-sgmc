@@ -1,3 +1,17 @@
+# Copyright 2021 Multiscale Modeling of Fluid Materials, TU Munich
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import numpy as onp
 
 import jax
@@ -18,6 +32,7 @@ from jax_sgmc import potential
 from jax_sgmc import data
 from jax_sgmc import scheduler
 from jax_sgmc import integrator
+from jax_sgmc import solver
 
 ################################################################################
 #
@@ -108,7 +123,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
 # == Solver Setup ==============================================================
 
 # Number of iterations
-iterations = 10000
+iterations = 50000
 
 # Adaption strategy
 rms_prop = adaption.rms_prop()
@@ -128,52 +143,27 @@ default_step_size = scheduler.polynomial_step_size_first_last(first=0.001,
                                                               last=0.000005)
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                           last=0.001)
-default_scheduler = scheduler.init_scheduler(default_step_size)
-rms_scheduler = scheduler.init_scheduler(rms_step_size)
+burn_in = scheduler.initial_burn_in(20000)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 4000)
+default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 4000)
 
-# Initial states
-default_state = (
-default_integrator[0](sample), default_scheduler[0](iterations))
-rms_state = (rms_integrator[0](sample), rms_scheduler[0](iterations))
+default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
+                                             burn_in=burn_in,
+                                             thinning=default_random_thinning)
+rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
+                                         burn_in=burn_in,
+                                         thinning=rms_random_thinning)
 
+default_sgld = solver.sgld(default_integrator)
+rms_sgld = solver.sgld(rms_integrator)
 
-# Update functions
-@jax.jit
-def default_update(state, _):
-  integrator_state, scheduler_state = state
+default_run = solver.mcmc(default_sgld, default_scheduler)
+rms_run = solver.mcmc(rms_sgld, rms_scheduler)
 
-  # Get the schedule for the next step
-  schedule = default_scheduler[2](scheduler_state)
+default = default_run(default_integrator[0](sample), iterations=iterations)
+rms = rms_run(rms_integrator[0](sample), iterations=iterations)
 
-  # Integrate
-  integrator_state = default_integrator[1](integrator_state, schedule)
-
-  # Update the scheduler
-  scheduler_state = default_scheduler[1](scheduler_state)
-
-  return (integrator_state, scheduler_state), default_integrator[2](
-    integrator_state)
-
-
-@jax.jit
-def rms_update(state, _):
-  integrator_state, scheduler_state = state
-
-  # Get the schedule for the next step
-  schedule = rms_scheduler[2](scheduler_state)
-
-  # Integrate
-  integrator_state = rms_integrator[1](integrator_state, schedule)
-
-  # Update the scheduler
-  scheduler_state = rms_scheduler[1](scheduler_state)
-
-  return (integrator_state, scheduler_state), rms_integrator[2](
-    integrator_state)
-
-
-_, default = jax.lax.scan(default_update, default_state, jnp.arange(iterations))
-_, rms = jax.lax.scan(rms_update, rms_state, jnp.arange(iterations))
+print(rms["sigma"])
 
 ################################################################################
 #

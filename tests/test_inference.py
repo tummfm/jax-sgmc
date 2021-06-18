@@ -1,3 +1,17 @@
+# Copyright 2021 Multiscale Modeling of Fluid Materials, TU Munich
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Test the convergence of the solver on small toy problem. """
 
 import jax
@@ -78,7 +92,7 @@ class TestSGLD:
     default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
                                                  burn_in=burn_in,
                                                  thinning=default_random_thinning)
-    default_sgld = solver.sgld(default_integrator)
+    default_sgld = solver.sgmc(default_integrator)
     default_run = solver.mcmc(default_sgld, default_scheduler)
     default = default_run(default_integrator[0](w_init), iterations=50000)
 
@@ -101,7 +115,7 @@ class TestSGLD:
     rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                              burn_in=burn_in,
                                              thinning=rms_random_thinning)
-    rms_sgld = solver.sgld(rms_integrator)
+    rms_sgld = solver.sgmc(rms_integrator)
     rms_run = solver.mcmc(rms_sgld, rms_scheduler)
     rms = rms_run(rms_integrator[0](w_init), iterations=50000)
 

@@ -11,13 +11,23 @@ Welcome to jax-sgmc's documentation!
    :caption: Jax SGMC
 
    examples/index
-   solvers
+
+
+API Documentation
+==================
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Developer
+    :maxdepth: 2
+    :caption: API
 
-   jax_sgmc
+    jax_sgmc.adaption
+    jax_sgmc.data
+    jax_sgmc.integrator
+    jax_sgmc.io
+    jax_sgmc.potential
+    jax_sgmc.scheduler
+    jax_sgmc.solver
+    jax_sgmc.util
 
 
 

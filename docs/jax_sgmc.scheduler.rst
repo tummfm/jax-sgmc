@@ -1,4 +1,4 @@
-jax-sgmc.scheduler
+jax_sgmc.scheduler
 =======================
 
 

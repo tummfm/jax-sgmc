@@ -1,4 +1,4 @@
-jax-sgmc.potential
+jax_sgmc.potential
 ===================
 
 .. automodule:: jax_sgmc.potential

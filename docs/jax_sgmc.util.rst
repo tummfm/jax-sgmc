@@ -1,4 +1,4 @@
-jax-sgmc.util
+jax_sgmc.util
 ==============
 
 .. automodule:: jax_sgmc.util

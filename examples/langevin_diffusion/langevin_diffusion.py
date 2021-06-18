@@ -154,8 +154,8 @@ rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
                                          thinning=rms_random_thinning)
 
-default_sgld = solver.sgld(default_integrator)
-rms_sgld = solver.sgld(rms_integrator)
+default_sgld = solver.sgmc(default_integrator)
+rms_sgld = solver.sgmc(rms_integrator)
 
 default_run = solver.mcmc(default_sgld, default_scheduler)
 rms_run = solver.mcmc(rms_sgld, rms_scheduler)
@@ -163,7 +163,6 @@ rms_run = solver.mcmc(rms_sgld, rms_scheduler)
 default = default_run(default_integrator[0](sample), iterations=iterations)
 rms = rms_run(rms_integrator[0](sample), iterations=iterations)
 
-print(rms["sigma"])
 
 ################################################################################
 #

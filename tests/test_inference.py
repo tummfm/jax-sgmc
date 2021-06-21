@@ -97,7 +97,7 @@ class TestSGLD:
     default = default_run(default_integrator[0](w_init), iterations=50000)
 
     # Check that the standard deviation is close
-    assert jnp.all(jnp.abs(default["sigma"] - 0.5)  < 0.5)
+    assert jnp.all(jnp.abs(default["samples"]["sigma"] - 0.5)  < 0.5)
 
   def test_rms(self, problem):
 
@@ -120,5 +120,5 @@ class TestSGLD:
     rms = rms_run(rms_integrator[0](w_init), iterations=50000)
 
     # Check that the standard deviation is close
-    assert jnp.all(jnp.abs(rms["sigma"] - 0.5)  < 0.5)
+    assert jnp.all(jnp.abs(rms["samples"]["sigma"] - 0.5)  < 0.5)
 

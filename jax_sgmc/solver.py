@@ -29,7 +29,8 @@ PyTree = Any
 def mcmc(solver,
          scheduler,
          strategy="map",
-         saving=None):
+         saving=None,
+         loading=None):
   """Runs the solver for multiple chains and saves the collected samples
 
   Args:
@@ -37,6 +38,8 @@ def mcmc(solver,
     scheduler: Schedules solver parameters such as temperature and burn in.
     strategy: Run multiple chains in parallel or vectorized
     saving: Save samples via host_callback (if saving requires much memory)
+    loading: Restore a previously saved checkpoint (scheduler state and solver
+      state)
 
   Returns:
     Returns function which runs the solver for a given number of iterations.
@@ -46,23 +49,30 @@ def mcmc(solver,
   if saving is None:
     # Pass the state
     init_saving, save, postprocess_saving = io.no_save()
+  else:
+    init_saving, save, postprocess_saving = saving
 
   scheduler_init, scheduler_next, scheduler_get = scheduler
   _, solver_update, solver_get = solver
 
   @jit
   def _update(state, _):
-    solver_state, scheduler_state = state
+    solver_state, scheduler_state, saving_state = state
     schedule = scheduler_get(scheduler_state)
     new_state, stats = solver_update(solver_state, schedule)
-    saved = save(schedule, solver_get(new_state))
+    saving_state, saved = save(
+      saving_state,
+      schedule,
+      solver_get(new_state),
+      scheduler_state=scheduler_state,
+      solver_state=solver_state)
     # Update the scheduler with additional information from the integrator, such
     # as the acceptance ratio of AMAGOLD
     if stats is not None:
       scheduler_state = scheduler_next(scheduler_state, **stats)
     else:
       scheduler_state = scheduler_next(scheduler_state)
-    return (new_state, scheduler_state), saved
+    return (new_state, scheduler_state, saving_state), saved
 
   # Scan over the update function. Postprocessing the samples is required if
   # saving is None to sort out not accepted samples. Samples are not accepted
@@ -71,12 +81,17 @@ def mcmc(solver,
     if strategy == "map":
       def run_single():
         for state in states:
-          init_saving()
-          scheduler_state = scheduler_init(iterations)
-          _, saved = lax.scan(_update,
-                              (state, scheduler_state),
-                              jnp.arange(iterations))
-          yield postprocess_saving(saved)
+          saving_state = init_saving()
+          if loading is None:
+            scheduler_state = scheduler_init(iterations)
+          else:
+            raise NotImplementedError("Loading of checkpoints is currently not "
+                                      "supported.")
+          (_, _, saving_state), saved = lax.scan(
+            _update,
+            (state, scheduler_state, saving_state),
+            jnp.arange(iterations))
+          yield postprocess_saving(saving_state, saved)
       chains = list(run_single())
     else:
       raise NotImplementedError("Parallel execution is currently not "

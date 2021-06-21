@@ -30,10 +30,12 @@ import matplotlib.pyplot as plt
 from jax_sgmc import adaption
 from jax_sgmc import potential
 from jax_sgmc import data
+from jax_sgmc import io
 from jax_sgmc import scheduler
 from jax_sgmc import integrator
 from jax_sgmc import solver
 
+import time
 ################################################################################
 #
 # Reference Data
@@ -160,8 +162,8 @@ rms_sgld = solver.sgmc(rms_integrator)
 default_run = solver.mcmc(default_sgld, default_scheduler)
 rms_run = solver.mcmc(rms_sgld, rms_scheduler)
 
-default = default_run(default_integrator[0](sample), iterations=iterations)
-rms = rms_run(rms_integrator[0](sample), iterations=iterations)
+default = default_run(default_integrator[0](sample), iterations=iterations)["samples"]
+rms = rms_run(rms_integrator[0](sample), iterations=iterations)["samples"]
 
 
 ################################################################################

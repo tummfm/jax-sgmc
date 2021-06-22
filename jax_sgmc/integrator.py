@@ -252,7 +252,7 @@ def langevin_diffusion(
       Returns a new step calculated by applying langevin diffusion.
     """
     key, split = random.split(state.key)
-    data_state, mini_batch = batch_get(state.data_state)
+    data_state, mini_batch = batch_get(state.data_state, information=True)
 
     noise = random_tree(split, state.latent_variables)
     gradient = stochastic_gradient(state.latent_variables, mini_batch)

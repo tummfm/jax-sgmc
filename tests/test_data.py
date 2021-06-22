@@ -15,6 +15,7 @@ except ImportError:
 
 import jax
 import jax.numpy as jnp
+from jax import test_util
 
 import numpy as onp
 
@@ -44,61 +45,21 @@ class TestTFLoader:
     pipeline = data.TensorflowDataLoader(dataset, request.param, 100)
     return pipeline, request.param
 
-  def test_batch_size(self, dataloader):
+  @pytest.mark.parametrize("cs", (3, 13, 29))
+  def test_batch_size(self, dataloader, cs):
     pipeline, _ = dataloader
-
-    cs = 3
 
     def check_fn(leaf):
       assert leaf.shape[0] == cs
       assert leaf.shape[1] == batch_info.batch_size
 
-    batch_info, dtype = pipeline.batch_format(cs)
-    _, batch = pipeline.register_random_pipeline(cs)
+    _, batch_info = pipeline.batch_format(cs)
+    chain_id = pipeline.register_random_pipeline(cs)
+    batch = pipeline.random_batches(chain_id)
 
-    print(dtype)
     print(batch)
 
     jax.tree_map(check_fn, batch)
-
-    cs = 30
-
-    batch_info, dtype = pipeline.batch_format(cs)
-    _, batch = pipeline.register_random_pipeline(cs)
-
-    print(dtype)
-    print(batch)
-
-    jax.tree_map(check_fn, batch)
-
-  def test_batch_information_caching(self, dataloader):
-    cs = 3
-
-    pipeline, mb_size = dataloader
-
-    batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, _ = pipeline.register_random_pipeline(cs)
-
-    # Check that format is correct
-    assert batch_info.batch_size == mb_size
-
-    # Check that no new pipe exists
-    print(f"Pipe id {new_pipe}")
-    assert new_pipe == 0
-
-    second_pipe, _ = pipeline.register_random_pipeline(3)
-    print(f"Second pipe id {second_pipe}")
-    assert second_pipe != 0
-
-    # Check that two pipelines exist
-    assert len(pipeline._random_pipelines) == 2
-
-    # Check that dtype is correct
-    random_batch = pipeline.random_batches(new_pipe)
-    def assert_fn(x, y):
-      assert x.dtype == y.dtype
-      assert x.shape == y.shape
-    jax.tree_map(assert_fn, random_batch, dtype)
 
   @pytest.mark.parametrize("excluded", [[], ["a"], ["a", "b"]])
   def test_exclude_keys(self, dataset, excluded):
@@ -107,7 +68,8 @@ class TestTFLoader:
 
     pipeline= data.TensorflowDataLoader(dataset, mb_size, 100,
                                         exclude_keys=excluded)
-    _, first_batch = pipeline.register_random_pipeline(cs)
+    chain_id = pipeline.register_random_pipeline(cs)
+    first_batch = pipeline.random_batches(chain_id)
 
     for key in first_batch.keys():
       assert key not in excluded
@@ -116,7 +78,8 @@ class TestTFLoader:
   def test_sizes(self, dataloader, cs):
 
     pipeline, mb_size = dataloader
-    _, first_batch = pipeline.register_random_pipeline(cache_size=cs)
+    chain_id = pipeline.register_random_pipeline(cache_size=cs)
+    first_batch = pipeline.random_batches(chain_id)
 
     def test_fn(elem):
       assert elem.shape[0] == cs
@@ -149,85 +112,51 @@ class TestNumpyLoader:
     return pipeline, request.param
 
   def test_kwargs(self, dataloader):
+    """Test that the initial state can be set with the seed as kwarg. """
 
     seed = 10
     pipeline, _ = dataloader
 
     _, _ = pipeline.batch_format(10)
-    _, batch_a = pipeline.register_random_pipeline(10, seed=seed)
-    _, batch_b = pipeline.register_random_pipeline(10, seed=seed)
+    chain_a = pipeline.register_random_pipeline(10, seed=seed)
+    chain_b = pipeline.register_random_pipeline(10, seed=seed)
+
+    batch_a = pipeline.random_batches(chain_a)
+    batch_b = pipeline.random_batches(chain_b)
 
     def check_fn(a, b):
       assert jnp.all(a == b)
 
     jax.tree_map(check_fn, batch_a, batch_b)
 
-
-
-  def test_batch_size(self, dataloader):
+  @pytest.mark.parametrize("cs", (3, 13, 30))
+  def test_batch_size(self, dataloader, cs):
+    """Check that the returned batches have the right format and dtype. """
     pipeline, _ = dataloader
-
-    cs = 3
 
     def check_fn(leaf):
       assert leaf.shape[0] == cs
       assert leaf.shape[1] == batch_info.batch_size
 
-    batch_info, dtype = pipeline.batch_format(cs)
-    _, batch = pipeline.register_random_pipeline(cs)
+    _, batch_info = pipeline.batch_format(cs)
+    chain_id = pipeline.register_random_pipeline(cs)
+    batch = pipeline.random_batches(chain_id)
 
-    print(dtype)
     print(batch)
 
     jax.tree_map(check_fn, batch)
-
-    cs = 30
-
-    batch_info, dtype = pipeline.batch_format(cs)
-    _, batch = pipeline.register_random_pipeline(cs)
-
-    print(dtype)
-    print(batch)
-
-    jax.tree_map(check_fn, batch)
-
-  def test_batch_information_caching(self, dataloader):
-    cs = 3
-
-    pipeline, mb_size = dataloader
-
-    batch_info, dtype = pipeline.batch_format(cs)
-    new_pipe, _ = pipeline.register_random_pipeline(cs)
-
-    # Check that format is correct
-    assert batch_info.batch_size == mb_size
-
-    # Check that no new pipe exists
-    print(f"Pipe id {new_pipe}")
-    assert new_pipe == 0
-
-    second_pipe, _ = pipeline.register_random_pipeline(3)
-    print(f"Second pipe id {second_pipe}")
-    assert second_pipe != 0
-
-    # Check that two pipelines exist
-    assert len(pipeline._rng) == 2
-
-    # Check that dtype is correct
-    random_batch = pipeline.random_batches(new_pipe)
-    def assert_fn(x, y):
-      assert x.dtype == y.dtype
-      assert x.shape == y.shape
-    jax.tree_map(assert_fn, random_batch, dtype)
 
   @pytest.mark.parametrize("cs_small, cs_big", [(5,7), (7, 11)])
   def test_cache_size_order(self, dataloader, cs_small, cs_big):
+    """Check that changing the cache size does not influence the order. """
     pipeline, _ = dataloader
 
-    _, small_batch = pipeline.register_random_pipeline(
+    small_chain = pipeline.register_random_pipeline(
       cs_small, seed=0)
-    _, big_batch = pipeline.register_random_pipeline(
+    big_chain = pipeline.register_random_pipeline(
       cs_big, seed=0)
+    small_batch = pipeline.random_batches(small_chain)
+    big_batch = pipeline.random_batches(big_chain)
 
     def check_fn(a, b):
       for idx in range(cs_small):
@@ -240,7 +169,7 @@ class TestNumpyLoader:
     """Test if sample and observations are corresponding"""
 
     pipeline, _ = dataloader
-    new_pipe, _ = pipeline.register_random_pipeline(cs)
+    new_pipe = pipeline.register_random_pipeline(cs)
 
     def check_fn(a, b):
       for i, mb in enumerate(a):
@@ -258,6 +187,43 @@ class TestNumpyLoader:
     for _ in range(3):
       batch = pipeline.random_batches(new_pipe)
       jax.tree_map(check_fn, batch['a'], batch['b'])
+
+  def test_checkpointing(self, dataloader):
+    """Test that the state can be saved and restored. """
+
+    pipeline, _ = dataloader
+
+    chain_1 = pipeline.register_random_pipeline(3)
+    chain_2 = pipeline.register_random_pipeline(5)
+
+    # Get one batch information
+    _ = pipeline.batch_format(3)
+
+    # Draw some samples
+    for i in range(11):
+      pipeline.random_batches(chain_1)
+      pipeline.random_batches(chain_2)
+
+    # Checkpoint
+    checkpoint = pipeline.save_state()
+
+    # Draw some more date for checkpoint
+    no_break_data = [pipeline.random_batches(chain_1),
+                     pipeline.random_batches(chain_1),
+                     pipeline.random_batches(chain_2),
+                     pipeline.random_batches(chain_2)]
+
+    _ = pipeline.batch_format(chain_1)
+    _ = pipeline.batch_format(chain_2)
+
+    pipeline.load_state(checkpoint)
+
+    after_resume_data = [pipeline.random_batches(chain_1),
+                         pipeline.random_batches(chain_1),
+                         pipeline.random_batches(chain_2),
+                         pipeline.random_batches(chain_2)]
+
+    test_util.check_eq(no_break_data, after_resume_data)
 
 @pytest.mark.tensorflow
 class TestRandomAccess:
@@ -290,9 +256,8 @@ class TestRandomAccess:
 
     ml = mocker.Mock(data.DataLoader)
 
-    ml.batch_format.return_value = None, data.tree_dtype_struct(init_value)
-    ml.register_random_pipeline.return_value = (0, jax.tree_map(jnp.array,
-                                                            next(ds_cache)))
+    ml.batch_format.return_value = data.tree_dtype_struct(init_value), None
+    ml.register_random_pipeline.return_value = 0
     def get_batch(chain_id):
       del chain_id
       return jax.tree_map(jnp.array, next(ds_cache))
@@ -316,15 +281,13 @@ class TestRandomAccess:
     state = init_fn()
     for _ in range(iterations):
       compare_batch = jax.tree_map(jnp.array, next(ds))
-      state, (batch, _) = batch_fn(state)
+      state, batch = batch_fn(state)
       for key in compare_batch.keys():
-        print(batch)
-        print(compare_batch)
         assert jnp.all(batch[key] == compare_batch[key])
 
     # Check that random batches are not drawn more often than necessary
 
-    assert DL.random_batches.call_count == int(4.1 - 1.0)
+    assert DL.random_batches.call_count == int(4.1)
 
   # Todo: Improve this test
   def test_vmap(self, data_loader_mock):
@@ -335,7 +298,7 @@ class TestRandomAccess:
     init_fn, batch_fn = data.random_reference_data(DL, format.cs)
 
     def test_function_data_loader(state):
-      state, (batch, _) = batch_fn(state)
+      state, (batch, _) = batch_fn(state, information=True)
       return jax.tree_map(jnp.sum, batch)
 
     init_states = [
@@ -349,10 +312,10 @@ class TestRandomAccess:
     # Init states vorspulen
     for idx in range(states_count):
       for _ in range(idx):
-        init_states[idx], _ = batch_fn(init_states[idx])
+        init_states[idx], _ = batch_fn(init_states[idx], information=True)
     init_states = transform_fn(init_states)
 
-    helper_fn = jax.jit(data.vmap_helper(batch_fn))
+    helper_fn = jax.jit(data.vmap_helper(partial(batch_fn, information=True)))
     _, (batches, _) = helper_fn(init_states)
 
     vmap_helper_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)

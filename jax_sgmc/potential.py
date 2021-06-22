@@ -53,8 +53,8 @@ FullPotential = Callable[[PyTree, full_data_state], Array]
 
 def minibatch_potential(prior: Prior,
                         likelihood: Likelihood,
-                        strategy: AnyStr = "map"
-                        ) -> StochasticPotential:
+                        strategy: AnyStr = "map",
+                        has_state = False) -> StochasticPotential:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -70,56 +70,84 @@ def minibatch_potential(prior: Prior,
       - ``'vmap'`` parallel evaluation via vectorization
       - ``'pmap'`` parallel evaluation on multiple devices
 
+    has_state: If an additional state is provided for the model evaluation
+
   Returns:
     Returns a function which evaluates the stochastic potential for a mini-batch
     of data. The first argument are the latent variables and the second is the
     mini-batch.
   """
 
+  # Todo: Keep the state only from the first evaluation or from any evaluation
+  #       at random? -> Reference data is random, samples are the same.
   # The final function to evaluate the potential including likelihood and prio
-
   if strategy == 'map':
-    def batch_potential(sample, reference_data: MiniBatch):
+    def batch_potential(state: PyTree, sample: PyTree, reference_data: MiniBatch):
       # The sample stays the same, therefore, it should be added to the
       # likelihood.
-      marginal_likelihood = partial(likelihood, sample)
+      if has_state:
+        marginal_likelihood = partial(likelihood, state, sample)
+      else:
+        marginal_likelihood = partial(likelihood, sample)
       batch_data, batch_information = reference_data
       N = batch_information.observation_count
       n = batch_information.batch_size
       def single_likelihood_evaluation(cumsum, observation):
-        likelihood_value = marginal_likelihood(observation)
+        if has_state:
+          likelihood_value, state = marginal_likelihood(observation)
+        else:
+          likelihood_value = marginal_likelihood(observation)
+          state = None
         next_cumsum = cumsum + likelihood_value
-        return next_cumsum, None
+        return next_cumsum, state
 
       # Approximate the potential by taking the average and scaling it to the
       # full data set size
       startsum = jnp.array([0.0])
-      cumsum, _ = lax.scan(single_likelihood_evaluation,
-                           startsum,
-                           batch_data)
+      cumsum, new_states = lax.scan(
+        single_likelihood_evaluation,
+        startsum,
+        batch_data)
       stochastic_potential = - N / n * cumsum
-      return stochastic_potential
+      if has_state:
+        new_state = new_states[0]
+      else:
+        new_state = None
+      return stochastic_potential, new_state
   elif strategy in ('vmap', 'pmap'):
     if strategy == 'pmap':
-      batched_likelihood = pmap(likelihood,
-                                in_axes=(None, 0))
+      if has_state:
+        batched_likelihood = pmap(likelihood,
+                                  in_axes=(None, None, 0))
+      else:
+        batched_likelihood = pmap(likelihood,
+                                  in_axes=(None, 0))
     if strategy == 'vmap':
-      batched_likelihood = vmap(likelihood,
-                                in_axes=(None, 0))
-    def batch_potential(sample, reference_data: MiniBatch):
+      if has_state:
+        batched_likelihood = vmap(likelihood,
+                                  in_axes=(None, None, 0))
+      else:
+        batched_likelihood = vmap(likelihood,
+                                  in_axes=(None, 0))
+    def batch_potential(state: PyTree, sample: PyTree, reference_data: MiniBatch):
       # Approximate the potential by taking the average and scaling it to the
       # full data set size
       batch_data, batch_information = reference_data
       N = batch_information.observation_count
-      batch_likelihoods = batched_likelihood(sample, batch_data)
+      if has_state:
+        batch_likelihoods, new_states = batched_likelihood(state, sample, batch_data)
+        new_state = new_states[0]
+      else:
+        batch_likelihoods = batched_likelihood(sample, batch_data)
+        new_state = None
       stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
-      return stochastic_potential
+      return stochastic_potential, new_state
   else:
     raise NotImplementedError(f"Strategy {strategy} is unknown")
 
   def potential_function(sample: PyTree,
-                         reference_data: MiniBatch
-                         ) -> Array:
+                         reference_data: MiniBatch,
+                         state: PyTree = None) -> Array:
     # Never differentiate w. r. t. reference data
     reference_data = lax.stop_gradient(reference_data)
 
@@ -128,12 +156,12 @@ def minibatch_potential(prior: Prior,
     # It is also possible to combine the prior and the likelihood into a single
     # callable.
 
-    likelihood_value = batch_potential(sample, reference_data)
+    likelihood_value, new_state = batch_potential(state, sample, reference_data)
 
     # The prior has to be evaluated only once, therefore the extra call
     prior_value = prior(sample)
 
-    return jnp.squeeze(likelihood_value - prior_value)
+    return jnp.squeeze(likelihood_value - prior_value), new_state
 
   return potential_function
 

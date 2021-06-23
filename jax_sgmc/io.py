@@ -24,6 +24,8 @@ from typing import Any, NoReturn, Union, Tuple, Callable
 
 from collections import namedtuple
 
+import numpy as onp
+
 import jax.numpy as jnp
 from jax import tree_util, lax
 
@@ -126,23 +128,16 @@ class JSONCollector(DataCollector):
   def register_chain(self) -> int:
     """Register a chain to save samples from. """
     new_chain = len(self._collected_samples)
-    self._collected_samples.append(None)
+    self._collected_samples.append([])
     self._sample_count.append(0)
     return new_chain
 
   def save(self, chain_id: int, values):
     """Called with collected samples. """
     # Store new values
-    if self._collected_samples[chain_id] is None:
-      self._collected_samples[chain_id] = tree_util.tree_map(
-        lambda leaf: [leaf.tolist()], values)
-    else:
-      tree_util.tree_map(
-        lambda leaf, leaflist: leaflist.append(leaf.tolist()),
-        values,
-        self._collected_samples[chain_id]
-      )
-    self._sample_count[chain_id] += 1
+    self._collected_samples[chain_id].append(
+      tree_util.tree_map(onp.array, values)
+    )
     # Write to file but keep collected samples in memory
     if self._write_frequency > 0:
       if (self._sample_count[chain_id] % self._write_frequency) == 0:
@@ -164,9 +159,21 @@ class JSONCollector(DataCollector):
   def _write_file(self, chain_id, iteration):
     filename = self._dir / f"chain_{chain_id}_iteration_{iteration}.json"
     filename.touch()
+    # Transform collected samples to list after chaining together
+    stacked_samples = tree_util.tree_map(
+      lambda *samples: onp.stack(samples, axis=0),
+      *self._collected_samples[chain_id]
+    )
+    samples_as_list = tree_util.tree_map(
+      lambda leaf: leaf.tolist(),
+      stacked_samples
+    )
     with open(filename, "w") as file:
-      ujson.dump(self._collected_samples[chain_id], file)
+      ujson.dump(samples_as_list, file)
 
+  def finished(self, chain_id: int):
+    """Simply return, nothing to wait for. """
+    return None
 
 class MemoryCollector(DataCollector):
   """Stores samples entirely in RAM (numpy arrays).
@@ -192,7 +199,8 @@ class MemoryCollector(DataCollector):
 
   def save(self, chain_id: int, values):
     """Called with collected samples. """
-    self._samples[chain_id].append(values)
+    self._samples[chain_id].append(
+      tree_util.tree_map(onp.array, values))
 
   def finalize(self, chain_id: int):
     """Called after solver finished. """
@@ -203,7 +211,7 @@ class MemoryCollector(DataCollector):
     self._finished[chain_id].wait()
     # Stack the samples
     stacked_samples = tree_util.tree_map(
-      lambda *leaves: jnp.stack(leaves, axis=0),
+      lambda *leaves: onp.stack(leaves, axis=0),
       *self._samples[chain_id])
     return stacked_samples
 

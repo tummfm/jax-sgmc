@@ -17,6 +17,8 @@
 import abc
 
 from pathlib import Path
+from functools import partial
+import threading
 
 from typing import Any, NoReturn, Union, Tuple, Callable
 
@@ -61,6 +63,10 @@ class DataCollector(metaclass=abc.ABCMeta):
   @abc.abstractmethod
   def finalize(self, chain_id: int):
     """Called after solver finished. """
+
+  @abc.abstractmethod
+  def finished(self, chain_id: int):
+    """Called in main thread after jax threads have been released."""
 
   @abc.abstractmethod
   def checkpoint(self, chain_id: int, state):
@@ -171,19 +177,35 @@ class MemoryCollector(DataCollector):
   """
 
   def __init__(self):
-    raise NotImplementedError("Not implemented yet")
+    self._finished = []
+    self._samples = []
 
   def register_data_loader(self, data_loader: data.DataLoader):
     """Register data loader to save the state. """
 
   def register_chain(self) -> int:
     """Register a chain to save samples from. """
+    chain_id = len(self._finished)
+    self._finished.append(threading.Barrier(2))
+    self._samples.append([])
+    return chain_id
 
   def save(self, chain_id: int, values):
     """Called with collected samples. """
+    self._samples[chain_id].append(values)
 
   def finalize(self, chain_id: int):
     """Called after solver finished. """
+    # Is called after all host callback calls have been processed
+    self._finished[chain_id].wait()
+
+  def finished(self, chain_id):
+    self._finished[chain_id].wait()
+    # Stack the samples
+    stacked_samples = tree_util.tree_map(
+      lambda *leaves: jnp.stack(leaves, axis=0),
+      *self._samples[chain_id])
+    return stacked_samples
 
   def checkpoint(self, chain_id: int, state):
     """Called every n'th step. """
@@ -274,8 +296,9 @@ def save(data_collector: DataCollector = None,
     host_callback.id_tap(
       lambda id, *unused: data_collector.finalize(id),
       state.chain_id)
+    collected_samples = data_collector.finished(state.chain_id)
     return {"sample_count": state.saved_samples,
-            "samples": None}
+            "samples": collected_samples}
 
   return init, save, postprocess
 

@@ -55,9 +55,9 @@ class TestPotential():
     sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
     zero_array = jnp.array(-0.0)
-    scan_result = scan_pot(sample, reference_data)
-    vmap_result = vmap_pot(sample, reference_data)
-    pmap_result = pmap_pot(sample, reference_data)
+    scan_result, _ = scan_pot(sample, reference_data)
+    vmap_result, _ = vmap_pot(sample, reference_data)
+    pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, zero_array)
     test_util.check_close(vmap_result, zero_array)
@@ -85,9 +85,9 @@ class TestPotential():
     sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
     zero_array = jnp.array(-0.0)
-    scan_result = scan_pot(sample, reference_data)
-    vmap_result = vmap_pot(sample, reference_data)
-    pmap_result = pmap_pot(sample, reference_data)
+    scan_result, _ = scan_pot(sample, reference_data)
+    vmap_result, _ = vmap_pot(sample, reference_data)
+    pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, zero_array)
     test_util.check_close(vmap_result, zero_array)
@@ -113,9 +113,9 @@ class TestPotential():
       batch_size=obs)
     sample = {"scale": 0.5, "base": random.uniform(split3, (dim, ))}
 
-    scan_result = scan_pot(sample, reference_data)
-    vmap_result = vmap_pot(sample, reference_data)
-    pmap_result = pmap_pot(sample, reference_data)
+    scan_result, _ = scan_pot(sample, reference_data)
+    vmap_result, _ = vmap_pot(sample, reference_data)
+    pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, vmap_result)
     test_util.check_close(scan_result, pmap_result)
@@ -126,11 +126,17 @@ class TestPotential():
     # Setup potential
 
     scan_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="map")))
+      jax.grad(minibatch_potential(prior, likelihood, strategy="map"),
+               has_aux=True,
+               argnums=0))
     vmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="vmap")))
+      jax.grad(minibatch_potential(prior, likelihood, strategy="vmap"),
+               has_aux=True,
+               argnums=0))
     pmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap")))
+      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
+               has_aux=True,
+               argnums=0))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -143,9 +149,9 @@ class TestPotential():
       batch_size=obs)
     sample = {"scale": 0.5, "base": random.uniform(split3, (dim,))}
 
-    scan_result = scan_grad(sample, reference_data)
-    vmap_result = vmap_grad(sample, reference_data)
-    pmap_result = pmap_grad(sample, reference_data)
+    scan_result, _ = scan_grad(sample, reference_data)
+    vmap_result, _ = vmap_grad(sample, reference_data)
+    pmap_result, _ = pmap_grad(sample, reference_data)
 
     test_util.check_close(scan_result, vmap_result)
     test_util.check_close(scan_result, pmap_result)
@@ -157,11 +163,17 @@ class TestPotential():
     # Setup potential
 
     scan_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="map")))
+      jax.grad(minibatch_potential(prior, likelihood, strategy="map"),
+               has_aux=True,
+               argnums=0))
     vmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="vmap")))
+      jax.grad(minibatch_potential(prior, likelihood, strategy="vmap"),
+               has_aux=True,
+               argnums=0))
     pmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap")))
+      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
+               has_aux=True,
+               argnums=0))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -176,9 +188,9 @@ class TestPotential():
     sample = {"scale": 0.5, "base": random.uniform(split2, (dim,))}
 
     zero_gradient = jax.tree_map(jnp.zeros_like, sample)
-    scan_result = scan_grad(sample, reference_data)
-    vmap_result = vmap_grad(sample, reference_data)
-    pmap_result = pmap_grad(sample, reference_data)
+    scan_result, _ = scan_grad(sample, reference_data)
+    vmap_result, _ = vmap_grad(sample, reference_data)
+    pmap_result, _ = pmap_grad(sample, reference_data)
 
     print(scan_result)
     print(vmap_result)

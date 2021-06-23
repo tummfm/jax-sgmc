@@ -26,7 +26,7 @@ making use of jaxs tools ``map``, ``vmap`` and ``pmap``.
 
 from functools import partial
 
-from typing import Callable, Any, AnyStr
+from typing import Callable, Any, AnyStr, Optional, Tuple, Union
 
 from jax import vmap, pmap
 from jax import lax
@@ -42,10 +42,11 @@ PyTree = Any
 Array = util.Array
 Potential = Callable[[PyTree, full_data_state], Array]
 
-Likelihood = Callable[[PyTree, MiniBatch], Array]
+Likelihood = Callable[[Optional[PyTree], PyTree, MiniBatch],
+                      Union[Tuple[Array, PyTree], Array]]
 Prior = Callable[[PyTree], Array]
 
-StochasticPotential = Callable[[PyTree, MiniBatch], Array]
+StochasticPotential = Callable[[PyTree, MiniBatch], Tuple[Array, PyTree]]
 FullPotential = Callable[[PyTree, full_data_state], Array]
 
 # Todo: Possibly support soft-vmap (numpyro)
@@ -60,9 +61,9 @@ def minibatch_potential(prior: Prior,
   Args:
     prior: Probability density function which is evaluated for a single
       sample.
-    likelihood: Probability density function which is evaluated for a single
-      first argument but multiple second arguments. The likelihood includes the
-      model evaluation.
+    likelihood: Probability density function. If ``has_state = True``, then the
+      first argument is the model state, otherwise the arguments are ``sample,
+      reference_data``.
     strategy: Determines hwo to evaluate the model function with respect for
       sample:
 
@@ -147,7 +148,7 @@ def minibatch_potential(prior: Prior,
 
   def potential_function(sample: PyTree,
                          reference_data: MiniBatch,
-                         state: PyTree = None) -> Array:
+                         state: PyTree = None) -> Tuple[Array, PyTree]:
     # Never differentiate w. r. t. reference data
     reference_data = lax.stop_gradient(reference_data)
 

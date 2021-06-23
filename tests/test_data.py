@@ -66,12 +66,15 @@ class TestTFLoader:
     mb_size = 2
     cs = 3
 
-    pipeline= data.TensorflowDataLoader(dataset, mb_size, 100,
+    pipeline = data.TensorflowDataLoader(dataset, mb_size, 100,
                                         exclude_keys=excluded)
+    batch_format, _ = pipeline.batch_format(10)
     chain_id = pipeline.register_random_pipeline(cs)
     first_batch = pipeline.random_batches(chain_id)
 
     for key in first_batch.keys():
+      assert key not in excluded
+    for key in batch_format.keys():
       assert key not in excluded
 
   @pytest.mark.parametrize("cs", [1, 5, 10, 15])

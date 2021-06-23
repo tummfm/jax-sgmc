@@ -147,7 +147,8 @@ class DataLoader(metaclass=abc.ABCMeta):
     """
     # Append the cache size to the batch_format
     def append_cache_size(leaf):
-      new_shape = onp.append(cache_size, leaf.shape)
+      new_shape = tuple(onp.append(cache_size, leaf.shape))
+      new_shape = tree_util.tree_map(jnp.int_, new_shape)
       return jax.ShapeDtypeStruct(
         dtype=leaf.dtype,
         shape=new_shape
@@ -167,7 +168,7 @@ class TensorflowDataLoader(DataLoader):
                pipeline: TFDataSet,
                mini_batch_size: int = 1,
                shuffle_cache: int = 100,
-               exclude_keys: List = None):
+               exclude_keys: List = []):
     super().__init__()
     # Tensorflow is in general not required to use the library
     assert TFDataSet is not None, "Tensorflow must be installed to use this " \
@@ -186,6 +187,11 @@ class TensorflowDataLoader(DataLoader):
   @property
   def _batch_format(self):
     """Returns pytree with information about shape and dtype of a minibatch. """
+    data_spec = self._pipeline.element_spec
+    if self._exclude_keys is not None:
+      not_excluded_elements = {id: elem for id, elem in data_spec.items() if id not in self._exclude_keys}
+    else:
+      not_excluded_elements = data_spec
     def leaf_dtype_struct(leaf):
       shape = tuple(s for s in leaf.shape if s is not None)
       mb_shape = tuple(onp.append(self._mini_batch_size, shape))
@@ -193,7 +199,7 @@ class TensorflowDataLoader(DataLoader):
       return jax.ShapeDtypeStruct(
         dtype=dtype,
         shape=mb_shape)
-    return tree_util.tree_map(leaf_dtype_struct, self._pipeline.element_spec)
+    return tree_util.tree_map(leaf_dtype_struct, not_excluded_elements)
 
   @property
   def _mini_batch_format(self) -> mini_batch_information:
@@ -246,7 +252,7 @@ class TensorflowDataLoader(DataLoader):
 
 
 class NumpyDataLoader(DataLoader):
-  """Load complete dataset into memory from multiple numpy files."""
+  """Load complete dataset into memory from multiple numpy arrays."""
 
   def __init__(self, mini_batch_size: int, **reference_data):
     super().__init__()

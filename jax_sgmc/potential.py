@@ -28,8 +28,7 @@ from functools import partial
 
 from typing import Callable, Any, AnyStr, Optional, Tuple, Union
 
-from jax import vmap, pmap
-from jax import lax
+from jax import vmap, pmap, lax, tree_util
 
 import jax.numpy as jnp
 
@@ -55,7 +54,8 @@ FullPotential = Callable[[PyTree, full_data_state], Array]
 def minibatch_potential(prior: Prior,
                         likelihood: Likelihood,
                         strategy: AnyStr = "map",
-                        has_state = False) -> StochasticPotential:
+                        has_state = False,
+                        is_batched = False) -> StochasticPotential:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -72,6 +72,9 @@ def minibatch_potential(prior: Prior,
       - ``'pmap'`` parallel evaluation on multiple devices
 
     has_state: If an additional state is provided for the model evaluation
+    is_batched: If likelihood expects a batch of observations instead of a
+      single observation. If the likelihood is batched, choosing the strategy
+      has no influence on the computation.
 
   Returns:
     Returns a function which evaluates the stochastic potential for a mini-batch
@@ -82,7 +85,23 @@ def minibatch_potential(prior: Prior,
   # Todo: Keep the state only from the first evaluation or from any evaluation
   #       at random? -> Reference data is random, samples are the same.
   # The final function to evaluate the potential including likelihood and prio
-  if strategy == 'map':
+  if is_batched:
+    # The likelihood is already provided for a batch of data
+    def batch_potential(state: PyTree, sample: PyTree,
+                        reference_data: MiniBatch):
+      # Approximate the potential by taking the average and scaling it to the
+      # full data set size
+      batch_data, batch_information = reference_data
+      N = batch_information.observation_count
+      n = batch_information.batch_size
+      if has_state:
+        batch_likelihood, new_state = likelihood(state, sample, batch_data)
+      else:
+        batch_likelihood = likelihood(sample, batch_data)
+        new_state = None
+      stochastic_potential = - N / n * batch_likelihood
+      return stochastic_potential, new_state
+  elif strategy == 'map':
     def batch_potential(state: PyTree, sample: PyTree, reference_data: MiniBatch):
       # The sample stays the same, therefore, it should be added to the
       # likelihood.
@@ -111,7 +130,7 @@ def minibatch_potential(prior: Prior,
         batch_data)
       stochastic_potential = - N / n * cumsum
       if has_state:
-        new_state = new_states[0]
+        new_state = tree_util.tree_map(lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape), new_states, state)
       else:
         new_state = None
       return stochastic_potential, new_state
@@ -137,7 +156,7 @@ def minibatch_potential(prior: Prior,
       N = batch_information.observation_count
       if has_state:
         batch_likelihoods, new_states = batched_likelihood(state, sample, batch_data)
-        new_state = new_states[0]
+        new_state = tree_util.tree_map(lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape), new_states, state)
       else:
         batch_likelihoods = batched_likelihood(sample, batch_data)
         new_state = None

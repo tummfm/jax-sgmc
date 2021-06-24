@@ -148,13 +148,20 @@ class DataLoader(metaclass=abc.ABCMeta):
     # Append the cache size to the batch_format
     def append_cache_size(leaf):
       new_shape = tuple(onp.append(cache_size, leaf.shape))
-      new_shape = tree_util.tree_map(jnp.int_, new_shape)
       return jax.ShapeDtypeStruct(
         dtype=leaf.dtype,
         shape=new_shape
       )
     format = tree_util.tree_map(append_cache_size, self._batch_format)
     return format, self._mini_batch_format
+
+  def initializer_batch(self) -> PyTree:
+    """Returns a zero-like mini-batch. """
+    batch = tree_util.tree_map(
+      lambda leaf: jnp.zeros(leaf.shape, dtype=leaf.dtype),
+      self._batch_format
+    )
+    return batch
 
   @abc.abstractmethod
   def random_batches(self, chain_id: int) -> PyTree:
@@ -195,6 +202,7 @@ class TensorflowDataLoader(DataLoader):
     def leaf_dtype_struct(leaf):
       shape = tuple(s for s in leaf.shape if s is not None)
       mb_shape = tuple(onp.append(self._mini_batch_size, shape))
+      mb_shape = tree_util.tree_map(int, mb_shape)
       dtype = leaf.dtype.as_numpy_dtype
       return jax.ShapeDtypeStruct(
         dtype=dtype,

@@ -35,9 +35,9 @@ train_batch_fn = data.random_reference_data(train_loader, cached_batches)
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
 batch_init, batch_get = train_batch_fn
-init_batch_state = batch_init()
-_, first_batch = batch_get(init_batch_state)
-
+# This method returns a batch with correct shape but all zero values. The batch
+# contains 32 (batch_size) images.
+init_batch = train_loader.initializer_batch()
 
 ## ResNet Model
 
@@ -52,10 +52,10 @@ def init_resnet():
     return resnet.init, resnet.apply
 
 init, apply_resnet = init_resnet()
-init_params, init_resnet_state = init(random.PRNGKey(0), first_batch)
+init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
 
 # test prediction
-logits, _ = apply_resnet(init_params, init_resnet_state, None, first_batch)
+logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
 
 print(jnp.sum(logits))
 # I don't think this should give plain 0, otherwise gradients will be 0
@@ -76,7 +76,9 @@ def prior(sample):
     return weight_decay * l2_loss
 
 # The likelihood accepts a batch of data, so not batching strategy is required,
-# instead, is_batched must be set to true. The likelihood signature changes from
+# instead, is_batched must be set to true.
+#
+# The likelihood signature changes from
 #   (Sample, Data) -> Likelihood
 # to
 #   (State, Sample, Data) -> Likelihood, NewState
@@ -89,8 +91,8 @@ potential_fn = potential.minibatch_potential(prior=prior,
 ## Setup Integrator
 
 
-# Number of iterations
-iterations = 50000
+# Number of iterations: Ca. 0.035 seconds per iteration (including saving)
+iterations = 100000
 
 # Adaption strategy
 rms_prop = adaption.rms_prop()
@@ -106,8 +108,9 @@ sample = {"w": init_params}
 # Schedulers
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                           last=0.001)
-burn_in = scheduler.initial_burn_in(10000)
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 4000)
+burn_in = scheduler.initial_burn_in(50000)
+# Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,

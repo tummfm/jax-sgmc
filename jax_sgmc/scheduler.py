@@ -95,6 +95,14 @@ Attributes:
 
 """
 
+static_information = namedtuple("static_information",
+                                ["samples_collected"])
+"""Information which is constant during the run.
+
+Attributes:
+  samples_collected: Number of samples saved.
+"""
+
 # Todo: Where to place burn in?
 #       ++ Burn in has dependency on step size
 #       -- Difficult to manage for thinning
@@ -132,23 +140,27 @@ def init_scheduler(step_size: specific_scheduler = None,
   if burn_in is None:
     burn_in = initial_burn_in(0)
   if thinning is None:
-    # Accept all samples
+    # Accept all samples, save all samples
     thinning = specific_scheduler(
-      lambda *args: None,
+      lambda iterations: (None, iterations),
       lambda *args, **kwargs: None,
       lambda *args, **kwargs: True)
 
-  def init_fn(iterations: int) -> scheduler_state:
+  def init_fn(iterations: int) -> Tuple[scheduler_state, static_information]:
     # Initialize all the specific schedulers
     state = (0,) # Start with iteration 0
+    thinning_state, total_samples = thinning.init(iterations)
     init_state = scheduler_state(
       state=state,
       step_size_state=step_size.init(iterations),
       temperature_state=temperature.init(iterations),
       burn_in_state=burn_in.init(iterations),
-      thinning_state=thinning.init(iterations)
+      thinning_state=thinning_state
     )
-    return init_state
+    static = static_information(
+      samples_collected=total_samples
+    )
+    return init_state, static
 
   def update_fn(state: scheduler_state, **kwargs) -> scheduler_state:
     # Keep track of current iteration
@@ -415,9 +427,11 @@ def initial_burn_in(n: int=0):
 #
 ################################################################################
 
+# Thinning provides information about the number of samples which will be saved.
+
 def random_thinning(step_size_schedule: specific_scheduler,
                     burn_in_schedule: specific_scheduler,
-                    selections: int,
+                    selections: Array,
                     key: Array = None):
   """Random thinning weighted by the step size.
 
@@ -439,7 +453,7 @@ def random_thinning(step_size_schedule: specific_scheduler,
   if key is None:
     key = random.PRNGKey(0)
 
-  def init_fn(iterations: int) -> Array:
+  def init_fn(iterations: int) -> Tuple[Array, Array]:
 
     step_size_state = step_size_schedule.init(iterations)
     burn_in_state = burn_in_schedule.init(iterations)
@@ -465,7 +479,7 @@ def random_thinning(step_size_schedule: specific_scheduler,
                                  shape=(selections,),
                                  replace=False,
                                  p=probs)
-    return accepted_its
+    return accepted_its, selections
 
   def update_fn(state: Array, unused_iteration: int, **unused_kwargs) -> Array:
     return state

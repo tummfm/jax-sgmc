@@ -65,7 +65,7 @@ class TestScheduler:
                                         temperature=temperature)
 
     iterations = 100
-    state = schedule[0](iterations)
+    state, _ = schedule[0](iterations)
 
     for _ in range(iterations):
       sched = schedule[2](state)
@@ -140,7 +140,7 @@ class TestThinning():
 
     thinning = scheduler.random_thinning(
       step_size, burn_in, int(0.5 * non_zero.size))
-    state = thinning.init(iterations)
+    state, _ = thinning.init(iterations)
 
     accepted = 0
     for idx in range(iterations):

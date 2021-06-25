@@ -14,6 +14,7 @@
 
 """Solvers for Stochastic Gradient Bayesian Inference."""
 
+from functools import partial
 from typing import Callable, Any, Tuple
 
 from jax import lax, jit
@@ -55,8 +56,8 @@ def mcmc(solver,
   scheduler_init, scheduler_next, scheduler_get = scheduler
   _, solver_update, solver_get = solver
 
-  @jit
-  def _update(state, _):
+  @partial(jit, static_argnums=(0,))
+  def _uninitialized_update(unused_static_information, state, _):
     solver_state, scheduler_state, saving_state = state
     schedule = scheduler_get(scheduler_state)
     new_state, stats = solver_update(solver_state, schedule)
@@ -81,9 +82,14 @@ def mcmc(solver,
     if strategy == "map":
       def run_single():
         for state in states:
-          saving_state = init_saving()
           if loading is None:
-            scheduler_state = scheduler_init(iterations)
+            scheduler_state, static_information = scheduler_init(iterations)
+            # Define what the saving module is expected to save
+            saving_state = init_saving(
+              solver_get(state),
+              (state, scheduler_state),
+              static_information)
+            _update = partial(_uninitialized_update, static_information)
           else:
             raise NotImplementedError("Loading of checkpoints is currently not "
                                       "supported.")

@@ -253,6 +253,9 @@ class HDF5Collector(DataCollector):
     treedef = tree_util.tree_structure(tree)
     return list(recurse(treedef, tree))
 
+  def finished(self, chain_id: int):
+    """Simply return, nothing to wait for. """
+    return None
 
 class MemoryCollector(DataCollector):
   """Stores samples entirely in RAM (numpy arrays).

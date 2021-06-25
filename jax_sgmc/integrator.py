@@ -33,9 +33,11 @@ leapfrog_state = namedtuple("leapfrog_state",
 
 langevin_state = namedtuple("langevin_state",
                             ["latent_variables",
+                             "model_state",
                              "key",
                              "adapt_state",
-                             "data_state"])
+                             "data_state",
+                             "potential"])
 """State of the langevin diffusion integrator.
 
 Attributes:
@@ -43,7 +45,8 @@ Attributes:
   key: PRNGKey
   adapt_state: Containing quantities such as momentum for adaption
   data_state: State of the reference data cache
-
+  model_state: Variables not considered during inference
+  potential: Stochastic potential from last evaluation
 """
 
 # Todo: Correct typing:
@@ -179,7 +182,7 @@ def langevin_diffusion(
   if adaption is not None:
     adapt_init, adapt_update, adapt_get = adaption
   batch_init, batch_get = batch_fn
-  stochastic_gradient = grad(potential_fn)
+  stochastic_gradient = grad(potential_fn, has_aux=True)
 
   # We need to define an update function. All array oprations must be
   # implemented via tree_map. This is probably going to change with the
@@ -193,8 +196,8 @@ def langevin_diffusion(
   def init_fn(init_sample: PyTree,
               key: Array = random.PRNGKey(0),
               adaption_kwargs: Dict = None,
-              batch_kwargs: Dict = None
-              ):
+              batch_kwargs: Dict = None,
+              init_model_state: PyTree = None):
     """Initializes the initial state of the integrator.
 
     Args:
@@ -227,7 +230,10 @@ def langevin_diffusion(
       key=key,
       latent_variables=init_sample,
       adapt_state=adaption_state,
-      data_state=reference_data_state)
+      data_state=reference_data_state,
+      model_state=init_model_state,
+      potential=jnp.array(0.0)
+    )
 
     return init_state
 
@@ -236,7 +242,8 @@ def langevin_diffusion(
 
   def get_fn(state: langevin_state):
     """Returns the latent variables."""
-    return state.latent_variables
+    return {"variables": state.latent_variables,
+            "likelihood": -state.potential}
 
   # Update according to the integrator update rule
 
@@ -255,7 +262,15 @@ def langevin_diffusion(
     data_state, mini_batch = batch_get(state.data_state, information=True)
 
     noise = random_tree(split, state.latent_variables)
-    gradient = stochastic_gradient(state.latent_variables, mini_batch)
+    gradient, new_model_state = stochastic_gradient(
+      state.latent_variables,
+      mini_batch,
+      state=state.model_state)
+    potential, _ = potential_fn(
+      state.latent_variables,
+      mini_batch,
+      state=state.model_state
+    )
 
     scaled_gradient = tree_scale(-parameters.step_size, gradient)
     scaled_noise = tree_scale(
@@ -297,7 +312,9 @@ def langevin_diffusion(
       key=key,
       latent_variables=new_sample,
       adapt_state=adapt_state,
-      data_state=data_state
+      data_state=data_state,
+      model_state=new_model_state,
+      potential=jnp.array(potential, dtype=state.potential.dtype)
     )
 
     return new_state

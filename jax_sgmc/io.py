@@ -66,8 +66,23 @@ class DataCollector(metaclass=abc.ABCMeta):
     """Register data loader to save the state. """
 
   @abc.abstractmethod
-  def register_chain(self) -> int:
-    """Register a chain to save samples from. """
+  def register_chain(self,
+                     init_sample: PyTree,
+                     init_checkpoint: PyTree,
+                     static_information: PyTree
+                     ) -> int:
+    """Register a chain to save samples from.
+
+    Args:
+      init_sample: Determining shape, dtype and tree structure of sample.
+      init_checkpoint: Determining shape, dtype and tree structure of solver
+        state to enable checkpointing.
+      static_information: Information about the total number of collected
+        samples
+
+    Returns:
+      Returns id of the new chain.
+    """
 
   @abc.abstractmethod
   def save(self, chain_id: int, values):
@@ -181,7 +196,7 @@ class JSONCollector(DataCollector):
       stacked_samples
     )
     with open(filename, "w") as file:
-      ujson.dump(samples_as_list, file)
+      ujson.dump(samples_as_list, file) # pylint: disable=c-extension-no-member
 
   def finished(self, chain_id: int):
     """Simply return, nothing to wait for. """
@@ -214,14 +229,6 @@ class HDF5Collector(DataCollector):
     """Called after solver finished. """
     # Is called after all host callback calls have been processed
     self._finished[chain_id].wait()
-
-  def finished(self, chain_id):
-    self._finished[chain_id].wait()
-    # Stack the samples
-    stacked_samples = tree_util.tree_map(
-      lambda *leaves: onp.stack(leaves, axis=0),
-      *self._samples[chain_id])
-    return stacked_samples
 
   def checkpoint(self, chain_id: int, state):
     """Called every n'th step. """
@@ -268,21 +275,38 @@ class MemoryCollector(DataCollector):
   def __init__(self):
     self._finished = []
     self._samples = []
+    self._samples_count = []
+    self._treedefs = []
 
   def register_data_loader(self, data_loader: data.DataLoader):
     """Register data loader to save the state. """
 
-  def register_chain(self) -> int:
+  def register_chain(self,
+                     init_sample,
+                     init_checkpoint,
+                     static_information) -> int:
     """Register a chain to save samples from. """
     chain_id = len(self._finished)
+    leaves, treedef = tree_util.tree_flatten(init_sample)
+    def leaf_shape(leaf):
+      new_shape = onp.append(
+        static_information.samples_collected,
+        leaf.shape)
+      new_shape = tuple(int(s) for s in new_shape)
+      return new_shape
+    sample_cache = [onp.zeros(leaf_shape(leaf), dtype=leaf.dtype) for leaf in leaves]
     self._finished.append(threading.Barrier(2))
-    self._samples.append([])
+    self._samples.append(sample_cache)
+    self._treedefs.append(treedef)
+    self._samples_count.append(0)
     return chain_id
 
   def save(self, chain_id: int, values):
     """Called with collected samples. """
-    self._samples[chain_id].append(
-      tree_util.tree_map(onp.array, values))
+    sample_cache = self._samples[chain_id]
+    for leaf, value in zip(sample_cache, values):
+      leaf[self._samples_count[chain_id]] = value
+    self._samples_count[chain_id] += 1
 
   def finalize(self, chain_id: int):
     """Called after solver finished. """
@@ -291,11 +315,10 @@ class MemoryCollector(DataCollector):
 
   def finished(self, chain_id):
     self._finished[chain_id].wait()
-    # Stack the samples
-    stacked_samples = tree_util.tree_map(
-      lambda *leaves: onp.stack(leaves, axis=0),
-      *self._samples[chain_id])
-    return stacked_samples
+    # Restore original tree shape
+    return tree_util.tree_unflatten(
+      self._treedefs[chain_id],
+      self._samples[chain_id])
 
   def checkpoint(self, chain_id: int, state):
     """Called every n'th step. """
@@ -339,7 +362,11 @@ def save(data_collector: DataCollector = None,
   def _save_wrapper(args) -> int:
     # Use the result to count the number of saved samples. The result must be
     # used to avoid loosing the call to jax's optimizations.
-    counter = host_callback.id_tap(_save, args, result=1)
+    # Only return the leaves, as tree structure is redundant an requires
+    # flattening on the host.
+    chain_id, data = args
+    flat_args = (chain_id, tree_util.tree_leaves(data))
+    counter = host_callback.id_tap(_save, flat_args, result=1)
     return counter
 
   def init(init_sample, init_checkpoint, static_information) -> saving_state:
@@ -354,7 +381,10 @@ def save(data_collector: DataCollector = None,
     Returns:
       Returns initial state.
     """
-    chain_id = data_collector.register_chain()
+    chain_id = data_collector.register_chain(
+      init_sample=init_sample,
+      init_checkpoint=init_checkpoint,
+      static_information=static_information)
     # The count of saved samples is important to ensure that the callback
     # function is not removed by jax's optimization procedures.
     initial_state = saving_state(
@@ -366,7 +396,7 @@ def save(data_collector: DataCollector = None,
 
   def save(state: saving_state,
            schedule: scheduler.schedule,
-           data: Any,
+           sample: Any,
            scheduler_state: scheduler.scheduler_state = None,
            solver_state: Any = None):
     """Calls the data collector on the host via host callback module."""
@@ -378,7 +408,7 @@ def save(data_collector: DataCollector = None,
     saved = lax.cond(keep,
                      _save_wrapper,
                      lambda *args: 0,
-                     (state.chain_id, data))
+                     (state.chain_id, sample))
 
     # Todo: Implement checkpointing
     # last_checkpoint = lax.cond(time_for_checkpoint,
@@ -388,7 +418,8 @@ def save(data_collector: DataCollector = None,
 
     new_state = saving_state(
       chain_id=state.chain_id,
-      saved_samples=state.saved_samples + saved)
+      saved_samples=state.saved_samples + saved,
+      data=None)
     return new_state, None
 
   def postprocess(state: saving_state, unused_saved):

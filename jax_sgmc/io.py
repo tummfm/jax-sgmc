@@ -30,7 +30,6 @@ from collections import namedtuple
 
 import numpy as onp
 
-import jax
 import jax.numpy as jnp
 from jax import tree_util, lax
 
@@ -58,10 +57,6 @@ PyTree = Any
 
 # Global rules for translating a tree-node into a dict
 _dictionize_rules: Dict[Type, Callable] = {}
-
-def _get_dictionize_rule():
-  global _dictionize_rules
-  return _dictionize_rules
 
 def register_dictionize_rule(type: Type) -> NoReturn:
   """Decorator to define new rules transforming a pytree node to a dict.
@@ -190,10 +185,10 @@ def pytree_dict_keys(tree: PyTree):
   """
   node = pytree_to_dict(tree)
   leaves, treedef = tree_util.tree_flatten(node)
-  idx_tree = tree_util.tree_unflatten(treedef, [idx for idx in range(len(leaves))])
+  idx_tree = tree_util.tree_unflatten(treedef, list(range(len(leaves))))
   key_list = [None] * len(leaves)
   def _recurse(node, path):
-    if type(node) is int:
+    if isinstance(node, int):
       key_list[node] = path
     else:
       for key, value in node.items():
@@ -227,7 +222,7 @@ def dict_to_pytree(pytree_as_dict: dict, target: PyTree):
   def _recurse_get(key_list):
     key_list = list(key_list)
     element = pytree_as_dict
-    while(len(key_list) > 0):
+    while len(key_list) > 0:
       element = element.get(key_list.pop(0))
     return element
   new_leaves = map(_recurse_get, target_dict_keys)
@@ -330,7 +325,11 @@ class JSONCollector(DataCollector):
     """Not supported for JSON collector. """
     raise NotImplementedError("Checkpointing is not supported by JSON loader.")
 
-  def register_chain(self) -> int:
+  def register_chain(self,
+                     init_sample: PyTree,
+                     init_checkpoint: PyTree,
+                     static_information: PyTree
+                     ) -> int:
     """Register a chain to save samples from. """
     new_chain = len(self._collected_samples)
     self._collected_samples.append([])
@@ -448,7 +447,6 @@ class HDF5Collector(DataCollector):
   def finished(self, chain_id: int):
     """Return after everything has been written to the file. """
     self._finished[chain_id].wait()
-    return None
 
 class MemoryCollector(DataCollector):
   """Stores samples entirely in RAM (numpy arrays).
@@ -511,9 +509,7 @@ class MemoryCollector(DataCollector):
     output_dir.mkdir(exist_ok=True)
     onp.savez(
       output_file,
-      **{name: ary for name, ary in zip(self._leafnames[chain_id],
-                                        self._samples[chain_id])
-         })
+      **dict(zip(self._leafnames[chain_id], self._samples[chain_id])))
 
   def finished(self, chain_id):
     self._finished[chain_id].wait()

@@ -406,8 +406,9 @@ class HDF5Collector(DataCollector):
                      ) -> int:
     """Register a chain to save samples from. """
     chain_id = len(self._finished)
-    leaf_names = [f"/chain~{chain_id}{groupname}" for groupname in
-                  _groupnames(init_sample)]
+    leaf_names = ["/".join(itertools.chain([f"/chain~{chain_id}"], key_tuple))
+                  for key_tuple in pytree_dict_keys(init_sample)]
+    print(leaf_names)
     leaves = tree_util.tree_leaves(init_sample)
     # Build the datasets
     # Todo: Maybe flatten completely
@@ -415,13 +416,10 @@ class HDF5Collector(DataCollector):
       new_shape = tuple(int(s) for s in
                         itertools.chain([static_information.samples_collected],
                                         leaf.shape))
-      chain = self._file.create_group(f"/chain~{chain_id}", track_order=True)
       self._file.create_dataset(
         leaf_name,
         shape=new_shape,
         dtype=leaf.dtype)
-      # Save the leaf names in creational order make rebuild of tree possible
-      chain.attrs.create(leaf_name, new_shape)
     self._sample_count.append(0)
     self._leaf_names.append(leaf_names)
     self._finished.append(threading.Barrier(2))
@@ -698,6 +696,7 @@ def no_save() -> Saving:
     to thinning.
 
     """
+    sample = pytree_to_dict(sample)
     keep_sample = jnp.logical_and(schedule.burn_in, schedule.accept)
     new_state = lax.cond(keep_sample,
                          _save_sample,

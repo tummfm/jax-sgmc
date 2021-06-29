@@ -708,8 +708,14 @@ def save(data_collector: DataCollector = None,
   # Helper functions for host_callback
 
   def _save(data, *unused_args):
-    chain_id, data = data
-    data_collector.save(chain_id, data)
+    chain_ids, data = data
+
+    # id_tap sends batched arguments to the host
+    if chain_ids.ndim == 0:
+      data_collector.save(chain_ids, data)
+    else:
+      for idx, chain_id in enumerate(chain_ids):
+        data_collector.save(chain_id, [leaf[idx] for leaf in data])
 
   def _save_wrapper(args) -> int:
     # Use the result to count the number of saved samples. The result must be

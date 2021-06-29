@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from jax import random
 from jax import flatten_util
 from jax import test_util
+from jax import tree_util
 
 from jax_sgmc import util
 from jax_sgmc import data
@@ -68,3 +69,39 @@ class TestTree:
     treemap_result = util.tree_matmul(rnd, tree)
 
     test_util.check_close(true_result, treemap_result)
+
+class TestTreeMap():
+
+  def test_vmap(self, random_tree):
+    (random_tree, _), _ = random_tree
+
+    zero_tree = tree_util.tree_map(jnp.zeros_like, random_tree)
+    one_tree = tree_util.tree_map(jnp.ones_like, random_tree)
+    modified_tree = tree_util.tree_map(jnp.add, random_tree, one_tree)
+
+    @jax.jit
+    @util.list_vmap
+    def test_substract(tree):
+      return tree_util.tree_map(jnp.subtract, modified_tree, tree)
+
+    one, zero = test_substract(random_tree, modified_tree)
+
+    test_util.check_close(zero, zero_tree)
+    test_util.check_close(one, one_tree)
+
+  def test_pmap(self, random_tree):
+    (random_tree, _), _ = random_tree
+
+    zero_tree = tree_util.tree_map(jnp.zeros_like, random_tree)
+    one_tree = tree_util.tree_map(jnp.ones_like, random_tree)
+    modified_tree = tree_util.tree_map(jnp.add, random_tree, one_tree)
+
+    @jax.jit
+    @util.list_pmap
+    def test_substract(tree):
+      return tree_util.tree_map(jnp.subtract, modified_tree, tree)
+
+    one, zero = test_substract(random_tree, modified_tree)
+
+    test_util.check_close(zero, zero_tree)
+    test_util.check_close(one, one_tree)

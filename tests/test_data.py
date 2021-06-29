@@ -308,15 +308,12 @@ class TestRandomAccess:
       init_fn(key=jax.random.PRNGKey(idx))
       for idx in range(states_count)
     ]
-    transform_fn, _ = util.pytree_list_transform(
-      init_states
-    )
 
     # Init states vorspulen
     for idx in range(states_count):
       for _ in range(idx):
         init_states[idx], _ = batch_fn(init_states[idx], information=True)
-    init_states = transform_fn(init_states)
+    init_states = util.pytree_list_to_leaves(init_states)
 
     helper_fn = jax.jit(data.vmap_helper(partial(batch_fn, information=True)))
     _, (batches, _) = helper_fn(init_states)

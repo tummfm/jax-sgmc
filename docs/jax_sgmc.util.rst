@@ -11,3 +11,7 @@ jax_sgmc.util
     tree_multiply
     tree_add
     tree_scale
+    list_vmap
+    list_pmap
+    pytree_list_to_leaves
+    pytree_leaves_to_list

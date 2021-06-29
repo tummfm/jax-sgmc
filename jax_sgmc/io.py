@@ -12,7 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Save and load results. """
+"""Save and checkpoint chains.
+
+  **jax_sgmc** supports saving and checkpointing inside of jit-compiled
+  functions. Saving data consists of two parts:
+
+  Data Collector
+  _______________
+
+  The data collector serializes the data and writes it to the disk and or keeps
+  it in memory. Every data collector following the interface works.
+
+  Saving
+  ________
+
+  The function save initializes the interface between the data collector and the
+  jit-compiled function.
+
+  If the device memory is large, it is possible to use
+  :func:`jax_sgmc.io.no_save`. This function has the same signature towards the
+  jit-compiled function but keeps the all collected data in the device memory.
+
+  Pytre to Dict Transformation
+  _____________________________
+
+  Additionally, this module can be used for its transformation of pytrees to
+  native dicts of dicts.
+
+"""
 
 # Todo: If dataloader supports checkpointing, it must be able to checkpoint
 #       itself.
@@ -62,13 +89,15 @@ def register_dictionize_rule(type: Type) -> NoReturn:
   """Decorator to define new rules transforming a pytree node to a dict.
 
   By default, transformations are defined for some default types:
-    - list
-    - dict
-    - (named)tuple
+
+  - list
+  - dict
+  - (named)tuple
 
   Additionaly, transformation for the following optional libraries are
   implemented:
-    - haiku._src.data_structures.FlatMapping
+
+  - haiku._src.data_structures.FlatMapping
 
   New a new transformation rule is a function, which accepts a pytree node of
   a specific type an returns a iterable, which itself returns `(key, value)`-
@@ -304,6 +333,7 @@ class DataCollector(metaclass=abc.ABCMeta):
   def resume(self):
     """Called to restore data loader state and return sample states. """
 
+# Todo: Maybe remove? Not useable for big data -> better hdf5
 class JSONCollector(DataCollector):
   """Save samples in json format.
 
@@ -384,13 +414,35 @@ class JSONCollector(DataCollector):
 class HDF5Collector(DataCollector):
   """Save to hdf5 format.
 
+  This data collector supports serializing collected samples and checkpoints
+  into the hdf5 file format. The samples are saved in a structure similar to the
+  original pytree and can thus be viewed easily via the hdf5-viewer.
+
+  .. doctest::
+
+    >>> import tempfile
+    >>> tf = tempfile.TemporaryFile()
+    >>>
+    >>> import h5py
+    >>> from jax_sgmc import io
+    >>>
+    >>> file = h5py.File(tf, "w") # Use a real file for real saving
+    >>> data_collector = io.HDF5Collector(file)
+    >>> saving = io.save(data_collector)
+    >>>
+    >>> # ... use the solver ...
+    >>>
+    >>> # Close the file
+    >>> file.close()
+
   Args:
     file: hdf5 file object
 
   """
 
-  def __init__(self, file=h5py.File):
+  def __init__(self, file: h5py.File):
     assert h5py is not None, "h5py must be installed to use this DataCollector."
+    # Barrier to wait until all data has been processed
     self._finished = []
     self._sample_count = []
     self._leaf_names = []
@@ -404,14 +456,23 @@ class HDF5Collector(DataCollector):
                      init_checkpoint: PyTree,
                      static_information: PyTree
                      ) -> int:
-    """Register a chain to save samples from. """
+    """Register a chain to save samples from.
+
+    Args:
+      init_sample: Pytree determining tree structure and leafs of samples to be
+        saved.
+      init_checkpoint: Pytree determining tree structure and leafs of the states
+        to be checkpointed
+      static_information: Information about the total numbers of samples
+        collected.
+    """
     chain_id = len(self._finished)
+    # Save the pytree as it would be transformed to a dict by pytree_to_dict
     leaf_names = ["/".join(itertools.chain([f"/chain~{chain_id}"], key_tuple))
                   for key_tuple in pytree_dict_keys(init_sample)]
-    print(leaf_names)
     leaves = tree_util.tree_leaves(init_sample)
-    # Build the datasets
-    # Todo: Maybe flatten completely
+    # Allocate memory upfront, this is more effective than the chunk-wise
+    # allocation
     for leaf_name, leaf in zip(leaf_names, leaves):
       new_shape = tuple(int(s) for s in
                         itertools.chain([static_information.samples_collected],
@@ -426,13 +487,24 @@ class HDF5Collector(DataCollector):
     return chain_id
 
   def save(self, chain_id: int, values):
-    """Save new leaves to dataset. """
+    """Save new leaves to dataset.
+
+    Args:
+      chain_id: Id from register_chain
+      values: Tree leaves of sample
+
+    """
     for leaf_name, value in zip(self._leaf_names[chain_id], values):
       self._file[leaf_name][self._sample_count[chain_id]] = value
     self._sample_count[chain_id] += 1
 
   def finalize(self, chain_id: int):
-    """Wait for all writing to be finished. """
+    """Wait for all writing to be finished (scheduled via host_callback).
+
+    Args:
+      chain_id: Id of the chain which is finished
+
+    """
     # Is called after all host callback calls have been processed
     self._finished[chain_id].wait()
 
@@ -443,7 +515,16 @@ class HDF5Collector(DataCollector):
     """Called to restore data loader state and return sample states. """
 
   def finished(self, chain_id: int):
-    """Return after everything has been written to the file. """
+    """Return after everything has been written to the file.
+
+    Finalize is scheduled via host_callback and finished is called in the normal
+    python flow. Via a barrier it is possible to pause the program flow until
+    all asynchronously saved data has been processed.
+
+    Args:
+      chain_id: ID of chain requesting continuation of normal program flow.
+
+    """
     self._finished[chain_id].wait()
 
 class MemoryCollector(DataCollector):
@@ -470,10 +551,17 @@ class MemoryCollector(DataCollector):
     """Register data loader to save the state. """
 
   def register_chain(self,
-                     init_sample,
-                     init_checkpoint,
+                     init_sample: PyTree,
+                     *unused_arg: PyTree,
                      static_information) -> int:
-    """Register a chain to save samples from. """
+    """Register a chain to save samples from.
+
+    Args:
+      init_sample: Pytree determining tree structure and leafs of samples to be
+        saved.
+      static_information: Information about the total numbers of samples
+        collected.
+    """
     chain_id = len(self._finished)
     leaves, treedef = tree_util.tree_flatten(init_sample)
     def leaf_shape(leaf):
@@ -483,23 +571,35 @@ class MemoryCollector(DataCollector):
       new_shape = tuple(int(s) for s in new_shape)
       return new_shape
     sample_cache = [onp.zeros(leaf_shape(leaf), dtype=leaf.dtype) for leaf in leaves]
+    pytree_keys = pytree_dict_keys(init_sample)
 
     self._finished.append(threading.Barrier(2))
     self._samples.append(sample_cache)
     self._treedefs.append(treedef)
     self._samples_count.append(0)
-    self._leafnames.append(_groupnames(init_sample))
+    self._leafnames.append(["/".join(pytree_keys)])
     return chain_id
 
   def save(self, chain_id: int, values):
-    """Called with collected samples. """
+    """Save new leaves to dataset.
+
+    Args:
+      chain_id: Id from register_chain
+      values: Tree leaves of sample
+
+    """
     sample_cache = self._samples[chain_id]
     for leaf, value in zip(sample_cache, values):
       leaf[self._samples_count[chain_id]] = value
     self._samples_count[chain_id] += 1
 
   def finalize(self, chain_id: int):
-    """Called after solver finished. """
+    """Wait for all writing to be finished (scheduled via host_callback).
+
+    Args:
+      chain_id: Id of the chain which is finished
+
+    """
     # Is called after all host callback calls have been processed
     self._finished[chain_id].wait()
     output_dir = Path(self._dir)
@@ -510,6 +610,20 @@ class MemoryCollector(DataCollector):
       **dict(zip(self._leafnames[chain_id], self._samples[chain_id])))
 
   def finished(self, chain_id):
+    """Return samples after all data has been processed.
+
+    Finalize is scheduled via host_callback and finished is called in the normal
+    python flow. Via a barrier it is possible to pause the program flow until
+    all asynchronously saved data has been processed.
+
+    Args:
+      chain_id: ID of chain requesting continuation of normal program flow.
+
+    Returns:
+      Returns the collected samples in the original tree format but with numpy-
+      arrays as leaves.
+
+    """
     self._finished[chain_id].wait()
     # Restore original tree shape
     return tree_util.tree_unflatten(
@@ -711,26 +825,3 @@ def no_save() -> Saving:
             "samples": state.data}
 
   return init, save, postprocess
-
-# Todo: Define such specific group-names or reduce to flat list?
-def _groupnames(tree):
-  def one_flatten_step(tree):
-    """Helper to flatten tree for one step if it is not a leaf."""
-    return lambda t: tree != t
-
-  def recurse(treedef, tree):
-    """Recursively build the node names. """
-    if tree_util.treedef_is_leaf(treedef):
-      for idx in range(treedef.num_leaves):
-        yield f"/{type(tree).__name__}~{idx}"
-    else:
-      # Get the child treedefs and the node treedef
-      children = [treedef.children(),
-                  tree_util.tree_flatten(
-                    tree, is_leaf=one_flatten_step(tree))[0]]
-      for idx, (child_treedef, child_tree) in enumerate(zip(*children)):
-        for child_name in recurse(child_treedef, child_tree):
-          yield f"/{type(tree).__name__}~{idx}" + child_name
-
-  treedef = tree_util.tree_structure(tree)
-  return list(recurse(treedef, tree))

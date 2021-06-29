@@ -16,7 +16,7 @@ class TestDictTransformation:
 
 
 
-
+@pytest.mark.hdf5
 class TestHDF5Collector:
   pass
 

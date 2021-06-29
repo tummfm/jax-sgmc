@@ -67,7 +67,9 @@ except ModuleNotFoundError:
 
 try:
   import h5py
+  HDF5File = h5py.File
 except ModuleNotFoundError:
+  HDF5File = None
   h5py = None
 
 # Import haiku to register a rule for transforming FlatMapping into a dict
@@ -439,7 +441,7 @@ class HDF5Collector(DataCollector):
 
   """
 
-  def __init__(self, file: h5py.File):
+  def __init__(self, file: HDF5File):
     assert h5py is not None, "h5py must be installed to use this DataCollector."
     # Barrier to wait until all data has been processed
     self._finished = []

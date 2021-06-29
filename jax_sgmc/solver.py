@@ -61,9 +61,11 @@ def mcmc(solver,
     solver_state, scheduler_state, saving_state = state
     schedule = scheduler_get(scheduler_state)
     new_state, stats = solver_update(solver_state, schedule)
+    # Kepp the sample if it is not subject to burn in or thinning.
+    keep = jnp.logical_and(schedule.burn_in, schedule.accept)
     saving_state, saved = save(
       saving_state,
-      schedule,
+      keep,
       solver_get(new_state),
       scheduler_state=scheduler_state,
       solver_state=solver_state)

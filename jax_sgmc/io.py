@@ -286,7 +286,6 @@ Saving = Tuple[Callable[[], saving_state],
                Callable[[saving_state, scheduler.schedule, Any, Any, Any], Union[Any, NoReturn]],
                Callable[[Any], Union[Any, NoReturn]]]
 
-
 class DataCollector(metaclass=abc.ABCMeta):
   """Collects sampled data and data loader states. """
 
@@ -296,9 +295,9 @@ class DataCollector(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def register_chain(self,
-                     init_sample: PyTree,
-                     init_checkpoint: PyTree,
-                     static_information: PyTree
+                     init_sample: PyTree = None,
+                     init_checkpoint: PyTree = None,
+                     static_information: PyTree = None
                      ) -> int:
     """Register a chain to save samples from.
 
@@ -356,9 +355,9 @@ class JSONCollector(DataCollector):
     raise NotImplementedError("Checkpointing is not supported by JSON loader.")
 
   def register_chain(self,
-                     init_sample: PyTree,
-                     init_checkpoint: PyTree,
-                     static_information: PyTree
+                     init_sample: PyTree = None,
+                     init_checkpoint: PyTree = None,
+                     static_information: PyTree = None
                      ) -> int:
     """Register a chain to save samples from. """
     new_chain = len(self._collected_samples)
@@ -452,9 +451,9 @@ class HDF5Collector(DataCollector):
     """Register data loader to save the state. """
 
   def register_chain(self,
-                     init_sample: PyTree,
-                     init_checkpoint: PyTree,
-                     static_information: PyTree
+                     init_sample: PyTree = None,
+                     init_checkpoint: PyTree = None,
+                     static_information: PyTree = None
                      ) -> int:
     """Register a chain to save samples from.
 
@@ -466,6 +465,10 @@ class HDF5Collector(DataCollector):
       static_information: Information about the total numbers of samples
         collected.
     """
+    assert init_sample is not None, "Need a sample-pytree to allocate memory."
+    assert init_checkpoint is not None, "Need a checkpoint-pytree to allocate " \
+                                        "memory."
+
     chain_id = len(self._finished)
     # Save the pytree as it would be transformed to a dict by pytree_to_dict
     leaf_names = ["/".join(itertools.chain([f"/chain~{chain_id}"], key_tuple))
@@ -551,9 +554,9 @@ class MemoryCollector(DataCollector):
     """Register data loader to save the state. """
 
   def register_chain(self,
-                     init_sample: PyTree,
-                     *unused_arg: PyTree,
-                     static_information) -> int:
+                     init_sample: PyTree = None,
+                     static_information = None,
+                     **unused_kwargs) -> int:
     """Register a chain to save samples from.
 
     Args:
@@ -562,6 +565,8 @@ class MemoryCollector(DataCollector):
       static_information: Information about the total numbers of samples
         collected.
     """
+    assert init_sample is not None, "Need a sample-pytree to allocate memory."
+
     chain_id = len(self._finished)
     leaves, treedef = tree_util.tree_flatten(init_sample)
     def leaf_shape(leaf):
@@ -577,7 +582,7 @@ class MemoryCollector(DataCollector):
     self._samples.append(sample_cache)
     self._treedefs.append(treedef)
     self._samples_count.append(0)
-    self._leafnames.append(["/".join(pytree_keys)])
+    self._leafnames.append(["/".join(key_tuple) for key_tuple in pytree_keys])
     return chain_id
 
   def save(self, chain_id: int, values):
@@ -602,12 +607,13 @@ class MemoryCollector(DataCollector):
     """
     # Is called after all host callback calls have been processed
     self._finished[chain_id].wait()
-    output_dir = Path(self._dir)
-    output_file = output_dir / f"chain_{chain_id}.npz"
-    output_dir.mkdir(exist_ok=True)
-    onp.savez(
-      output_file,
-      **dict(zip(self._leafnames[chain_id], self._samples[chain_id])))
+    if self._dir is not None:
+      output_dir = Path(self._dir)
+      output_file = output_dir / f"chain_{chain_id}.npz"
+      output_dir.mkdir(exist_ok=True)
+      onp.savez(
+        output_file,
+        **dict(zip(self._leafnames[chain_id], self._samples[chain_id])))
 
   def finished(self, chain_id):
     """Return samples after all data has been processed.
@@ -650,12 +656,48 @@ def save(data_collector: DataCollector = None,
   memory usage drastically and also allows to gain insight in the data while the
   simulation is running.
 
+  Returns statistics and samples are depending on the Data Collector. For
+  example hdf5 can be used for samples larger than the (device)memory.
+  Therefore, no samples are returned. Instead, the memory collector returns
+  the samples collected as numpy arrays.
+
+  Example usage:
+
+    .. doctest::
+
+      >>> import jax.numpy as jnp
+      >>> from jax.lax import scan
+      >>> from jax_sgmc import io, scheduler
+      >>>
+      >>> dc = io.MemoryCollector()
+      >>> init_save, save, postprocess_save = io.save(dc)
+      >>>
+      >>> def update(saving_state, it):
+      ...   saving_state = save(saving_state, jnp.mod(it, 2) == 0, {'iteration': it})
+      ...   return saving_state
+      >>>
+      >>> # The information about the number of collected samples must be defined
+      >>> # before the run
+      >>> static_information = scheduler.static_information(samples_collected=3)
+      >>>
+      >>> # The saving function must now the form of the sample which should be saved
+      >>> saving_state = init_save({'iteration': jnp.array(0)}, {}, static_information)
+      >>> final_state, _ = scan(update, saving_state, jnp.arange(5))
+      >>>
+      >>> saved_samples = postprocess_save(final_state, None)
+      >>> print(saved_samples)
+      {'sample_count': DeviceArray(3, dtype=int32), 'samples': {'iteration': array([0, 2, 4], dtype=int32)}}
+
+
   Args:
     data_collector: Stateful object for data storage and serialization
     checkpoint_every: Create a checkpoint for late resuming every n iterations
 
-  Notes:
+  Warning:
     Checkpointing is currently not supported.
+
+  Returns:
+    Returns a saving strategy.
 
   """
 
@@ -704,15 +746,14 @@ def save(data_collector: DataCollector = None,
     )
     return initial_state
 
+  # Todo: Generalize the saving by contracting the scheduler state and the
+  #       solver state to a single checkpointing state.
   def save(state: saving_state,
-           schedule: scheduler.schedule,
+           keep: jnp.bool_,
            sample: Any,
            scheduler_state: scheduler.scheduler_state = None,
            solver_state: Any = None):
     """Calls the data collector on the host via host callback module."""
-
-    # Kepp the sample if it is not subject to burn in or thinning.
-    keep = jnp.logical_and(schedule.burn_in, schedule.accept)
 
     # Save sample if samples is not subject to burn in or discarded by thinning
     saved = lax.cond(keep,
@@ -751,6 +792,32 @@ def no_save() -> Saving:
 
   If the samples are small, collection on the device is possible. Samples must
   copied repeatedly.
+
+  Save keep every second element of a 5 element scan
+
+  .. doctest::
+
+    >>> import jax.numpy as jnp
+    >>> from jax.lax import scan
+    >>> from jax_sgmc import io, scheduler
+    >>>
+    >>> init_save, save, postprocess_save = io.no_save()
+    >>>
+    >>> def update(saving_state, it):
+    ...   saving_state = save(saving_state, jnp.mod(it, 2) == 0, {'iteration': it})
+    ...   return saving_state
+    >>>
+    >>> # The information about the number of collected samples must be defined
+    >>> # before the run
+    >>> static_information = scheduler.static_information(samples_collected=3)
+    >>>
+    >>> # The saving function must now the form of the sample which should be saved
+    >>> saving_state = init_save({'iteration': jnp.array(0)}, None, static_information)
+    >>> final_state, _ = scan(update, saving_state, jnp.arange(5))
+    >>>
+    >>> saved_samples = postprocess_save(final_state, None)
+    >>> print(saved_samples)
+    {'sample_count': DeviceArray(3, dtype=int32), 'samples': {'iteration': DeviceArray([0, 2, 4], dtype=int32)}}
 
   Returns:
     Returns a saving strategy, which keeps the samples entirely in the
@@ -800,7 +867,7 @@ def no_save() -> Saving:
     return new_state
 
   def save(state: saving_state,
-           schedule: scheduler.schedule,
+           keep: jnp.bool_,
            sample: Any,
            **unused_kwargs: Any
            ) -> Any:
@@ -811,8 +878,7 @@ def no_save() -> Saving:
 
     """
     sample = pytree_to_dict(sample)
-    keep_sample = jnp.logical_and(schedule.burn_in, schedule.accept)
-    new_state = lax.cond(keep_sample,
+    new_state = lax.cond(keep,
                          _save_sample,
                         lambda args: args[0],
                          (state, sample))

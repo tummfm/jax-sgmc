@@ -123,6 +123,12 @@ def mcmc(solver,
       if strategy == "pmap":
         mapped_run = util.list_pmap(partial(_run, static_info[0]))
       elif strategy == "vmap":
+        # Todo: Fix unnecessary vmap calls. This could be another application of
+        #       the stop_vmap primitive
+        # Vmap of cond is transformed to lax.select. Thus, true branch and false
+        # branch is run, such that all samples are saved and for every sample an
+        # index update is performed.
+        raise NotImplementedError("Very inefficient.")
         mapped_run = jit(util.list_vmap(partial(_run, static_info[0])))
       else:
         raise NotImplementedError(f"Strategy {strategy} is unknown. ")

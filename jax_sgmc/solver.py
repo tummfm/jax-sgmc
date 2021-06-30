@@ -19,7 +19,7 @@ from typing import Callable, Any, Tuple
 
 from jax import lax, jit
 import jax.numpy as jnp
-from jax_sgmc import io
+from jax_sgmc import io, util
 
 PyTree = Any
 
@@ -80,30 +80,55 @@ def mcmc(solver,
   # Scan over the update function. Postprocessing the samples is required if
   # saving is None to sort out not accepted samples. Samples are not accepted
   # due tu burn in or thinning.
+
+  # Intialize a single chain
+  def _init(init_state, iterations):
+    scheduler_state, static_information = scheduler_init(iterations)
+    if loading is None:
+      # Define what the saving module is expected to save
+      saving_state = init_saving(
+        solver_get(init_state),
+        (init_state, scheduler_state),
+        static_information)
+    else:
+      raise NotImplementedError("Loading of checkpoints is currently not "
+                                "supported.")
+    # Return tuple of static and non-static information
+    return (iterations, static_information), (init_state, scheduler_state, saving_state)
+
+  # Todo: Remove saved
+  def _run(static, init_state):
+    iterations, static_information = static
+    _update = partial(_uninitialized_update, static_information)
+    (_, _, saving_state), saved = lax.scan(
+      _update,
+      init_state,
+      jnp.arange(iterations))
+    return saving_state, saved
+
   def run(*states, iterations: int = 1e5):
+    # The same schedule for all chains.
     if strategy == "map":
       def run_single():
         for state in states:
-          if loading is None:
-            scheduler_state, static_information = scheduler_init(iterations)
-            # Define what the saving module is expected to save
-            saving_state = init_saving(
-              solver_get(state),
-              (state, scheduler_state),
-              static_information)
-            _update = partial(_uninitialized_update, static_information)
-          else:
-            raise NotImplementedError("Loading of checkpoints is currently not "
-                                      "supported.")
-          (_, _, saving_state), saved = lax.scan(
-            _update,
-            (state, scheduler_state, saving_state),
-            jnp.arange(iterations))
-          yield postprocess_saving(saving_state, saved)
+          init_args = _init(state, iterations)
+          results = _run(*init_args)
+          yield postprocess_saving(*results)
       chains = list(run_single())
     else:
-      raise NotImplementedError("Parallel execution is currently not "
-                                "supported")
+      # Initialize the states sequentially
+      static_info, init_states = zip(*[_init(state, iterations)
+                                       for state in states])
+      # Static information is the same for all chains
+      if strategy == "pmap":
+        mapped_run = util.list_pmap(partial(_run, static_info[0]))
+      elif strategy == "vmap":
+        mapped_run = jit(util.list_vmap(partial(_run, static_info[0])))
+      else:
+        raise NotImplementedError(f"Strategy {strategy} is unknown. ")
+      saving_states, saved_values = zip(*mapped_run(*init_states))
+      return list(map(postprocess_saving, saving_states, saved_values))
+
     # No need to return a list for a single chain result
     if len(chains) == 1:
       return chains.pop()

@@ -121,4 +121,3 @@ class TestSGLD:
 
     # Check that the standard deviation is close
     assert jnp.all(jnp.abs(rms["samples"]["variables"]["sigma"] - 0.5)  < 0.5)
-

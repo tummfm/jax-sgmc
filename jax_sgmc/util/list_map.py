@@ -7,6 +7,21 @@ import jax.numpy as jnp
 def pytree_list_to_leaves(pytrees):
   """Transform a list of pytrees to allow pmap/vmap.
 
+  The trees must have the same tree structure and only differ in the value of
+  their leaves. This means, that the trees might contain custom nodes, such as
+  :class:`jax.tree_util.Partial`, but those tree nodes must equivalent. For
+  example
+
+  .. doctest::
+
+    >>> from jax.tree_util import Partial
+    >>>
+    >>> Partial(lambda x: x + 1) == Partial(lambda x: x + 1)
+    False
+
+  because they are defined on different functions, but are still equivalent as
+  the functions perform the same computations.
+
   Example usage:
 
   .. doctest::
@@ -35,10 +50,10 @@ def pytree_list_to_leaves(pytrees):
 
   # Transpose the pytress, i. e. make a list (array) of leaves from a list of
   # pytrees. Only then vmap can be used to vectorize an operation over pytrees
-  @partial(partial, tree_util.tree_map)
-  def concatenate_leaves(*leaves):
-    return jnp.stack(leaves, axis=0)
-  return concatenate_leaves(*pytrees)
+  treedef = tree_util.tree_structure(pytrees[0])
+  superleaves = [jnp.stack(leaves, axis=0)
+                 for leaves in zip(*map(tree_util.tree_leaves, pytrees))]
+  return tree_util.tree_unflatten(treedef, superleaves)
 
 
 def pytree_leaves_to_list(pytree):
@@ -108,7 +123,6 @@ def list_vmap(fun):
   @wraps(fun)
   def vmapped(*pytrees):
     single_tree = pytree_list_to_leaves(pytrees)
-    print(single_tree)
     single_result = vmap_fun(single_tree)
     return pytree_leaves_to_list(single_result)
   return vmapped

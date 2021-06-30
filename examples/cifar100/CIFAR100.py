@@ -129,11 +129,6 @@ rms_run = solver.mcmc(rms_sgld,
 # The initial state for the likelihood must be passed as a keyword argument just
 # like the initial sample.
 rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
-              iterations=iterations)["samples"]
+              iterations=iterations)["samples"]["variables"]
 
-# Simple pickle the results for now
 
-with open("results.pkl", "wb") as file:
-  pickle.dump(rms, file)
-
-print("Finished")

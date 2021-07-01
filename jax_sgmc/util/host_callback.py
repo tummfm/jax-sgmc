@@ -396,6 +396,8 @@ from jax._src import pprint_util as ppu
 from jax._src import source_info_util
 from jax._src import util
 
+from jax_sgmc.util import stop_vmap
+
 import numpy as np
 
 
@@ -1388,6 +1390,17 @@ def _rewrite_eqn(eqn: core.JaxprEqn, eqns: List[core.JaxprEqn],
                 eqn.params,
                 call_jaxpr=_rewrite_jaxpr(call_jaxpr, True, True),
             ), eqn.source_info))
+  elif eqn.primitive is stop_vmap.stop_vmap_p:
+    jaxpr, consts = util.split_dict(eqn.params, ["jaxpr", "consts"])
+    new_invars = [*eqn.invars, input_token_var, input_itoken_var]
+    eqns.append(
+      core.new_jaxpr_eqn(
+        new_invars, eqn.outvars + [output_token_var, output_itoken_var],
+        eqn.primitive,
+        dict(
+          eqn.params,
+          jaxpr=_rewrite_jaxpr(jaxpr, True, True),
+          consts=consts), eqn.source_info))
   elif eqn.primitive is pjit.pjit_p:
     jaxpr = cast(core.ClosedJaxpr, eqn.params["jaxpr"])
     eqns.append(

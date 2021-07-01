@@ -166,10 +166,12 @@ rms_run = solver.mcmc(rms_sgld, rms_scheduler, strategy="vmap", saving=saving)
 # Initial value for starting
 init_sample = lambda seed: {"w": 2 * random.normal(random.PRNGKey(0), (N, 1)),
                             "sigma": jnp.array(10.0)}
-init_states = list(map(rms_integrator[0], (init_sample(seed) for seed in range(15))))
+init_states = list(map(rms_integrator[0], (init_sample(seed) for seed in range(25))))
 
-
+start = time.time()
 rms_results = rms_run(*init_states, iterations=iterations)
+print(f"run in {time.time() - start} seconds")
+
 
 # Append the results of the chains
 rms_likelihoods = onp.array(jnp.squeeze(jnp.concatenate([rms["samples"]["likelihood"] for rms in rms_results], axis=0)))

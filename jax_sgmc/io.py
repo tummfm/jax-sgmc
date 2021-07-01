@@ -80,8 +80,7 @@ except ModuleNotFoundError:
 
 from jax_sgmc import data
 from jax_sgmc import scheduler
-from jax_sgmc.util import scan_vmap
-from jax.experimental import host_callback
+from jax_sgmc.util import stop_vmap, host_callback
 
 PyTree = Any
 
@@ -755,7 +754,7 @@ def save(data_collector: DataCollector = None,
     )
     return initial_state
 
-  @scan_vmap.stop_vmap_decorator
+  @stop_vmap.stop_vmap
   def _save_helper(keep, state, sample):
     return lax.cond(keep,
                     _save_wrapper,
@@ -879,7 +878,7 @@ def no_save() -> Saving:
       data=new_data)
     return new_state
 
-  @scan_vmap.stop_vmap_decorator
+  @stop_vmap.stop_vmap
   def _save_helper(keep, state, sample):
     return lax.cond(keep,
                     _save_sample,

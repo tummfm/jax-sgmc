@@ -1,30 +1,38 @@
 """Stop vectorization and execute function sequential. """
 
-from jax import core
-from jax import lax
-from jax import linear_util as lu
-from jax._src.util import safe_map, partial, extend_name_stack
-from jax.api_util import flatten_fun_nokwargs
-from jax.interpreters import batching
-from jax.interpreters import partial_eval as pe
-from jax.interpreters import xla
-from jax.lib import xla_bridge as xb
-from jax.lib import xla_client
+from jax import core, make_jaxpr, api_util
 from jax.tree_util import tree_unflatten, tree_flatten
+from jax import linear_util as lu
+from jax.api_util import flatten_fun_nokwargs
+from jax.linear_util import wrap_init
+from jax.interpreters import partial_eval as pe
+from jax.interpreters import batching
+from jax._src.util import safe_map, partial, extend_name_stack
+from jax._src import abstract_arrays, ad_util
+from jax import lax
+from jax.lib import xla_bridge as xb
+from jax.interpreters import xla
+from jax.lib import xla_client
+
 
 xops = xla_client.ops
+
+from jax import jit, vmap
+from jax import numpy as jnp
+
 
 stop_vmap_p = core.Primitive("stop_vmap")
 stop_vmap_p.multiple_results = True
 
-
-def stop_vmap(fun, *args):
-  args_flat, in_tree = tree_flatten(args)
-  in_avals = [core.raise_to_shaped(core.get_aval(x)) for x in args_flat]
-  wrapped_fun, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
-  jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, in_avals)
-  outs = stop_vmap_p.bind(*args_flat, jaxpr=jaxpr, consts=consts)
-  return tree_unflatten(out_tree(), outs)
+def stop_vmap(fun):
+  def wrapped(*args):
+    args_flat, in_tree = tree_flatten(args)
+    in_avals = [core.raise_to_shaped(core.get_aval(x)) for x in args_flat]
+    wrapped_fun, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
+    jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, in_avals)
+    outs = stop_vmap_p.bind(*args_flat, jaxpr=jaxpr, consts=consts)
+    return tree_unflatten(out_tree(), outs)
+  return wrapped
 
 def stop_vmap_decorator(fun):
   def new_fun(*args):
@@ -61,14 +69,14 @@ def stop_vmap_translation_rule(c, axis_env, name_stack, avals, backend,
 
 def stop_vmap_batching_rule(vector_args, batch_axes, jaxpr, consts):
   def _helper(args):
-    return core.eval_jaxpr(jaxpr, consts, *args)
+    return stop_vmap_p.bind(*args, jaxpr=jaxpr, consts=consts)
   res = lax.map(_helper, vector_args)
   for ax in batch_axes:
     assert ax == 0, "Can only batch over first axes"
   return res, [0] * len(res)
 
-
 stop_vmap_p.def_impl(stop_vmap_prim)
 stop_vmap_p.def_abstract_eval(stop_vmap_abstract_eval)
 xla.initial_style_translations[stop_vmap_p] = stop_vmap_translation_rule
 batching.primitive_batchers[stop_vmap_p] = stop_vmap_batching_rule
+

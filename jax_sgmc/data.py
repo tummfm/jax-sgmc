@@ -50,8 +50,7 @@ except ModuleNotFoundError:
   TFDataSet = None
   tfds = None
 
-from jax.experimental import host_callback as hcb
-from jax_sgmc.util import Array, scan_vmap
+from jax_sgmc.util import Array, stop_vmap, host_callback as hcb
 
 mini_batch_information = namedtuple(
   "mini_batch_information",
@@ -526,7 +525,7 @@ def random_reference_data(data_loader: DataLoader,
     )
     return inital_cache_state
 
-  @scan_vmap.stop_vmap_decorator
+  @stop_vmap.stop_vmap
   def _data_state_helper(data_state):
     return lax.cond(data_state.current_line == data_state.cached_batches_count,
                     new_cache_fn,

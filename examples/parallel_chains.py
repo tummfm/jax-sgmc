@@ -148,7 +148,7 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                           last=0.001)
 burn_in = scheduler.initial_burn_in(20000)
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 100)
 
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
@@ -161,12 +161,12 @@ rms_sgld = solver.sgmc(rms_integrator)
 data_collector = io.MemoryCollector()
 saving = io.save(data_collector)
 
-rms_run = solver.mcmc(rms_sgld, rms_scheduler, strategy="pmap", saving=saving)
+rms_run = solver.mcmc(rms_sgld, rms_scheduler, strategy="vmap", saving=saving)
 
 # Initial value for starting
 init_sample = lambda seed: {"w": 2 * random.normal(random.PRNGKey(0), (N, 1)),
                             "sigma": jnp.array(10.0)}
-init_states = list(map(rms_integrator[0], (init_sample(seed) for seed in range(4))))
+init_states = list(map(rms_integrator[0], (init_sample(seed) for seed in range(15))))
 
 
 rms_results = rms_run(*init_states, iterations=iterations)
@@ -181,7 +181,8 @@ sigma_rms = onp.array(jnp.squeeze(jnp.concatenate([rms["samples"]["variables"]["
 # Results
 #
 ################################################################################
-
+print(rms_results[0]["samples"]["variables"]["sigma"][0:10])
+print(rms_results[1]["samples"]["variables"]["sigma"][0:10])
 
 plt.figure()
 plt.title("Sigma")

@@ -128,7 +128,8 @@ def mcmc(solver,
         # Vmap of cond is transformed to lax.select. Thus, true branch and false
         # branch is run, such that all samples are saved and for every sample an
         # index update is performed.
-        raise NotImplementedError("Very inefficient.")
+        # raise NotImplementedError("Very inefficient.")
+        print("Run vmapped")
         mapped_run = jit(util.list_vmap(partial(_run, static_info[0])))
       else:
         raise NotImplementedError(f"Strategy {strategy} is unknown. ")

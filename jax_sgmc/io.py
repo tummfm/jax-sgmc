@@ -80,7 +80,8 @@ except ModuleNotFoundError:
 
 from jax_sgmc import data
 from jax_sgmc import scheduler
-from jax_sgmc.util import host_callback
+from jax_sgmc.util import scan_vmap
+from jax.experimental import host_callback
 
 PyTree = Any
 
@@ -754,6 +755,13 @@ def save(data_collector: DataCollector = None,
     )
     return initial_state
 
+  @scan_vmap.stop_vmap_decorator
+  def _save_helper(keep, state, sample):
+    return lax.cond(keep,
+                    _save_wrapper,
+                    lambda *args: 0,
+                    (state.chain_id, sample))
+
   # Todo: Generalize the saving by contracting the scheduler state and the
   #       solver state to a single checkpointing state.
   def save(state: saving_state,
@@ -764,10 +772,7 @@ def save(data_collector: DataCollector = None,
     """Calls the data collector on the host via host callback module."""
 
     # Save sample if samples is not subject to burn in or discarded by thinning
-    saved = lax.cond(keep,
-                     _save_wrapper,
-                     lambda *args: 0,
-                     (state.chain_id, sample))
+    saved = _save_helper(keep, state, sample)
 
     # Todo: Implement checkpointing
     # last_checkpoint = lax.cond(time_for_checkpoint,
@@ -874,6 +879,13 @@ def no_save() -> Saving:
       data=new_data)
     return new_state
 
+  @scan_vmap.stop_vmap_decorator
+  def _save_helper(keep, state, sample):
+    return lax.cond(keep,
+                    _save_sample,
+                    lambda args: args[0],
+                    (state, sample))
+
   def save(state: saving_state,
            keep: jnp.bool_,
            sample: Any,
@@ -886,10 +898,7 @@ def no_save() -> Saving:
 
     """
     sample = pytree_to_dict(sample)
-    new_state = lax.cond(keep,
-                         _save_sample,
-                        lambda args: args[0],
-                         (state, sample))
+    new_state = _save_helper(keep, state, sample)
 
     return new_state, None
 

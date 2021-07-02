@@ -22,6 +22,7 @@ import numpy as onp
 import pytest
 
 from jax_sgmc import data, util
+from jax_sgmc.util import stop_vmap
 
 @pytest.mark.tensorflow
 class TestTFLoader:
@@ -105,7 +106,6 @@ class TestNumpyLoader:
         yield [i + 0.1 * 1, i + 0.11]
     dataset = {'a': onp.array(list(generate_a(n))),
                'b': onp.array(list(generate_b(n)))}
-    print(dataset)
     return dataset
 
   @pytest.fixture(scope='function', params=[1, 3, 5])
@@ -293,35 +293,43 @@ class TestRandomAccess:
     assert DL.random_batches.call_count == int(4.1)
 
   # Todo: Improve this test
-  def test_vmap(self, data_loader_mock):
-    DL, format, _ = data_loader_mock
+  @pytest.mark.parametrize("cs", (1, 5, 11, 17))
+  def test_vmap(self, cs):
+    # Cannot use the tensorflow dataloader for this test as it does not support
+    # starting the pipelines at the same state.
+
+    x = onp.arange(23)
+    y = 1.1 * onp.arange(23)
+    data_loader = data.NumpyDataLoader(x=x, y=y, mini_batch_size=3)
 
     states_count = 5
 
-    init_fn, batch_fn = data.random_reference_data(DL, format.cs)
+    init_fn, batch_fn = data.random_reference_data(data_loader, cs)
 
-    def test_function_data_loader(state):
+    def test_function(state):
       state, (batch, _) = batch_fn(state, information=True)
       return jax.tree_map(jnp.sum, batch)
 
-    init_states = [
-      init_fn(key=jax.random.PRNGKey(idx))
+    test_function_vmapped = util.list_vmap(test_function)
+
+    init_states_vmap = [
+      init_fn(seed=idx)
       for idx in range(states_count)
     ]
+    init_states = [
+      init_fn(seed=idx)
+      for idx in range(states_count)
+    ]
+
+    test_util.check_eq(init_states[0].cached_batches, init_states_vmap[0].cached_batches)
 
     # Init states vorspulen
     for idx in range(states_count):
       for _ in range(idx):
-        init_states[idx], _ = batch_fn(init_states[idx], information=True)
-    init_states = util.pytree_list_to_leaves(init_states)
+        init_states[idx], _ = batch_fn(init_states[idx])
+        init_states_vmap[idx], _ = batch_fn(init_states_vmap[idx])
 
-    helper_fn = jax.jit(data.vmap_helper(partial(batch_fn, information=True)))
-    _, (batches, _) = helper_fn(init_states)
+    sequential_results = list(map(test_function, init_states))
+    vmapped_results = test_function_vmapped(*init_states_vmap)
 
-    vmap_helper_result = jax.vmap(partial(jax.tree_map, jnp.sum))(batches)
-    vmap_result = jax.vmap(test_function_data_loader)(init_states)
-
-    def check_fn(a, b):
-      assert jnp.all(a == b)
-
-    jax.tree_map(check_fn, vmap_helper_result, vmap_result)
+    test_util.check_eq(sequential_results, vmapped_results)

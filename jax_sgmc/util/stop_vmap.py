@@ -24,15 +24,16 @@ from jax import numpy as jnp
 stop_vmap_p = core.Primitive("stop_vmap")
 stop_vmap_p.multiple_results = True
 
-def stop_vmap(fun):
-  def wrapped(*args):
+def stop_vmap(wrapped):
+  def wrapper(*args, **kwargs):
+    fun = partial(wrapped, **kwargs)
     args_flat, in_tree = tree_flatten(args)
     in_avals = [core.raise_to_shaped(core.get_aval(x)) for x in args_flat]
     wrapped_fun, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
     jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, in_avals)
     outs = stop_vmap_p.bind(*args_flat, jaxpr=jaxpr, consts=consts)
     return tree_unflatten(out_tree(), outs)
-  return wrapped
+  return wrapper
 
 def stop_vmap_decorator(fun):
   def new_fun(*args):
@@ -41,7 +42,6 @@ def stop_vmap_decorator(fun):
 
 def stop_vmap_prim(*args, jaxpr, consts):
   # Just return the function evaluation
-  print(core.eval_jaxpr(jaxpr, consts, *args))
   return core.eval_jaxpr(jaxpr, consts, *args)
 
 def stop_vmap_abstract_eval(*arg_types, jaxpr, consts):

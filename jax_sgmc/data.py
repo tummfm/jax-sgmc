@@ -162,7 +162,7 @@ class DataLoader(metaclass=abc.ABCMeta):
     """
     # Append the cache size to the batch_format
     def append_cache_size(leaf):
-      new_shape = tuple(onp.append(cache_size, leaf.shape))
+      new_shape = tuple(int(s) for s in onp.append(cache_size, leaf.shape))
       return jax.ShapeDtypeStruct(
         dtype=leaf.dtype,
         shape=new_shape
@@ -276,6 +276,10 @@ class TensorflowDataLoader(DataLoader):
     jax_batch = tree_util.tree_map(jnp.array, numpy_batch)
     return jax_batch
 
+  def ordered_batches(self, chain_id: int) -> PyTree:
+    """Return ordered batches."""
+    raise NotImplementedError
+
 
 class NumpyDataLoader(DataLoader):
   """Load complete dataset into memory from multiple numpy arrays."""
@@ -302,7 +306,6 @@ class NumpyDataLoader(DataLoader):
       self._batch_format[name] = jax.ShapeDtypeStruct(
         dtype=self._reference_data[name].dtype,
         shape=tuple(onp.append(mini_batch_size, array.shape[1:])))
-      print(self._batch_format)
 
     self._idx_offset = []
     self._rng = []
@@ -721,30 +724,3 @@ def tree_index(pytree: PyTree, index):
     else:
       return leaf[index, ::]
   return split_tree_imp(pytree)
-
-
-def vmap_helper(batch_fn):
-  """Sequentially load a minibatch.
-
-  host_callback.call() currently does not support vmap(). Therefore, this helper
-  function can be used to load the reference data before a call to vmap.
-
-  Args:
-    batch_fn: Function returned by ``random_reference_data`` or
-    ``ordered_reference_data```
-
-  Returns:
-    Returns a function taking a batch of reference_data states and returns a
-    batch of mini-batches.
-
-  """
-
-  def get_fn(_, state):
-    state, minibatch = batch_fn(state)
-    return None, {"states": state, "minibatches": minibatch}
-
-  def vmap_batch_fn(states):
-    _, minibatches = lax.scan(get_fn, None, states)
-    return minibatches["states"], minibatches["minibatches"]
-
-  return vmap_batch_fn

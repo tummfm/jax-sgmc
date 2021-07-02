@@ -1,12 +1,21 @@
 jax_sgmc.data
 ==============
 
-
 .. automodule:: jax_sgmc.data
 
 
+API
+----
+
+States
+________
+
+.. autoclass:: jax_sgmc.data.MiniBatchInformation
+.. autoclass:: jax_sgmc.data.RandomDataState
+.. autoclass:: jax_sgmc.data.FullDataState
+
 Data Loaders
-------------
+______________
 
 
 .. autoclass:: jax_sgmc.data.DataLoader
@@ -15,38 +24,17 @@ Data Loaders
 .. autoclass:: jax_sgmc.data.TensorflowDataLoader
     :members:
 
-.. autoclass::jax_sgmc.data.NumpyDataLoader
+.. autoclass:: jax_sgmc.data.NumpyDataLoader
     :members:
 
-Data Passing
--------------
-
-Big Data but limited device memory disallows to store all reference data on the
-computing device. With the following functions, data mini-batches of data can be
-requested just as the data would be fully loaded on the device and thus enables
-to jit-compile or vmap the entiere function. In the bachground, the data is
-passed sequentially via host_callback.call().
-
-
-.. autoclass:: jax_sgmc.data.mini_batch_information
-
-Random mini-batch access
-__________________________
-
-.. autoclass:: jax_sgmc.data.random_data_state
+Host Callback Wrappers
+________________________
 
 .. autofunction:: jax_sgmc.data.random_reference_data
-
-
-
-
-Ordered mini-batch access
-___________________________
-
-Comming soon....
+.. autofunction:: jax_sgmc.data.full_reference_data
 
 Utility Functions
--------------------
+__________________
 
 .. autosummary::
    :toctree: _autosummary

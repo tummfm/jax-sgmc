@@ -33,20 +33,19 @@ from jax import vmap, pmap, lax, tree_util
 import jax.numpy as jnp
 
 from jax_sgmc import util
-from jax_sgmc.data import full_data_state, MiniBatch
+from jax_sgmc.data import CacheState, MiniBatch
 
 # Here we define special types
 
 PyTree = Any
 Array = util.Array
-Potential = Callable[[PyTree, full_data_state], Array]
 
 Likelihood = Callable[[Optional[PyTree], PyTree, MiniBatch],
                       Union[Tuple[Array, PyTree], Array]]
 Prior = Callable[[PyTree], Array]
 
 StochasticPotential = Callable[[PyTree, MiniBatch], Tuple[Array, PyTree]]
-FullPotential = Callable[[PyTree, full_data_state], Array]
+FullPotential = Callable[[PyTree, CacheState], Tuple[Array, PyTree]]
 
 # Todo: Possibly support soft-vmap (numpyro)
 # Todo: Implement evaluation via pmap
@@ -193,36 +192,40 @@ def minibatch_potential(prior: Prior,
 
 def full_potential(prior: Callable[[PyTree], Array],
                    likelihood: Callable[[PyTree, PyTree], Array],
-                   strategy: AnyStr = "map"
-                   ) -> Callable[[PyTree, full_data_state], Array]:
+                   full_data_map: Callable,
+                   strategy: AnyStr = "map",
+                   ) -> FullPotential:
   """Transforms a pdf to compute the full potential over all reference data.
 
   Args:
-      prior: Probability density function which is evaluated for a single
-          sample.
-      likelihood: Probability density function which is evaluated for a single
-          first argument but multiple second arguments.
+    prior: Probability density function which is evaluated for a single
+      sample.
+    likelihood: Probability density function. If ``has_state = True``, then the
+      first argument is the model state, otherwise the arguments are ``sample,
+      reference_data``.
+    full_data_map: Maps the likelihood over the complete reference data.
+      Returned from :func:`jax_sgmc.data.full_reference_data`
+    strategy: Determines how to evaluate the model function with respect for
+      sample:
+
+      - ``'map'`` sequential evaluation
+      - ``'vmap'`` parallel evaluation via vectorization
+      - ``'pmap'`` parallel evaluation on multiple devices
+
+    has_state: If an additional state is provided for the model evaluation
+    is_batched: If likelihood expects a batch of observations instead of a
+      single observation. If the likelihood is batched, choosing the strategy
+      has no influence on the computation.
 
   Returns:
-      Returns a function which evaluates the stochastic potential for all
-      reference data. The reference data is accessed by providing an instance
-      of the class `ReferenceData`.
+    Returns a function which evaluates the stochastic potential for a mini-batch
+    of data. The first argument are the latent variables and the second is the
+    mini-batch.
 
   """
 
-  # Will be needed here as this function just loops over all minibatches
-  # Todo: Implement strategy to evaluate mini-batches for full data
+  # body_potential = minibatch_potential()
 
-  # minibatch_eval = minibatch_potential()
-
-  assert False, "Currently not implemented"
-
-  # The final function to evaluate the potential including likelihood and prio
-
-  # def potential_function(sample: PyTree,
-  #                        refernce_data: ReferenceData
-  #                        ) -> Array:
-  #   pass
 
   # return potential_function
 

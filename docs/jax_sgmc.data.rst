@@ -11,8 +11,7 @@ States
 ________
 
 .. autoclass:: jax_sgmc.data.MiniBatchInformation
-.. autoclass:: jax_sgmc.data.RandomDataState
-.. autoclass:: jax_sgmc.data.FullDataState
+.. autoclass:: jax_sgmc.data.CacheState
 
 Data Loaders
 ______________

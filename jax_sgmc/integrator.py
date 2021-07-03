@@ -24,7 +24,7 @@ import jax.numpy as jnp
 
 from jax_sgmc.adaption import AdaptionStrategy
 from jax_sgmc.potential import StochasticPotential
-from jax_sgmc.data import RandomBatch, full_data_state
+from jax_sgmc.data import RandomBatch, CacheState
 from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tree_matmul
 from jax_sgmc.scheduler import schedule
 
@@ -79,7 +79,7 @@ def random_tree(key, a):
 
 def reversible_leapfrog(key: Array,
                         T: Array,
-                        data: full_data_state,
+                        data: CacheState,
                         potential_strategy: AnyStr='map'
                         ) -> Callable[[leapfrog_state], leapfrog_state]:
   """Initializes a reversible leapfrog integrator.
@@ -120,7 +120,7 @@ def reversible_leapfrog(key: Array,
 
 def friction_leapfrog(key: Array,
                       T: Array,
-                      data: full_data_state,
+                      data: CacheState,
                       potential_strategy: AnyStr='map'
                       ) -> Callable[[leapfrog_state], leapfrog_state]:
   """Initializes the original SGHMC leapfrog integrator.

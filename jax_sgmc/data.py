@@ -38,7 +38,11 @@ already present as numpy-arrays.
 
   >>> import numpy as onp
   >>> from jax_sgmc import data
-  >>>
+
+First we set up the dataset. This is very simply, as each array can be asigned
+as a keyword argument to the dataloader. The keywords of the single arrays form
+the keys of the pytree-dict, bundling all observations.
+
   >>> # The arrays must have the same length algong the first dimension,
   >>> # corresponding to the total observation count
   >>> x = onp.arange(10)
@@ -47,9 +51,10 @@ already present as numpy-arrays.
   >>> # The batch size can be specified globally or per chain
   >>> data_loader_global = data.NumpyDataLoader(2, x_r=x, y_r=y)
   >>> data_loader_per_chain = data.NumpyDataLoader(x_r=x, y_r=y)
-  >>>
-  >>> # If the model needs data for initialization, an all zero batch can be
-  >>> # drawn with the correct shapes and dtypes
+
+Some models needs to now the shape and dtype of the reference data. Therefore,
+a all-zero batch can be drawn from the dataloader.
+
   >>> print(data_loader_global.initializer_batch())
   {'x_r': DeviceArray([0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
                [0., 0.]], dtype=float32)}
@@ -57,16 +62,20 @@ already present as numpy-arrays.
   {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
                [0., 0.],
                [0., 0.]], dtype=float32)}
-  >>>
-  >>> # To access the data, the data loader must be passed to an Host Callback
-  >>> # Wrapper. The cache size determines how many batches are present on the
-  >>> # device, which leads to faster computation but increased device memory
-  >>> # usage.
+
+The host callback wrappers cache some data in the device memory to reduce the
+number of calls to the host. The cache size equals the number of batches stored
+on the device. A bigger cache size is more effective in computation time, but
+has an increased device memory consumption.
+
   >>> grd_init, grd_batch = data.random_reference_data(data_loader_global, 100)
   >>> # If the batch size has not been provided globally, it must be provided
   >>> # here.
   >>> rd_init, rd_batch = data.random_reference_data(data_loader_per_chain, 100, 2)
-  >>>
+
+Some data loaders, such as the Numpy Data Loader, accept keyword arguments in
+the init function to determnine the starting points of the chains.
+
   >>> grd_state, rd_state = grd_init(seed=0), rd_init(seed=0)
   >>> new_state, grd_batch = grd_batch(grd_state)
   >>> new_state, (rd_batch, info) = rd_batch(rd_state, information=True)
@@ -78,7 +87,7 @@ already present as numpy-arrays.
                [0., 0.]], dtype=float32)}
   >>> # If necessary, information about the total sample count can be passed
   >>> print(info)
-  mini_batch_information(observation_count=10, batch_size=2)
+  MiniBatchInformation(observation_count=10, batch_size=2)
 
 
 Tensorflow Data Loader
@@ -97,7 +106,12 @@ available on tensorflow_datasets.
   >>> def show_data(data):
   ...   for key, item in data.items():
   ...     print(f"{key} with shape {item.shape} and dtype {item.dtype}")
-  >>>
+
+The pipeline returned by tfds load can be directly passet to the data loader.
+However, not all tensorflow data types can be transformed to jax data types, for
+eample the feature 'id', which is a string. Those keys can be simply excluded
+by passing the keyword argument `exclude_keys`.
+
   >>> # The data pipeline can be used directly
   >>> pipeline, info = tfds.load("cifar10", split="train", with_info=True)
   >>> print(info.features)
@@ -107,9 +121,6 @@ available on tensorflow_datasets.
       'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
   })
   >>>
-  >>> # The data loader needs a cache size for random data access. Not all
-  >>> # objects of the dataset can be transformed into jax types. Those keys
-  >>> # must be excluded.
   >>> data_loader = data.TensorflowDataLoader(pipeline, 1000, 10, exclude_keys=['id'])
   >>>
   >>> # If the model needs data for initialization, an all zero batch can be
@@ -117,11 +128,12 @@ available on tensorflow_datasets.
   >>> show_data(data_loader.initializer_batch())
   image with shape (1000, 32, 32, 3) and dtype uint8
   label with shape (1000,) and dtype int32
-  >>>
-  >>> # To access the data, the data loader must be passed to an Host Callback
-  >>> # Wrapper. The cache size determines how many batches are present on the
-  >>> # device, which leads to faster computation but increased device memory
-  >>> # usage.
+
+The host callback wrappers cache some data in the device memory to reduce the
+number of calls to the host. The cache size equals the number of batches stored
+on the device. A bigger cache size is more effective in computation time, but
+has an increased device memory consumption.
+
   >>> data_init, data_batch = data.random_reference_data(data_loader, 100)
   >>>
   >>> init_state = data_init()
@@ -129,6 +141,67 @@ available on tensorflow_datasets.
   >>> show_data(batch)
   image with shape (1000, 32, 32, 3) and dtype uint8
   label with shape (1000,) and dtype int32
+
+Mapping over Full Dataset
+--------------------------
+
+It is also possible to map a function over the complete dataset provided by a
+data loader. In each iteration, the function is mapped over a batch of data to
+speed up the calculation but limit the memory consumption.
+
+In this toy example, the dataset consits of the potential bases
+:math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \\right\}`. In a scan loop,
+the sum of the potentials with given exponents is calculated:
+
+.. math::
+
+  f_e = \sum_{i=1}^{10}d_i^e \mid d_i \in \mathcal{D}, k = 0,\ldots, 2.
+
+.. doctest::
+
+  >>> from functools import partial
+  >>> import jax.numpy as jnp
+  >>> from jax.lax import scan
+  >>> from jax_sgmc import data
+
+First, the data loader must be set up. The mini batch size is not required to
+truly divide the total observation count. This is realized by filling up the
+last batch with some values, which are sorted out either automatically or
+directly by the user with a provided mask.
+
+  >>> base = jnp.arange(10)
+  >>>
+  >>> data_loader = data.NumpyDataLoader(base=base, mini_batch_size=4)
+
+The mask is an boolean array with `True` if the value is valid and `False` if it
+is just a filler. If set to `maksing=False` (default), no positional argument
+mask is expected in the function signature.
+
+  >>> def sum_potentials(exp, data, mask, unused_state):
+  ...   # Mask out the invalid samples (filler values, already mapped over)
+  ...   sum = jnp.sum(mask * jnp.power(data['base'], exp))
+  ...   return sum, unused_state
+  >>>
+  >>> init_fun, map_fun = data.full_reference_data(data_loader,
+  ...                                              cached_batches_count=3,
+  ...                                              masking=True)
+
+The results per batch must be post-processed. If `masking=False`, a result for
+each observation is returned. Therefore, using the masking option improves the
+memory consumption.
+
+  >>> # Calculate for multiple exponents:
+  >>> def body_fun(data_state, exp):
+  ...   map_results = map_fun(partial(sum_potentials, exp), data_state, None)
+  ...   # Currently, we only summed over each mini-batch but not the whole
+  ...   # dataset.
+  ...   data_state, (batch_sums, unused_state) = map_results
+  ...   return data_state, (jnp.sum(batch_sums), unused_state)
+  >>>
+  >>> init_data_state = init_fun()
+  >>> _, (result, _) = scan(body_fun, init_data_state, jnp.arange(3))
+  >>> print(result)
+  [ 10  45 285]
 
 """
 
@@ -322,6 +395,7 @@ class TensorflowDataLoader(DataLoader):
     self._exclude_keys = [] if exclude_keys is None else exclude_keys
     self._mini_batch_size = mini_batch_size
     self._shuffle_cache = shuffle_cache
+
     self._random_pipelines = []
     self._full_data_pipelines = []
 
@@ -609,7 +683,7 @@ class NumpyDataLoader(DataLoader):
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
 
-class RandomDataState(NamedTuple):
+class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.
 
   Args:
@@ -625,26 +699,7 @@ class RandomDataState(NamedTuple):
   current_line: Array
   chain_id: Array
 
-class FullDataState(NamedTuple):
-  """Caches several batches of sequentially batched reference data.
-
-  Args:
-    cached_batches: An array of mini-batches
-    cached_batches_count: Number of cached mini-batches. Equals the first
-      dimension of the cached batches
-    current_line: Marks the next batch to be returned.
-    chain_id: Indentifier of the chain
-    current_observation: Keep track
-
-  """
-  cached_batches: PyTree
-  cached_batches_count: Array
-  current_line: Array
-  chain_id: Array
-  current_observation: Array
-
-random_data_state = RandomDataState
-full_data_state = FullDataState
+random_data_state = CacheState
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int=100,
@@ -773,8 +828,10 @@ def random_reference_data(data_loader: DataLoader,
 # Todo: Implement utility to handle full dataset
 
 def full_reference_data(data_loader: DataLoader,
-                          cached_batches_count: int = 100
-                          ) -> OrderedBatch:
+                        cached_batches_count: int = 100,
+                        mb_size: int = None,
+                        masking: bool = False
+                        ) -> OrderedBatch:
   """Initializes reference data access from jit-compiled functions.
 
   Utility to sequentially load reference data into a jit-compiled function. The
@@ -784,6 +841,11 @@ def full_reference_data(data_loader: DataLoader,
     data_loader: Reads data from storage.
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
+    masking: If set to true, the mapped function is called with a positional
+      argument mask and expected to return the results with a reduced dimension.
+      Setting to true changes the signature from `fun(data, carry)` to
+      `fun(data, mask, carry)`.
+
   Returns:
     Returns a tuple of functions to initialize a new reference data state and
     get a minibatch from the reference data state
@@ -795,7 +857,8 @@ def full_reference_data(data_loader: DataLoader,
   # The format of the mini batch is static, thus it must not be passed
   # in form of a state.
 
-  hcb_format, mb_information = data_loader.batch_format(cached_batches_count)
+  hcb_format, mb_information = data_loader.batch_format(cached_batches_count,
+                                                        mb_size=mb_size)
 
   # The definition requires passing an argument to the host function. The shape
   # of the returned data must be known before the first call
@@ -809,14 +872,15 @@ def full_reference_data(data_loader: DataLoader,
                      result_shape=hcb_format)
     return data
 
-  def new_cache_fn(state: random_data_state) -> random_data_state:
+  def new_cache_fn(state: CacheState) -> CacheState:
     """This function is called if the cache must be refreshed."""
     new_data = get_data(state.chain_id)
-    new_state = random_data_state(
+    new_state = CacheState(
       cached_batches_count=state.cached_batches_count,
       cached_batches=new_data,
       current_line=0,
-      chain_id=state.chain_id)
+      chain_id=state.chain_id,
+    )
     return new_state
 
   def old_cache_fn(state: random_data_state) -> random_data_state:
@@ -825,23 +889,22 @@ def full_reference_data(data_loader: DataLoader,
 
   # Thes following functions are passed back
 
-  def init_fn(**kwargs) -> random_data_state:
+  def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = data_loader.register_random_pipeline(
+    chain_id = data_loader.register_ordered_pipeline(
       cached_batches_count,
       **kwargs)
-    initial_state = data_loader.random_batches(chain_id)
-    inital_cache_state=random_data_state(
+    initial_state = data_loader.ordered_batches(chain_id)
+    inital_cache_state=CacheState(
       cached_batches=initial_state,
       cached_batches_count=cached_batches_count,
       current_line=0,
-      chain_id=chain_id
+      chain_id=chain_id,
     )
     return inital_cache_state
 
-  def batch_fn(data_state: random_data_state,
-               information: bool = False
+  def _batch_fn(data_state: CacheState
                ) -> Union[Tuple[random_data_state, MiniBatch],
                           Tuple[random_data_state,
                                 Tuple[MiniBatch, mini_batch_information]]]:
@@ -849,7 +912,6 @@ def full_reference_data(data_loader: DataLoader,
 
     Args:
       data_state: State with cached samples
-      information: Whether to return batch information
 
     Returns:
       Returns the new data state and the next batch. Optionally also also a
@@ -867,25 +929,77 @@ def full_reference_data(data_loader: DataLoader,
                            data_state.cached_batches_count)
 
     # Read the current line from the cache and
-    random_mini_batch = tree_index(data_state.cached_batches, current_line)
+    batch = tree_index(data_state.cached_batches, current_line)
     current_line = current_line + 1
 
-    new_state = random_data_state(
+    new_state = CacheState(
       cached_batches=data_state.cached_batches,
       cached_batches_count=data_state.cached_batches_count,
       current_line=current_line,
-      chain_id=data_state.chain_id)
+      chain_id=data_state.chain_id,
+    )
 
     # The static_information contains information such as total observation
     # count and must be a valid jax type.
 
-    if information:
-      return new_state, (random_mini_batch, mb_information)
+    return new_state, batch
+
+  num_iterations = int(onp.ceil(
+    mb_information.observation_count / mb_information.batch_size))
+
+  batch_size = mb_information.batch_size
+
+  def _uninitialized_body_fn(fun, state, iteration):
+    # The mask has is 1 if the observation is valid and 0 otherwise. This is
+    # necessary to ensure, that fun is always called with the same tree shape.
+    observations = iteration * batch_size + jnp.arange(batch_size)
+    mask = observations < mb_information.observation_count
+
+    data_state, fun_state = state
+    data_state, batch = _batch_fn(data_state)
+
+    if masking:
+      result, fun_state = fun(batch, mask, fun_state)
     else:
-      return new_state, random_mini_batch
+      result, fun_state = fun(batch, fun_state)
+
+    return (data_state, fun_state), result
+
+  def batch_scan(fun: Callable[[PyTree, Array, PyTree], Tuple[PyTree, PyTree]],
+                 data_state: CacheState,
+                 carry: PyTree):
+    """Map the function over all data and return the results.
+
+    Args:
+      fun: Function accepting a batch of data, a mask and a state.
+      data_state: Reference data state.
+      carry: A argument that is carried over between iterations
+      args: Positional arguments to the function
+
+    """
+    _body_fn = partial(_uninitialized_body_fn, fun)
+    out, results = lax.scan(
+      _body_fn, (data_state, carry), onp.arange(num_iterations))
+    data_state, carry = out
+
+    if masking:
+      true_results = results
+    else:
+      # The results must be concatenated
+      concat_results = tree_util.tree_map(
+        partial(jnp.concatenate, axis=0),
+        results)
+      # Invalid results (fillers) must be thrown away
+      true_results = tree_util.tree_map(
+        lambda leaf: leaf[0:mb_information.observation_count],
+        concat_results
+      )
+
+    return data_state, (true_results, carry)
 
   # Todo: Return static information -> number of mini_batches
-  return init_fn, batch_fn
+  return init_fn, batch_scan
+
 
 def tree_dtype_struct(pytree: PyTree):
   """Returns a tree with leaves only representing shape and type."""

@@ -276,12 +276,27 @@ class DataLoader(metaclass=abc.ABCMeta):
   #       def checkpoint(self, ...):
 
   def save_state(self, chain_id: int):
-    """Returns all necessary information to restore the dataloader state."""
+    """Returns all necessary information to restore the dataloader state.
+
+    Args:
+      chain_id: Each chain can be checkpointed independently.
+
+    Returns:
+      Returns necessary information to restore the state of the chain via
+      :func:`load_state`.
+
+    """
     raise NotImplementedError("This method must be overwritten to allow "
                               "checkpointing of the data loader.")
 
   def load_state(self, chain_id: int, data):
-    """Restores dataloader state from previously computed checkpoint."""
+    """Restores dataloader state from previously computed checkpoint.
+
+    Args:
+      chain_id: The chain to restore the state.
+      data: Data from :func:`save_state` to restore state of the chain.
+
+    """
     raise NotImplementedError("This method must be overwritten to allow "
                               "checkpointing of the data loader.")
 
@@ -291,14 +306,15 @@ class DataLoader(metaclass=abc.ABCMeta):
                                mb_size: int = None,
                                **kwargs
                                ) -> int:
-    """Registers a data pipeline for random data access.
+    """Register a new chain which draw samples randomly.
 
     Args:
-      cache_size: Number of mini_batches in device memory on the same time
-      **kwargs: Additional information depending on data loader
+      cache_size: The number of drawn batches.
+      mb_size: The number of observations per batch.
+      seed: Set the random seed to start the chain at a well defined state.
 
     Returns:
-      Returns an identifier of the chain.
+      Returns the id of the new chain.
 
     """
 
@@ -308,17 +324,14 @@ class DataLoader(metaclass=abc.ABCMeta):
                                 mb_size: int = None,
                                 **kwargs
                                 ) -> int:
-    """Registers a data pipeline for ordered data access.
-
-    Ordered data access is required for AMAGOLD to evaluate the true potential
-    over all reference data.
+    """Register a chain which assembles batches in an ordered manor.
 
     Args:
-      cache_size: Number of mini_batches in device memory on the same time
-      **kwargs: Additional information depending on data loader
+      cache_size: The number of drawn batches.
+      mb_size: The number of observations per batch.
 
     Returns:
-      Returns an identifier of the chain.
+      Returns the id of the new chain.
 
     """
 
@@ -331,6 +344,10 @@ class DataLoader(metaclass=abc.ABCMeta):
   @abc.abstractmethod
   def _info(self):
     """Information about the dataset. """
+
+  @abc.abstractmethod
+  def get_batches(self, chain_id: int) -> PyTree:
+    """Return batches from an ordered or random chain. """
 
   def mini_batch_format(self):
     """namedtuple with information about mini-batch."""
@@ -378,18 +395,24 @@ class DataLoader(metaclass=abc.ABCMeta):
     batch = tree_util.tree_map(append_cache_size, obs_format)
     return batch
 
-  @abc.abstractmethod
-  def get_batches(self, chain_id: int) -> PyTree:
-    """Return batches from an ordered or random chain. """
-
 
 class TensorflowDataLoader(DataLoader):
   """Load data from a tensorflow dataset object.
 
+  The tensorflow datasets package provides a high number of ready to go
+  datasets, which can be provided directly to the Tensorflow Data Loader.
+
+  .. doctest::
+
+    >>> import tensorflow_datasets as tdf
+    >>> from jax_sgmc import data
+    >>>
+    >>> pipeline = tfds.load("cifar10", split="train")
+    >>> data_loader = data.TensorflowDataLoader(pipeline, 1000, 10, exclude_keys=['id'])
+
   Args:
-    pipeline: A tensorflow data pipeline, can also be obtained from the
+    pipeline: A tensorflow data pipeline, which can be obtained from the
       tensorflow dataset package
-    mini_batch_size:
 
   """
 
@@ -400,74 +423,40 @@ class TensorflowDataLoader(DataLoader):
                exclude_keys: List = None):
     super().__init__()
     # Tensorflow is in general not required to use the library
+    assert mini_batch_size is None, "Depreceated"
     assert TFDataSet is not None, "Tensorflow must be installed to use this " \
                                   "feature."
     assert tfds is not None, "Tensorflow datasets must be installed to use " \
                              "this feature."
 
     self._observation_count = jnp.int32(pipeline.cardinality().numpy())
+    # Basic pipeline, from which all other pipelines are constructed
     self._pipeline = pipeline
     self._exclude_keys = [] if exclude_keys is None else exclude_keys
-    self._mini_batch_size = mini_batch_size
     self._shuffle_cache = shuffle_cache
 
-    self._random_pipelines = []
-    self._full_data_pipelines = []
-
-    # Backwards compatibility. The mini_batch size can be provided globally for
-    # all chains or per chain.
-    if self._mini_batch_size is None:
-      self._mini_batch_size = []
-    else:
-      self._mini_batch_size = mini_batch_size
-
-  def _check_mb_size(self, mb_size):
-    """Check if mb_size is provided globally for all chains. """
-    if isinstance(self._mini_batch_size, int):
-      assert (mb_size is None) or (self._mini_batch_size == mb_size), \
-        f"Called with non-matching mini-batch sizes: got " \
-        f"{self._mini_batch_size} and {mb_size}."
-      mb_size = self._mini_batch_size
-    else:
-      assert mb_size is not None, "Size of mini-batch has not been specified."
-    return mb_size
-
-  def _batch_format(self, mb_size: int = None):
-    """Returns pytree with information about shape and dtype of a minibatch. """
-    mb_size = self._check_mb_size(mb_size)
-
-    data_spec = self._pipeline.element_spec
-    if self._exclude_keys is not None:
-      not_excluded_elements = {id: elem for id, elem in data_spec.items()
-                               if id not in self._exclude_keys}
-    else:
-      not_excluded_elements = data_spec
-    def leaf_dtype_struct(leaf):
-      shape = tuple(s for s in leaf.shape if s is not None)
-      mb_shape = tuple(onp.append(mb_size, shape))
-      mb_shape = tree_util.tree_map(int, mb_shape)
-      dtype = leaf.dtype.as_numpy_dtype
-      return jax.ShapeDtypeStruct(
-        dtype=dtype,
-        shape=mb_shape)
-    return tree_util.tree_map(leaf_dtype_struct, not_excluded_elements)
-
-  def _mini_batch_format(self, mb_size: int = None) -> mini_batch_information:
-    """Returns information about total samples count and batch size. """
-    mb_size = self._check_mb_size(mb_size)
-    return mini_batch_information(observation_count=self._observation_count,
-                                  batch_size=mb_size)
+    self._pipelines: List[TFDataSet] = []
 
   def register_random_pipeline(self,
                                cache_size: int = 1,
                                mb_size: int = None,
                                **kwargs) -> int:
+    """Register a new chain which draw samples randomly.
+
+    Args:
+      cache_size: The number of drawn batches.
+      mb_size: The number of observations per batch.
+
+    Returns:
+      Returns the id of the new chain.
+
+    """
+
     # Assert that not kwargs are passed with the intention to control the
     # initial state of the tensorflow data loader
     assert kwargs == {}, "Tensorflow data loader does not accept additional "\
                          "kwargs"
-    mb_size = self._check_mb_size(mb_size)
-    new_chain_id = len(self._random_pipelines)
+    new_chain_id = len(self._pipelines)
 
     # Randomly draw a number of cache_size mini_batches, where each mini_batch
     # contains self.mini_batch_size elements.
@@ -481,7 +470,7 @@ class TensorflowDataLoader(DataLoader):
     random_data = tfds.as_numpy(random_data)
     random_data = iter(random_data)
 
-    self._random_pipelines.append(random_data)
+    self._pipelines.append(random_data)
 
     return new_chain_id
 
@@ -490,25 +479,63 @@ class TensorflowDataLoader(DataLoader):
                                 mb_size: int = None,
                                 **kwargs
                                 ) -> int:
+    """Register a chain which assembles batches in an ordered manner.
+
+    Args:
+      cache_size: The number of drawn batches.
+      mb_size: The number of observations per batch.
+
+    Returns:
+      Returns the id of the new chain.
+
+    """
     raise NotImplementedError
 
-  def random_batches(self, chain_id: int) -> PyTree:
-    assert chain_id < len(self._random_pipelines), f"Pipe {chain_id} does not" \
-                                                   f"exist."
+  def get_batches(self, chain_id: int) -> PyTree:
+    """Draws a batch from a chain.
 
-    # Not supportet data types, such as strings, must be excluded before
+    Args:
+      chain_id: ID of the chain, which holds the information about the form of
+        the batch and the process of assembling.
+
+    Returns:
+      Returns a superbatch as registered by :func:`register_random_pipeline` or
+      :func:`register_ordered_pipeline` with `cache_size` batches holding
+      `mb_size` observations.
+
+    """
+
+    # Not supported data types, such as strings, must be excluded before
     # transformation to jax types.
-    numpy_batch = next(self._random_pipelines[chain_id])
+    numpy_batch = next(self._pipelines[chain_id])
     if self._exclude_keys is not None:
       for key in self._exclude_keys:
         del numpy_batch[key]
 
-    jax_batch = tree_util.tree_map(jnp.array, numpy_batch)
-    return jax_batch
+    return tree_util.tree_map(jnp.array, numpy_batch)
 
-  def ordered_batches(self, chain_id: int) -> PyTree:
-    """Return ordered batches."""
-    raise NotImplementedError
+  @property
+  def _format(self):
+    data_spec = self._pipeline.element_spec
+    if self._exclude_keys is not None:
+      not_excluded_elements = {id: elem for id, elem in data_spec.items()
+                               if id not in self._exclude_keys}
+    else:
+      not_excluded_elements = data_spec
+
+    def leaf_dtype_struct(leaf):
+      shape = tuple(int(s) for s in leaf.shape if s is not None)
+      dtype = leaf.dtype.as_numpy_dtype
+      return jax.ShapeDtypeStruct(
+        dtype=dtype,
+        shape=shape)
+
+    return tree_util.tree_map(leaf_dtype_struct, not_excluded_elements)
+
+  @property
+  def _info(self):
+    """Returns information about total samples count and batch size. """
+    return self._observation_count
 
 
 class NumpyDataLoader(DataLoader):
@@ -540,7 +567,8 @@ class NumpyDataLoader(DataLoader):
   """
 
   def __init__(self, mini_batch_size: int = None, **reference_data):
-    super().__init__(mb_size=mini_batch_size)
+    super().__init__()
+    assert mini_batch_size is None, "Global mini batch size depreceated. "
     assert len(reference_data) > 0, "Observations are required."
 
     first_key = list(reference_data.keys())[0]
@@ -555,22 +583,6 @@ class NumpyDataLoader(DataLoader):
 
     self._chains: List[Dict[str, Any]] = []
     self._observation_count = observation_count
-
-  @property
-  def _format(self):
-    """Returns shape and dtype of a single observation. """
-    mb_format = dict()
-    for name, array in self._reference_data.items():
-      # Get the format and dtype of the data
-      mb_format[name] = jax.ShapeDtypeStruct(
-        dtype=self._reference_data[name].dtype,
-        shape=tuple(int(s) for s in array.shape[1:]))
-    return mb_format
-
-  @property
-  def _info(self):
-    """Returns information about total samples count and batch size. """
-    return self._observation_count
 
   def save_state(self, chain_id: int) -> PyTree:
     """Returns all necessary information to restore the dataloader state.
@@ -650,7 +662,7 @@ class NumpyDataLoader(DataLoader):
                                 mb_size: int = None,
                                 **kwargs
                                 ) -> int:
-    """Register a chain which assembles batches in an ordered manor.
+    """Register a chain which assembles batches in an ordered manner.
 
     Args:
       cache_size: The number of drawn batches.
@@ -743,6 +755,21 @@ class NumpyDataLoader(DataLoader):
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
 
+  @property
+  def _format(self):
+    """Returns shape and dtype of a single observation. """
+    mb_format = dict()
+    for name, array in self._reference_data.items():
+      # Get the format and dtype of the data
+      mb_format[name] = jax.ShapeDtypeStruct(
+        dtype=self._reference_data[name].dtype,
+        shape=tuple(int(s) for s in array.shape[1:]))
+    return mb_format
+
+  @property
+  def _info(self):
+    """Returns information about total samples count and batch size. """
+    return self._observation_count
 
 class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.

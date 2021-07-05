@@ -42,22 +42,22 @@ class TestTFLoader:
       output_shapes={'a': tuple(), 'b': (2,)})
     return ds
 
-  @pytest.fixture(params=[1, 10, 100])
-  def dataloader(self, request, dataset):
-    pipeline = data.TensorflowDataLoader(dataset, request.param, 100)
-    return pipeline, request.param
+  @pytest.fixture
+  def dataloader(self, dataset):
+    pipeline = data.TensorflowDataLoader(dataset, shuffle_cache=100)
+    return pipeline
 
-  @pytest.mark.parametrize("cs", (3, 13, 29))
-  def test_batch_size(self, dataloader, cs):
-    pipeline, _ = dataloader
+  @pytest.mark.parametrize(["cs", "mb_size"], itertools.product([3, 13, 29], [1, 3, 5]))
+  def test_batch_size(self, dataloader, cs, mb_size):
+    pipeline = dataloader
 
     def check_fn(leaf):
       assert leaf.shape[0] == cs
       assert leaf.shape[1] == batch_info.batch_size
 
-    _, batch_info = pipeline.batch_format(cs)
-    chain_id = pipeline.register_random_pipeline(cs)
-    batch = pipeline.random_batches(chain_id)
+    _, batch_info = pipeline.batch_format(cs, mb_size)
+    chain_id = pipeline.register_random_pipeline(cs, mb_size)
+    batch = pipeline.get_batches(chain_id)
 
     print(batch)
 
@@ -68,23 +68,23 @@ class TestTFLoader:
     mb_size = 2
     cs = 3
 
-    pipeline = data.TensorflowDataLoader(dataset, mb_size, 100,
+    pipeline = data.TensorflowDataLoader(dataset, shuffle_cache=100,
                                         exclude_keys=excluded)
-    batch_format, _ = pipeline.batch_format(10)
-    chain_id = pipeline.register_random_pipeline(cs)
-    first_batch = pipeline.random_batches(chain_id)
+    batch_format, _ = pipeline.batch_format(10, mb_size)
+    chain_id = pipeline.register_random_pipeline(cs, mb_size)
+    first_batch = pipeline.get_batches(chain_id)
 
     for key in first_batch.keys():
       assert key not in excluded
     for key in batch_format.keys():
       assert key not in excluded
 
-  @pytest.mark.parametrize("cs", [1, 5, 10, 15])
-  def test_sizes(self, dataloader, cs):
+  @pytest.mark.parametrize(["cs", "mb_size"], itertools.product([1, 5, 10, 15], [1, 3, 7]))
+  def test_sizes(self, dataloader, cs, mb_size):
 
-    pipeline, mb_size = dataloader
-    chain_id = pipeline.register_random_pipeline(cache_size=cs)
-    first_batch = pipeline.random_batches(chain_id)
+    pipeline = dataloader
+    chain_id = pipeline.register_random_pipeline(cache_size=cs, mb_size=mb_size)
+    first_batch = pipeline.get_batches(chain_id)
 
     def test_fn(elem):
       assert elem.shape[0] == cs
@@ -302,11 +302,11 @@ class TestRandomAccess:
 
     x = onp.arange(23)
     y = 1.1 * onp.arange(23)
-    data_loader = data.NumpyDataLoader(x=x, y=y, mini_batch_size=3)
+    data_loader = data.NumpyDataLoader(x=x, y=y)
 
     states_count = 5
 
-    init_fn, batch_fn = data.random_reference_data(data_loader, cs)
+    init_fn, batch_fn = data.random_reference_data(data_loader, cs, mb_size=3)
 
     def test_function(state):
       state, (batch, _) = batch_fn(state, information=True)

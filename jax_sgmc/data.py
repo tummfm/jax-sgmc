@@ -208,8 +208,9 @@ memory consumption.
 import abc
 
 from functools import partial
+import itertools
 
-from typing import Tuple, Any, Callable, List, Optional, Union, NamedTuple
+from typing import Tuple, Any, Callable, List, Optional, Union, NamedTuple, Dict
 
 import jax
 from jax import tree_util, lax
@@ -264,7 +265,9 @@ class DataLoader(metaclass=abc.ABCMeta):
   from storage in an ordered and a random fashion.
   """
 
-  def __init__(self, data_collector: Any = None):
+  def __init__(self, mb_size: int = None, data_collector: Any = None):
+    if mb_size is not None:
+      assert False, "Set the batch size when registering chain. "
     if data_collector is not None:
       # Allows the data collector to save and restore the dataloader state
       data_collector.register_data_loader(self)
@@ -272,12 +275,12 @@ class DataLoader(metaclass=abc.ABCMeta):
   # Todo: Add a checkpoint function returning the current state
   #       def checkpoint(self, ...):
 
-  def save_state(self):
+  def save_state(self, chain_id: int):
     """Returns all necessary information to restore the dataloader state."""
     raise NotImplementedError("This method must be overwritten to allow "
                               "checkpointing of the data loader.")
 
-  def load_state(self, data):
+  def load_state(self, chain_id: int, data):
     """Restores dataloader state from previously computed checkpoint."""
     raise NotImplementedError("This method must be overwritten to allow "
                               "checkpointing of the data loader.")
@@ -319,17 +322,22 @@ class DataLoader(metaclass=abc.ABCMeta):
 
     """
 
+  @property
   @abc.abstractmethod
-  def _batch_format(self, mb_size: int = None):
+  def _format(self):
     """dtype and shape of a mini-batch. """
 
+  @property
   @abc.abstractmethod
-  def _mini_batch_format(self, mb_size: int = None):
+  def _info(self):
+    """Information about the dataset. """
+
+  def mini_batch_format(self):
     """namedtuple with information about mini-batch."""
 
   def batch_format(self,
-                   cache_size:int,
-                   mb_size: int = None
+                   cache_size: int,
+                   mb_size: int,
                    ) -> PyTree:
     """Returns dtype and shape of cached mini-batches.
 
@@ -340,33 +348,40 @@ class DataLoader(metaclass=abc.ABCMeta):
       Returns a pytree with the same tree structure as the random data cache but
       with ``jax.ShapedDtypeStruct``` as leaves.
     """
-    mb_format = self._batch_format(mb_size=mb_size)
+    obs_format = self._format
 
     # Append the cache size to the batch_format
     def append_cache_size(leaf):
-      new_shape = tuple(int(s) for s in onp.append(cache_size, leaf.shape))
+      new_shape = tuple(int(s) for s in
+                        itertools.chain([cache_size, mb_size], leaf.shape))
       return jax.ShapeDtypeStruct(
         dtype=leaf.dtype,
         shape=new_shape
       )
-    format = tree_util.tree_map(append_cache_size, mb_format)
-    return format, self._mini_batch_format(mb_size=mb_size)
+    format = tree_util.tree_map(append_cache_size, obs_format)
+    mb_info = MiniBatchInformation(observation_count=self._info,
+                                   batch_size=mb_size)
+    return format, mb_info
 
   def initializer_batch(self, mb_size: int = None) -> PyTree:
     """Returns a zero-like mini-batch. """
-    batch = tree_util.tree_map(
-      lambda leaf: jnp.zeros(leaf.shape, dtype=leaf.dtype),
-      self._batch_format(mb_size=mb_size)
-    )
+    obs_format = self._format
+
+    # Append the cache size to the batch_format
+    def append_cache_size(leaf):
+      new_shape = tuple(int(s) for s in
+                        itertools.chain([mb_size], leaf.shape))
+      return jax.ShapeDtypeStruct(
+        dtype=leaf.dtype,
+        shape=new_shape
+      )
+    batch = tree_util.tree_map(append_cache_size, obs_format)
     return batch
 
   @abc.abstractmethod
-  def random_batches(self, chain_id: int) -> PyTree:
-    """Return random batches."""
+  def get_batches(self, chain_id: int) -> PyTree:
+    """Return batches from an ordered or random chain. """
 
-  @abc.abstractmethod
-  def ordered_batches(self, chain_id: int) -> PyTree:
-    """Return ordered batches."""
 
 class TensorflowDataLoader(DataLoader):
   """Load data from a tensorflow dataset object.
@@ -502,17 +517,30 @@ class NumpyDataLoader(DataLoader):
   This data loader supports checkpointing, starting chains from a well defined
   state and true random access.
 
-  See above for an example.
+  The pipeline can be constructed directly from numpy arrays:
+
+  .. doctest::
+
+    >>> import numpy as onp
+    >>> from jax_sgmc import data
+    >>>
+    >>> x, y = onp.arange(10), onp.zeros((10, 4, 3))
+    >>>
+    >>> data_loader = data.NumpyDataLoader(name_for_x=x, name_for_y=y)
+    >>>
+    >>> zero_batch = data_loader.initializer_batch(4)
+    >>> for key, value in zero_batch.items():
+    ...   print(f"{key}: shape={value.shape}, dtype={value.dtype}")
+    name_for_x: shape=(4,), dtype=int64
+    name_for_y: shape=(4, 4, 3), dtype=float64
 
   Args:
-    mini_batch_size: The size of the batches can be defined globally for all
-      chains of the data loader.
     reference_data: Each kwarg-pair is an entry in the returned data-dict.
 
   """
 
   def __init__(self, mini_batch_size: int = None, **reference_data):
-    super().__init__()
+    super().__init__(mb_size=mini_batch_size)
     assert len(reference_data) > 0, "Observations are required."
 
     first_key = list(reference_data.keys())[0]
@@ -525,111 +553,153 @@ class NumpyDataLoader(DataLoader):
       # Transform if jax arrays are passed by mistake
       self._reference_data[name] = onp.array(array)
 
-    self._idx_offset = []
-    self._rng = []
-    self._ordered_cache_sizes = []
-    self._random_cache_sizes = []
+    self._chains: List[Dict[str, Any]] = []
     self._observation_count = observation_count
 
-    # Backwards compatibility. The mini_batch size can be provided globally for
-    # all chains or per chain.
-    if mini_batch_size is None:
-      self._mini_batch_size: Union[int, List] = []
-    else:
-      assert mini_batch_size <= observation_count, "There cannot be more samples" \
-                                                   "in the minibatch than there" \
-                                                   "are observations."
-      self._mini_batch_size: Union[int, List] = mini_batch_size
-
-  def _check_mb_size(self, mb_size, new_chain=False):
-    """Check if mb_size is provided globally for all chains. """
-    if isinstance(self._mini_batch_size, int):
-      assert (mb_size is None) or (self._mini_batch_size == mb_size), \
-        f"Called with non-matching mini-batch sizes: got " \
-        f"{self._mini_batch_size} and {mb_size}."
-      mb_size = self._mini_batch_size
-    else:
-      assert mb_size is not None, "Size of mini-batch has not been specified."
-      # Add mb_size if a new list is registered
-      if new_chain:
-        self._mini_batch_size.append(mb_size)
-    return mb_size
-
-  def _batch_format(self, mb_size: int = None):
-    """Returns pytree with information about shape and dtype of a minibatch. """
-    mb_size = self._check_mb_size(mb_size)
+  @property
+  def _format(self):
+    """Returns shape and dtype of a single observation. """
     mb_format = dict()
     for name, array in self._reference_data.items():
       # Get the format and dtype of the data
       mb_format[name] = jax.ShapeDtypeStruct(
         dtype=self._reference_data[name].dtype,
-        shape=tuple(int(s) for s in onp.append(mb_size, array.shape[1:])))
+        shape=tuple(int(s) for s in array.shape[1:]))
     return mb_format
 
-  def _mini_batch_format(self, mb_size: int = None):
+  @property
+  def _info(self):
     """Returns information about total samples count and batch size. """
-    mb_size = self._check_mb_size(mb_size)
-    mb_info = mini_batch_information(
-      observation_count=self._observation_count,
-      batch_size=mb_size)
-    return mb_info
+    return self._observation_count
 
-  def save_state(self):
+  def save_state(self, chain_id: int) -> PyTree:
     """Returns all necessary information to restore the dataloader state.
 
+    Args:
+      chain_id: Each chain can be checkpointed independently.
+
     Returns:
-      Returns list of current rng states. Can be passed to load state to restore
-      the internal state.
+      Returns necessary information to restore the state of the chain via
+      :func:`load_state`.
 
     """
     # Get the state of all random data generators. All other information will be
     # set by initializing the generator on the same way as before
-    rng_states = [rng.bit_generator.state for rng in self._rng]
-    return rng_states
 
-  def load_state(self, data):
+    chain_data = self._chains[chain_id]
+    if chain_data['type'] == 'random':
+      return {'random': chain_data['rng'].bit_generator.state}
+    elif chain_data['type'] == 'ordered':
+      return {'ordered': chain_data['idx_offset']}
+    else:
+      raise ValueError(f"Chain type {chain_data['type']} is unknown.")
+
+  def load_state(self, chain_id: int, data) -> None:
     """Restores dataloader state from previously computed checkpoint.
 
     Args:
-      data: list of rng_states
+      chain_id: The chain to restore the state.
+      data: Data from :func:`save_state` to restore state of the chain.
 
     """
     # Restore the state by setting the random number generators to the
     # checkpointed state
-    for chain_id, state in enumerate(data):
-      self._rng[chain_id].bit_generator.state = state
+    type, value = data.popitem()
+    if type == 'random':
+      self._chains[chain_id]['rng'].bit_generator.state = value
+    elif type == 'ordered':
+      self._chains[chain_id]['idx_offset'] = value
+    else:
+      raise ValueError(f"Chain type {type} is unknown.")
 
   def register_random_pipeline(self,
-                               cache_size: int=1,
+                               cache_size: int = 1,
                                mb_size: int = None,
                                **kwargs: Any) -> int:
+    """Register a new chain which draw samples randomly.
+
+    Args:
+      cache_size: The number of drawn batches.
+      mb_size: The number of observations per batch.
+      seed: Set the random seed to start the chain at a well defined state.
+
+    Returns:
+      Returns the id of the new chain.
+
+    """
     # The random state of each chain can be defined unambiguously via the
     # PRNGKey
-    mb_size = self._check_mb_size(mb_size, new_chain=True)
-    seed = kwargs.get("seed", len(self._rng))
+
+    chain_id = len(self._chains)
+
+    seed = kwargs.get("seed", chain_id)
     rng = onp.random.default_rng(
       onp.random.SeedSequence(seed).spawn(1)[0])
 
-    chain_id = len(self._rng)
-    self._rng.append(rng)
-    self._random_cache_sizes.append(cache_size)
+    new_chain = {'type': 'random',
+                 'rng': rng,
+                 'idx_offset': None,
+                 'mb_size': mb_size,
+                 'cache_size': cache_size}
+
+    self._chains.append(new_chain)
     return chain_id
 
-  def random_batches(self, chain_id: int) -> PyTree:
-    assert chain_id < len(self._rng), f"Chain {chain_id} does not exist."
+  def register_ordered_pipeline(self,
+                                cache_size: int = 1,
+                                mb_size: int = None,
+                                **kwargs
+                                ) -> int:
+    """Register a chain which assembles batches in an ordered manor.
 
-    if isinstance(self._mini_batch_size, int):
-      mb_size = self._mini_batch_size
+    Args:
+      cache_size: The number of drawn batches.
+      mb_size: The number of observations per batch.
+      seed: Set the random seed to start the chain at a well defined state.
+
+    Returns:
+      Returns the id of the new chain.
+
+    """
+    chain_id = len(self._chains)
+
+    new_chain = {'type': 'random',
+                 'rng': None,
+                 'idx_offset': 0,
+                 'mb_size': mb_size,
+                 'cache_size': cache_size}
+
+    self._chains.append(new_chain)
+    return chain_id
+
+  def get_batches(self, chain_id: int) -> PyTree:
+    """Draws a batch from a chain.
+
+    Args:
+      chain_id: ID of the chain, which holds the information about the form of
+        the batch and the process of assembling.
+
+    Returns:
+      Returns a superbatch as registered by :func:`register_random_pipeline` or
+      :func:`register_ordered_pipeline` with `cache_size` batches holding
+      `mb_size` observations.
+
+    """
+    if self._chains[chain_id]['type'] == 'random':
+      return self._random_batches(chain_id)
+    elif self._chains[chain_id]['type'] == 'ordered':
+      return self._ordered_batches(chain_id)
     else:
-      mb_size = self._mini_batch_size[chain_id]
+      return None
 
+  def _random_batches(self, chain_id: int) -> PyTree:
     # Get the random state of the chain, do some random operations and then save
     # the random state of the chain.
     def generate_selections():
-      for _ in range(self._random_cache_sizes[chain_id]):
-        mb_idx = self._rng[chain_id].choice(
+      for _ in range(self._chains[chain_id]['cache_size']):
+        mb_idx = self._chains[chain_id]['rng'].choice(
           onp.arange(0, self._observation_count),
-          size=mb_size,
+          size=self._chains[chain_id]['mb_size'],
           replace=False
         )
         yield mb_idx
@@ -644,29 +714,19 @@ class NumpyDataLoader(DataLoader):
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
 
-  def register_ordered_pipeline(self,
-                                cache_size: int = 1,
-                                mb_size: int = None,
-                                **kwargs
-                                ) -> int:
-    chain_id = len(self._idx_offset)
-    self._idx_offset.append(0)
-    self._ordered_cache_sizes.append(cache_size)
-    return chain_id
-
-  def ordered_batches(self, chain_id: int) -> PyTree:
-    cache_size = self._ordered_cache_sizes[chain_id]
-    mini_batch_size = self._mini_batch_size
+  def _ordered_batches(self, chain_id: int) -> PyTree:
+    cache_size = self._chains[chain_id]['cache_size']
+    mini_batch_size = self._chains[chain_id]['mb_size']
     sample_count = self._observation_count
 
     def select_mini_batch():
       for _ in range(cache_size):
-        idcs = onp.arange(mini_batch_size) + self._idx_offset[chain_id]
+        idcs = onp.arange(mini_batch_size) + self._chains[chain_id]['idx_offset']
         # Start again at the first sample if all samples have been returned
-        if self._idx_offset[chain_id] + mini_batch_size > sample_count:
-          self._idx_offset[chain_id] = 0
+        if self._chains[chain_id]['idx_offset'] + mini_batch_size > sample_count:
+          self._chains[chain_id]['idx_offset'] = 0
         else:
-          self._idx_offset[chain_id] += mini_batch_size
+          self._chains[chain_id]['idx_offset'] += mini_batch_size
         # Simply return the first samples again if less samples remain than
         # necessary to fill the cache
         yield onp.mod(idcs, sample_count)
@@ -682,6 +742,7 @@ class NumpyDataLoader(DataLoader):
 
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
     return mini_batch_pytree
+
 
 class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.

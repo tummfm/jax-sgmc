@@ -48,17 +48,12 @@ the keys of the pytree-dict, bundling all observations.
   >>> x = onp.arange(10)
   >>> y = onp.zeros((10, 2))
   >>>
-  >>> # The batch size can be specified globally or per chain
-  >>> data_loader_global = data.NumpyDataLoader(2, x_r=x, y_r=y)
-  >>> data_loader_per_chain = data.NumpyDataLoader(x_r=x, y_r=y)
+  >>> data_loader = data.NumpyDataLoader(x_r=x, y_r=y)
 
 Some models needs to now the shape and dtype of the reference data. Therefore,
 a all-zero batch can be drawn from the dataloader.
 
-  >>> print(data_loader_global.initializer_batch())
-  {'x_r': DeviceArray([0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
-               [0., 0.]], dtype=float32)}
-  >>> print(data_loader_per_chain.initializer_batch(3))
+  >>> print(data_loader.initializer_batch(3))
   {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
                [0., 0.],
                [0., 0.]], dtype=float32)}
@@ -68,20 +63,13 @@ number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
 has an increased device memory consumption.
 
-  >>> grd_init, grd_batch = data.random_reference_data(data_loader_global, 100)
-  >>> # If the batch size has not been provided globally, it must be provided
-  >>> # here.
-  >>> rd_init, rd_batch = data.random_reference_data(data_loader_per_chain, 100, 2)
+  >>> rd_init, rd_batch = data.random_reference_data(data_loader, 100, 2)
 
 Some data loaders, such as the Numpy Data Loader, accept keyword arguments in
 the init function to determnine the starting points of the chains.
 
-  >>> grd_state, rd_state = grd_init(seed=0), rd_init(seed=0)
-  >>> new_state, grd_batch = grd_batch(grd_state)
+  >>> rd_state = rd_init(seed=0)
   >>> new_state, (rd_batch, info) = rd_batch(rd_state, information=True)
-  >>> print(grd_batch)
-  {'x_r': DeviceArray([9, 7], dtype=int32), 'y_r': DeviceArray([[0., 0.],
-               [0., 0.]], dtype=float32)}
   >>> print(rd_batch)
   {'x_r': DeviceArray([9, 7], dtype=int32), 'y_r': DeviceArray([[0., 0.],
                [0., 0.]], dtype=float32)}
@@ -121,11 +109,11 @@ by passing the keyword argument `exclude_keys`.
       'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
   })
   >>>
-  >>> data_loader = data.TensorflowDataLoader(pipeline, 1000, 10, exclude_keys=['id'])
+  >>> data_loader = data.TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])
   >>>
   >>> # If the model needs data for initialization, an all zero batch can be
   >>> # drawn with the correct shapes and dtypes
-  >>> show_data(data_loader.initializer_batch())
+  >>> show_data(data_loader.initializer_batch(mb_size=1000))
   image with shape (1000, 32, 32, 3) and dtype uint8
   label with shape (1000,) and dtype int32
 
@@ -134,7 +122,7 @@ number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
 has an increased device memory consumption.
 
-  >>> data_init, data_batch = data.random_reference_data(data_loader, 100)
+  >>> data_init, data_batch = data.random_reference_data(data_loader, 100, 1000)
   >>>
   >>> init_state = data_init()
   >>> new_state, batch = data_batch(init_state)
@@ -171,7 +159,7 @@ directly by the user with a provided mask.
 
   >>> base = jnp.arange(10)
   >>>
-  >>> data_loader = data.NumpyDataLoader(base=base, mini_batch_size=4)
+  >>> data_loader = data.NumpyDataLoader(base=base)
 
 The mask is an boolean array with `True` if the value is valid and `False` if it
 is just a filler. If set to `maksing=False` (default), no positional argument
@@ -184,6 +172,7 @@ mask is expected in the function signature.
   >>>
   >>> init_fun, map_fun = data.full_reference_data(data_loader,
   ...                                              cached_batches_count=3,
+  ...                                              mb_size=4,
   ...                                              masking=True)
 
 The results per batch must be post-processed. If `masking=False`, a result for
@@ -388,7 +377,7 @@ class DataLoader(metaclass=abc.ABCMeta):
     def append_cache_size(leaf):
       new_shape = tuple(int(s) for s in
                         itertools.chain([mb_size], leaf.shape))
-      return jax.ShapeDtypeStruct(
+      return jnp.zeros(
         dtype=leaf.dtype,
         shape=new_shape
       )
@@ -408,7 +397,7 @@ class TensorflowDataLoader(DataLoader):
     >>> from jax_sgmc import data
     >>>
     >>> pipeline = tfds.load("cifar10", split="train")
-    >>> data_loader = data.TensorflowDataLoader(pipeline, 1000, 10, exclude_keys=['id'])
+    >>> data_loader = data.TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
 
   Args:
     pipeline: A tensorflow data pipeline, which can be obtained from the
@@ -558,8 +547,8 @@ class NumpyDataLoader(DataLoader):
     >>> zero_batch = data_loader.initializer_batch(4)
     >>> for key, value in zero_batch.items():
     ...   print(f"{key}: shape={value.shape}, dtype={value.dtype}")
-    name_for_x: shape=(4,), dtype=int64
-    name_for_y: shape=(4, 4, 3), dtype=float64
+    name_for_x: shape=(4,), dtype=int32
+    name_for_y: shape=(4, 4, 3), dtype=float32
 
   Args:
     reference_data: Each kwarg-pair is an entry in the returned data-dict.
@@ -675,7 +664,7 @@ class NumpyDataLoader(DataLoader):
     """
     chain_id = len(self._chains)
 
-    new_chain = {'type': 'random',
+    new_chain = {'type': 'ordered',
                  'rng': None,
                  'idx_offset': 0,
                  'mb_size': mb_size,
@@ -791,7 +780,7 @@ random_data_state = CacheState
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int=100,
-                          mb_size: int = None
+                          mb_size: int = 1
                           ) -> RandomBatch:
   """Initializes reference data access from jit-compiled functions.
 
@@ -802,8 +791,7 @@ def random_reference_data(data_loader: DataLoader,
     data_loader: Reads data from storage.
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
-    mb_size: If the size of the mini-batch has not been defined globally by the
-      data loader, it must be defined here.
+    mb_size: Size of the data batch.
 
   Returns:
     Returns a tuple of functions to initialize a new reference data state and
@@ -811,109 +799,26 @@ def random_reference_data(data_loader: DataLoader,
 
   """
 
-  # These are helper function which keep a reference to the stateful data object
-  # and can be called via the host_callback.call function
-  # The format of the mini batch is static, thus it must not be passed
-  # in form of a state.
+  batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
 
-  hcb_format, mb_information = data_loader.batch_format(
-    cached_batches_count, mb_size=mb_size)
-
-  # The definition requires passing an argument to the host function. The shape
-  # of the returned data must be known before the first call
-
-  def host_function(chain_id):
-    return data_loader.random_batches(chain_id)
-
-  def get_data(chain_id):
-    data =  hcb.call(host_function,
-                     chain_id,
-                     result_shape=hcb_format)
-    return data
-
-  def new_cache_fn(state: random_data_state) -> random_data_state:
-    """This function is called if the cache must be refreshed."""
-    new_data = get_data(state.chain_id)
-    new_state = random_data_state(
-      cached_batches_count=state.cached_batches_count,
-      cached_batches=new_data,
-      current_line=0,
-      chain_id=state.chain_id)
-    return new_state
-
-  def old_cache_fn(state: random_data_state) -> random_data_state:
-    """This function is called if the cache must not be refreshed."""
-    return state
-
-  # Thes following functions are passed back
-
-  def init_fn(**kwargs) -> random_data_state:
+  def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
     chain_id = data_loader.register_random_pipeline(
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state = data_loader.random_batches(chain_id)
-    inital_cache_state=random_data_state(
+    initial_state = data_loader.get_batches(chain_id)
+    inital_cache_state=CacheState(
       cached_batches=initial_state,
-      cached_batches_count=cached_batches_count,
-      current_line=0,
-      chain_id=chain_id
+      cached_batches_count=jnp.array(cached_batches_count),
+      current_line=jnp.array(0),
+      chain_id=jnp.array(chain_id)
     )
     return inital_cache_state
 
-  @stop_vmap.stop_vmap
-  def _data_state_helper(data_state):
-    return lax.cond(data_state.current_line == data_state.cached_batches_count,
-                    new_cache_fn,
-                    old_cache_fn,
-                    data_state)
-
-  def batch_fn(data_state: random_data_state,
-               information: bool = False
-               ) -> Union[Tuple[random_data_state, MiniBatch],
-                          Tuple[random_data_state,
-                                Tuple[MiniBatch, mini_batch_information]]]:
-    """Draws a new random batch (hides data transfer between devices).
-
-    Args:
-      data_state: State with cached samples
-      information: Whether to return batch information
-
-    Returns:
-      Returns the new data state and the next batch. Optionally also also a
-      struct containing information about the batch can be returned.
-
-    """
-
-    # Refresh the cache if necessary, after all cached batches have been used.
-    data_state = _data_state_helper(data_state)
-    current_line = jnp.mod(data_state.current_line,
-                           data_state.cached_batches_count)
-
-    # Read the current line from the cache and
-    random_mini_batch = tree_index(data_state.cached_batches, current_line)
-    current_line = current_line + 1
-
-    new_state = random_data_state(
-      cached_batches=data_state.cached_batches,
-      cached_batches_count=data_state.cached_batches_count,
-      current_line=current_line,
-      chain_id=data_state.chain_id)
-
-    # The static_information contains information such as total observation
-    # count and must be a valid jax type.
-
-    if information:
-      return new_state, (random_mini_batch, mb_information)
-    else:
-      return new_state, random_mini_batch
-
   return init_fn, batch_fn
 
-
-# Todo: Implement utility to handle full dataset
 
 def full_reference_data(data_loader: DataLoader,
                         cached_batches_count: int = 100,
@@ -940,97 +845,10 @@ def full_reference_data(data_loader: DataLoader,
 
   """
 
-  # These are helper function which keep a reference to the stateful data object
-  # and can be called via the host_callback.call function
-  # The format of the mini batch is static, thus it must not be passed
-  # in form of a state.
-
-  hcb_format, mb_information = data_loader.batch_format(cached_batches_count,
-                                                        mb_size=mb_size)
-
-  # The definition requires passing an argument to the host function. The shape
-  # of the returned data must be known before the first call
-
-  def host_function(chain_id):
-    return data_loader.ordered_batches(chain_id)
-
-  def get_data(chain_id):
-    data =  hcb.call(host_function,
-                     chain_id,
-                     result_shape=hcb_format)
-    return data
-
-  def new_cache_fn(state: CacheState) -> CacheState:
-    """This function is called if the cache must be refreshed."""
-    new_data = get_data(state.chain_id)
-    new_state = CacheState(
-      cached_batches_count=state.cached_batches_count,
-      cached_batches=new_data,
-      current_line=0,
-      chain_id=state.chain_id,
-    )
-    return new_state
-
-  def old_cache_fn(state: random_data_state) -> random_data_state:
-    """This function is called if the cache must not be refreshed."""
-    return state
-
-  # Thes following functions are passed back
-
-  def init_fn(**kwargs) -> CacheState:
-    # Pass the data loader the information about the number of cached
-    # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = data_loader.register_ordered_pipeline(
-      cached_batches_count,
-      **kwargs)
-    initial_state = data_loader.ordered_batches(chain_id)
-    inital_cache_state=CacheState(
-      cached_batches=initial_state,
-      cached_batches_count=cached_batches_count,
-      current_line=0,
-      chain_id=chain_id,
-    )
-    return inital_cache_state
-
-  def _batch_fn(data_state: CacheState
-               ) -> Union[Tuple[random_data_state, MiniBatch],
-                          Tuple[random_data_state,
-                                Tuple[MiniBatch, mini_batch_information]]]:
-    """Draws a new random batch (hides data transfer between devices).
-
-    Args:
-      data_state: State with cached samples
-
-    Returns:
-      Returns the new data state and the next batch. Optionally also also a
-      struct containing information about the batch can be returned.
-
-    """
-
-    # Refresh the cache if necessary, after all cached batches have been used.
-    data_state = lax.cond(data_state.current_line
-                          == data_state.cached_batches_count,
-                          new_cache_fn,
-                          old_cache_fn,
-                          data_state)
-    current_line = jnp.mod(data_state.current_line,
-                           data_state.cached_batches_count)
-
-    # Read the current line from the cache and
-    batch = tree_index(data_state.cached_batches, current_line)
-    current_line = current_line + 1
-
-    new_state = CacheState(
-      cached_batches=data_state.cached_batches,
-      cached_batches_count=data_state.cached_batches_count,
-      current_line=current_line,
-      chain_id=data_state.chain_id,
-    )
-
-    # The static_information contains information such as total observation
-    # count and must be a valid jax type.
-
-    return new_state, batch
+  _batch_fn, mb_information = _hcb_wrapper(
+    data_loader,
+    cached_batches_count,
+    mb_size)
 
   num_iterations = int(onp.ceil(
     mb_information.observation_count / mb_information.batch_size))
@@ -1085,7 +903,22 @@ def full_reference_data(data_loader: DataLoader,
 
     return data_state, (true_results, carry)
 
-  # Todo: Return static information -> number of mini_batches
+  def init_fn(**kwargs) -> CacheState:
+    # Pass the data loader the information about the number of cached
+    # mini-batches. The data loader returns an unique id for reproducibility
+    chain_id = data_loader.register_ordered_pipeline(
+      cached_batches_count,
+      mb_size=mb_size,
+      **kwargs)
+    initial_state = data_loader.get_batches(chain_id)
+    inital_cache_state=CacheState(
+      cached_batches=initial_state,
+      cached_batches_count=jnp.array(cached_batches_count),
+      current_line=jnp.array(0),
+      chain_id=jnp.array(chain_id)
+    )
+    return inital_cache_state
+
   return init_fn, batch_scan
 
 
@@ -1118,3 +951,87 @@ def tree_index(pytree: PyTree, index):
     else:
       return leaf[index, ::]
   return split_tree_imp(pytree)
+
+
+# Callback is independent of assembling of the batches
+def _hcb_wrapper(data_loader: DataLoader,
+                 cached_batches_count: int,
+                 mb_size: int):
+  # These are helper function which keep a reference to the stateful data object
+  # and can be called via the host_callback.call function
+  # The format of the mini batch is static.
+
+  hcb_format, mb_information = data_loader.batch_format(
+    cached_batches_count, mb_size=mb_size)
+
+  # The definition requires passing an argument to the host function. The shape
+  # of the returned data must be known before the first call. The chain id
+  # determines whether the data is collected randomly or sequentially.
+
+  def get_data(chain_id):
+    data = hcb.call(lambda id: data_loader.get_batches(id),
+                    chain_id,
+                    result_shape=hcb_format)
+    return data
+
+  def _new_cache_fn(state: CacheState) -> CacheState:
+    """This function is called if the cache must be refreshed."""
+    new_data = get_data(state.chain_id)
+    new_state = CacheState(
+      cached_batches_count=state.cached_batches_count,
+      cached_batches=new_data,
+      current_line=jnp.array(0),
+      chain_id=state.chain_id)
+    return new_state
+
+  def _old_cache_fn(state: CacheState) -> CacheState:
+    """This function is called if the cache must not be refreshed."""
+    return state
+
+  # Necessary, because cond is replaced by select under vmap, but the cond
+  # branches have side effects.
+  @stop_vmap.stop_vmap
+  def _data_state_helper(data_state):
+    return lax.cond(data_state.current_line == data_state.cached_batches_count,
+                    _new_cache_fn,
+                    _old_cache_fn,
+                    data_state)
+
+  def batch_fn(data_state: CacheState,
+               information: bool = False
+               ) -> Union[Tuple[CacheState, MiniBatch],
+                          Tuple[CacheState,
+                                Tuple[MiniBatch, mini_batch_information]]]:
+    """Draws a new random batch (hides data transfer between devices).
+
+    Args:
+      data_state: State with cached samples
+      information: Whether to return batch information
+
+    Returns:
+      Returns the new data state and the next batch. Optionally also also a
+      struct containing information about the batch can be returned.
+
+    """
+
+    # Refresh the cache if necessary, after all cached batches have been used.
+    data_state = _data_state_helper(data_state)
+    current_line = jnp.mod(data_state.current_line,
+                           data_state.cached_batches_count)
+
+    # Read the current line from the cache and
+    mini_batch = tree_index(data_state.cached_batches, current_line)
+    current_line = current_line + 1
+
+    new_state = CacheState(
+      cached_batches=data_state.cached_batches,
+      cached_batches_count=data_state.cached_batches_count,
+      current_line=current_line,
+      chain_id=data_state.chain_id)
+
+    if information:
+      return new_state, (mini_batch, mb_information)
+    else:
+      return new_state, mini_batch
+
+  return batch_fn, mb_information

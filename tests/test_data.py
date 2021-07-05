@@ -268,7 +268,7 @@ class TestRandomAccess:
       return jax.tree_map(jnp.array, next(ds_cache))
 
     ml.register_ordered_pipeline.return_value = 0
-    ml.random_batches.side_effect = get_batch
+    ml.get_batches.side_effect = get_batch
 
     return ml, request.param, ds
 
@@ -292,7 +292,7 @@ class TestRandomAccess:
 
     # Check that random batches are not drawn more often than necessary
 
-    assert DL.random_batches.call_count == int(4.1)
+    assert DL.get_batches.call_count == int(4.1)
 
   # Todo: Improve this test
   @pytest.mark.parametrize("cs", (1, 5, 11, 17))

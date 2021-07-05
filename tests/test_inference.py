@@ -52,8 +52,10 @@ def problem():
   M = 10
   cs = 1000
 
-  data_loader = data.NumpyDataLoader(M, x=x, y=y)
-  batch_fn = data.random_reference_data(data_loader, cached_batches_count=cs)
+  data_loader = data.NumpyDataLoader(x=x, y=y)
+  batch_fn = data.random_reference_data(data_loader,
+                                        cached_batches_count=cs,
+                                        mb_size=M)
 
   def model(sample, observations):
     weights = sample["w"]

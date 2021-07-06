@@ -143,7 +143,7 @@ the sum of the potentials with given exponents is calculated:
 
 .. math::
 
-  f_e = \sum_{i=1}^{10}d_i^e \mid d_i \in \mathcal{D}, k = 0,\ldots, 2.
+  f_e = \sum_{i=0}^{9}d_i^e \mid d_i \in \mathcal{D}, k = 0,\ldots, 2.
 
 .. doctest::
 
@@ -172,8 +172,7 @@ mask is expected in the function signature.
   >>>
   >>> init_fun, map_fun = data.full_reference_data(data_loader,
   ...                                              cached_batches_count=3,
-  ...                                              mb_size=4,
-  ...                                              masking=True)
+  ...                                              mb_size=4)
 
 The results per batch must be post-processed. If `masking=False`, a result for
 each observation is returned. Therefore, using the masking option improves the
@@ -181,7 +180,7 @@ memory consumption.
 
   >>> # Calculate for multiple exponents:
   >>> def body_fun(data_state, exp):
-  ...   map_results = map_fun(partial(sum_potentials, exp), data_state, None)
+  ...   map_results = map_fun(partial(sum_potentials, exp), data_state, None, masking=True)
   ...   # Currently, we only summed over each mini-batch but not the whole
   ...   # dataset.
   ...   data_state, (batch_sums, unused_state) = map_results
@@ -822,8 +821,7 @@ def random_reference_data(data_loader: DataLoader,
 
 def full_reference_data(data_loader: DataLoader,
                         cached_batches_count: int = 100,
-                        mb_size: int = None,
-                        masking: bool = False
+                        mb_size: int = None
                         ) -> OrderedBatch:
   """Initializes reference data access from jit-compiled functions.
 
@@ -834,10 +832,6 @@ def full_reference_data(data_loader: DataLoader,
     data_loader: Reads data from storage.
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
-    masking: If set to true, the mapped function is called with a positional
-      argument mask and expected to return the results with a reduced dimension.
-      Setting to true changes the signature from `fun(data, carry)` to
-      `fun(data, mask, carry)`.
 
   Returns:
     Returns a tuple of functions to initialize a new reference data state and
@@ -855,14 +849,18 @@ def full_reference_data(data_loader: DataLoader,
 
   batch_size = mb_information.batch_size
 
-  def _uninitialized_body_fn(fun, state, iteration):
+  def _uninitialized_body_fn(fun,
+                             state,
+                             iteration,
+                             information=False,
+                             masking=False):
     # The mask has is 1 if the observation is valid and 0 otherwise. This is
     # necessary to ensure, that fun is always called with the same tree shape.
     observations = iteration * batch_size + jnp.arange(batch_size)
     mask = observations < mb_information.observation_count
 
     data_state, fun_state = state
-    data_state, batch = _batch_fn(data_state)
+    data_state, batch = _batch_fn(data_state, information=information)
 
     if masking:
       result, fun_state = fun(batch, mask, fun_state)
@@ -873,17 +871,27 @@ def full_reference_data(data_loader: DataLoader,
 
   def batch_scan(fun: Callable[[PyTree, Array, PyTree], Tuple[PyTree, PyTree]],
                  data_state: CacheState,
-                 carry: PyTree):
+                 carry: PyTree,
+                 masking: bool = False,
+                 information: bool = False):
     """Map the function over all data and return the results.
 
     Args:
       fun: Function accepting a batch of data, a mask and a state.
       data_state: Reference data state.
       carry: A argument that is carried over between iterations
-      args: Positional arguments to the function
+      masking: If set to true, the mapped function is called with a positional
+        argument mask and expected to return the results with a reduced dimension.
+        Setting to true changes the signature from `fun(data, carry)` to
+        `fun(data, mask, carry)`.
+      information: Provide the minibatch information in addition to the data
+        batch.
 
     """
-    _body_fn = partial(_uninitialized_body_fn, fun)
+    _body_fn = partial(_uninitialized_body_fn,
+                       fun,
+                       information=information,
+                       masking=masking)
     out, results = lax.scan(
       _body_fn, (data_state, carry), onp.arange(num_iterations))
     data_state, carry = out

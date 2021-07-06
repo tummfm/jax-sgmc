@@ -20,9 +20,158 @@ model function only accept a singe observation and parameter set. Therefore,
 this module maps the evaluation over the mini-batch or even all observations by
 making use of jaxs tools ``map``, ``vmap`` and ``pmap``.
 
-"""
+.. doctest::
 
-# Todo: Usage example
+  >>> from functools import partial
+  >>> import jax.numpy as jnp
+  >>> import jax.scipy as jscp
+  >>> from jax import random, vmap
+  >>> from jax_sgmc import data, potential
+
+  >>> mean = random.normal(random.PRNGKey(0), shape=(100, 5))
+  >>> data_loader = data.NumpyDataLoader(mean=mean)
+  >>>
+  >>> test_sample = {'mean': jnp.zeros(5), 'std': jnp.ones(1)}
+
+
+Stochastic Potential
+---------------------
+
+The stochastic potential is an estimation of the true potential. It is
+calculated over a small dataset and rescaled to the full dataset.
+
+  >>> batch_init, batch_get = data.random_reference_data(data_loader,
+  ...                                                    cached_batches_count=50,
+  ...                                                    mb_size=5)
+  >>> random_data_state = batch_init()
+
+Unbatched Likelihood
+_____________________
+
+The likelihood can be written for a single observation. The
+:mod:`jax_sgmc.potential` module then evaluates the likelihood for a batch of
+reference data sequentially via ``map`` or parallel via ``vmap`` or ``pmap``.
+
+  >>> def likelihood(sample, observation):
+  ...   likelihoods = jscp.stats.norm.logpdf(observation['mean'],
+  ...                                        loc=sample['mean'],
+  ...                                        scale=sample['std'])
+  ...   return jnp.sum(likelihoods)
+  >>> prior = lambda unused_sample: 0.0
+  >>>
+  >>> stochastic_potential_fn = potential.minibatch_potential(prior,
+  ...                                                         likelihood,
+  ...                                                         strategy='map')
+  >>> new_random_data_state, random_batch = batch_get(random_data_state, information=True)
+  >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
+  >>>
+  >>> print(potential_eval)
+  883.183
+
+Batched Likelihood
+___________________
+
+Some models already accept a batch of reference data. In this case, the
+potential function can be constructed by setting ``is_batched = True``.
+The mask provides information about which of the batched observations are valid.
+Invalid samples only occur during the full potential evaluation, so during the
+stochastic potential evaluation no mask argument is provided.
+
+  >>> @partial(vmap, in_axes=(None, 0))
+  ... def batch_eval(sample, observation):
+  ...   likelihoods = jscp.stats.norm.logpdf(observation['mean'],
+  ...                                        loc=sample['mean'],
+  ...                                        scale=sample['std'])
+  ...   # Only valid samples contribute to the likelihood
+  ...   return jnp.sum(likelihoods)
+  >>>
+  >>> # This function calculates a single likelihood for a batch of observations.
+  >>> def batched_likelihood(samle, observations, mask=None):
+  ...   likelihoods = batch_eval(samle, observations)
+  ...   # To ensure compatibility with the full potential evaluation.
+  ...   if mask is None:
+  ...     return jnp.sum(likelihoods)
+  ...   else:
+  ...     return jnp.sum(mask * likelihoods)
+  >>>
+  >>> new_random_data_state, random_batch = batch_get(random_data_state, information=True)
+  >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
+  >>>
+  >>> print(potential_eval)
+  883.183
+
+Full Potential
+---------------
+
+In combination with the :mod:`jax_sgmc.data` it is possible to calculate the
+true potential over the full dataset.
+If we specify a batch size of 3, then the liklihood will be sequentially
+calculated over batches with the size 3.
+
+
+  >>> init_fun, fmap_fun = data.full_reference_data(data_loader,
+  ...                                               cached_batches_count=50,
+  ...                                               mb_size=3)
+  >>> data_state = init_fun()
+
+Unbatched Likelihood
+_____________________
+
+Here, the likelihood written for a single observation can be re-used.
+
+  >>> potential_fn = potential.full_potential(prior, likelihood, fmap_fun, strategy='vmap')
+  >>>
+  >>> potential_eval, (data_state, unused_state) = potential_fn(test_sample, data_state)
+  >>>
+  >>> print(potential_eval)
+  707.4376
+
+Bached Likelihood
+__________________
+
+In the case that the likelihood accepts a batch of observations, using the
+full dataset mapping requires implementing a mask. The mask provides
+information whether an observation is valid or just a filler value to ensure
+equal batch shapes.
+Because we implemented the mask argument as kwarg in the batched likelihood for
+the stochastic potential evaluation, we can easily re-use it here.
+
+  >>> prior = lambda unused_sample: 0.0
+  >>>
+  >>> potential_fn = potential.full_potential(prior, batched_likelihood, fmap_fun, is_batched=True)
+  >>>
+  >>> potential_eval, (data_state, unused_state) = potential_fn(test_sample, data_state)
+  >>>
+  >>> print(potential_eval)
+  707.4376
+
+
+Likelihoods with States
+------------------------
+
+By setting the argument ``has_state = True``, the likelihood accepts a state
+as first positional argument.
+
+  >>> def statefull_likelihood(state, sample, observation):
+  ...   n, mean = state
+  ...   n += 1
+  ...   new_mean = (n-1)/n * mean + 1/n * observation['mean']
+  ...
+  ...   likelihoods = jscp.stats.norm.logpdf((observation['mean'] - new_mean),
+  ...                                        loc=(sample['mean'] - new_mean),
+  ...                                        scale=sample['std'])
+  ...   return jnp.sum(likelihoods), (n, new_mean)
+  >>>
+  >>> potential_fn = potential.minibatch_potential(prior, statefull_likelihood, has_state=True)
+  >>>
+  >>> potential_eval, new_state = potential_fn(test_sample, random_batch, state=(jnp.array(2), jnp.ones(5)))
+  >>>
+  >>> print(potential_eval)
+  883.183
+  >>> print(new_state)
+  (DeviceArray(3, dtype=int32), DeviceArray([0.79154414, 0.9063752 , 0.52024883, 0.3007263 , 0.10383289],            dtype=float32))
+
+"""
 
 from functools import partial
 
@@ -51,7 +200,7 @@ FullPotential = Callable[[PyTree, CacheState], Tuple[Array, PyTree]]
 # Todo: Implement evaluation via pmap
 
 def minibatch_potential(prior: Prior,
-                        likelihood: Likelihood,
+                        likelihood: Callable,
                         strategy: AnyStr = "map",
                         has_state = False,
                         is_batched = False) -> StochasticPotential:
@@ -81,8 +230,6 @@ def minibatch_potential(prior: Prior,
     mini-batch.
   """
 
-  # Todo: Keep the state only from the first evaluation or from any evaluation
-  #       at random? -> Reference data is random, samples are the same.
   # The final function to evaluate the potential including likelihood and prio
   if is_batched:
     # The likelihood is already provided for a batch of data
@@ -159,7 +306,10 @@ def minibatch_potential(prior: Prior,
           (batch_data, mask))
       stochastic_potential = - N / n * cumsum
       if has_state:
-        new_state = tree_util.tree_map(lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape), new_states, state)
+        new_state = tree_util.tree_map(
+          lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape),
+          new_states,
+          state)
       else:
         new_state = None
       return stochastic_potential, new_state
@@ -188,7 +338,10 @@ def minibatch_potential(prior: Prior,
       N = batch_information.observation_count
       if has_state:
         batch_likelihoods, new_states = batched_likelihood(state, sample, batch_data)
-        new_state = tree_util.tree_map(lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape), new_states, state)
+        new_state = tree_util.tree_map(
+          lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape),
+          new_states,
+          state)
       else:
         batch_likelihoods = batched_likelihood(sample, batch_data)
         new_state = None
@@ -224,11 +377,6 @@ def minibatch_potential(prior: Prior,
 
   return potential_function
 
-# Todo: Implement gradient over potential evaluation
-
-# Todo: Implement evaluation via map
-# Todo: Implement batched evaluation via vmap
-# Todo: Implement parallelized batched evaluation via pmap
 
 def full_potential(prior: Callable[[PyTree], Array],
                    likelihood: Callable[[PyTree, PyTree], Array],
@@ -262,14 +410,14 @@ def full_potential(prior: Callable[[PyTree], Array],
       for valid observations and zeros for non-valid observations.
 
   Returns:
-    Returns a function which evaluates the stochastic potential for a mini-batch
-    of data. The first argument are the latent variables and the second is the
-    mini-batch.
+    Returns a function which evaluates the potential over the full dataset via
+    a dataset mapping from the :mod:`jax_sgmc.data` module.
 
   """
 
-  # Can use the potential evaluation strategy for a minibatch of data.
-  batch_potential = minibatch_potential(prior,
+  # Can use the potential evaluation strategy for a minibatch of data. The prior
+  # must be evaluated independently.
+  batch_potential = minibatch_potential(lambda sample: 0.0,
                                         likelihood,
                                         strategy=strategy,
                                         has_state=has_state,
@@ -286,12 +434,15 @@ def full_potential(prior: Callable[[PyTree], Array],
 
   def sum_batched_evaluations(sample: PyTree,
                               data_state: CacheState,
-                              state: PyTree):
+                              state: PyTree = None):
     body_fn = partial(batch_evaluation, sample)
     data_state, (results, new_state) = full_data_map(
       body_fn, data_state, state, masking=True, information=True)
 
-    return jnp.squeeze(jnp.sum(results)), (data_state, new_state)
+    # The prior needs just a single evaluation
+    prior_eval = prior(sample)
+
+    return jnp.squeeze(jnp.sum(results) - prior_eval), (data_state, new_state)
 
   return sum_batched_evaluations
 

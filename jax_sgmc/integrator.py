@@ -29,7 +29,13 @@ from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tree_matmu
 from jax_sgmc.scheduler import schedule
 
 leapfrog_state = namedtuple("leapfrog_state",
-                            ["positions", "momentum", "potential"])
+                            ["positions",
+                             "momentum",
+                             "potential",
+                             "model_state",
+                             "data_state",
+                             "key",
+                             "adapt_state"])
 
 langevin_state = namedtuple("langevin_state",
                             ["latent_variables",
@@ -77,45 +83,71 @@ def random_tree(key, a):
 # T as static or dynamic parameter?
 # Low level like this or directly as a class?
 
-def reversible_leapfrog(key: Array,
-                        T: Array,
-                        data: CacheState,
-                        potential_strategy: AnyStr='map'
-                        ) -> Callable[[leapfrog_state], leapfrog_state]:
+def reversible_leapfrog(
+          potential_fn: StochasticPotential,
+          batch_fn: RandomBatch,
+          covariance_adaption: AdaptionStrategy = None,
+  ) -> Tuple[Callable, Callable, Callable]:
   """Initializes a reversible leapfrog integrator.
 
   AMAGOLD requires a reversible leapfrog integrator with half step at the
   beginning and end.
 
   Args:
-    key: PRNGKey to generate noise
-    T: Number of leapfrog steps until acceptance step is run
-    data: Reference data object to draw minibatches while integrating.
-    initial_state: Usually the last state of the previous integration run.
-    potential_strategy: See potential module
+    potential_fn: Likelihood and prior applied over a minibatch of data
+    batch_fn: Function to draw a mini-batch of reference data
+    covariance_adaption: Adaption of the covariance during burn in
 
   Returns:
     Returns a function running the time reversible leapfrog integrator for T
     steps.
 
   """
+  cov_init, cov_update, cov_get = covariance_adaption
 
-  # We need to initialize the potential module to evaluate the potential for a
-  # minibatch of data.
+  def _body_fun(state: leapfrog_state, parameters: schedule):
 
-  # Should there be an init function and should we pass back initial states or
-  # are they obvious?
 
-  def integrate(leapfrog_state: leapfrog_state) -> leapfrog_state:
+  def init():
+    pass
 
-    # Here it could be possible to evaluate multiple chains at once. The overal
-    # method is not jit-able, so we cannot move out the parallelization /
-    # vectorization on a higher level.
+  def integrate(state: leapfrog_state, parameters: schedule) -> leapfrog_state:
+
+    # Resample momentum, formally correct but not necessary
+    key, split = random.split(state.key)
+    noise = random_tree(split, state.momentum)
+
+    if covariance_adaption is None:
+      momentum = noise
+      manifold = None
+    else:
+      # Update the adaption
+      adapt_state = cov_update(
+        state.adapt_state,
+        state.positions)
+      # Get the adaption
+      manifold = cov_get(
+        adapt_state,
+        state.positions)
+
+      if manifold.ndim == 1:
+        momentum = tree_multiply(manifold.g_inv, noise)
+      else:
+        momentum = tree_matmul(manifold.g_inv, noise)
+
+
+    # 1) Resample momentum
+    # 2) Half step
+    # 3) Run intermediate steps
+    # 4) Half step
 
     pass
 
+  def get():
+    pass
 
-  return integrate
+
+  return init, integrate, get
 
 
 def friction_leapfrog(key: Array,

@@ -320,3 +320,64 @@ def rms_prop() -> AdaptionStrategy:
     return g, jnp.sqrt(g), jnp.zeros_like(g)
 
   return init, update, get
+
+@adaption
+def cov_adaption() -> AdaptionStrategy:
+  """Learn the covariance.
+
+  Learn the covariance during burn in.
+
+  """
+
+  def init(sample: Array,
+           burn_in: 0):
+    """Initializes RMSprop algorithm.
+
+    Args:
+      sample: Initial sample to derive the sample size
+      alpha: Adaption speed
+      lmbd: Stabilization constant
+
+    Returns:
+      Returns the inital adaption state
+    """
+    v = jnp.ones_like(sample)
+    return (v, alpha, lmbd)
+
+  def update(state: Tuple[Array, Array, Array],
+             unused_sample: Array,
+             sample_grad: Array,
+             *unused_args: Any,
+             **unused_kwargs: Any):
+    """Updates the RMSprop adaption.
+
+    Args:
+      state: Adaption state
+      sample_grad: Stochastic gradient
+
+    Returns:
+      Returns adapted RMSprop state.
+    """
+
+    v, alpha, lmbd = state
+    new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
+    return new_v, alpha, lmbd
+
+  def get(state: Tuple[Array, Array, Array],
+          unused_sample: Array,
+          unused_sample_grad: Array,
+          *unused_args: Any,
+          **unused_kwargs: Any):
+    """Calculates the current manifold of the RMSprop adaption.
+
+    Args:
+      state: Current RMSprop adaption state
+
+    Returns:
+      Returns a manifold tuple with ``ndim == 1``.
+    """
+    v, _, lmbd = state
+    g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
+    return g, jnp.sqrt(g), jnp.zeros_like(g)
+
+  return init, update, get

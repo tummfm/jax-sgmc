@@ -18,7 +18,7 @@ from collections import namedtuple
 
 from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict
 
-from jax import random, tree_unflatten, tree_flatten, grad
+from jax import random, tree_unflatten, tree_flatten, value_and_grad
 
 import jax.numpy as jnp
 
@@ -182,7 +182,7 @@ def langevin_diffusion(
   if adaption is not None:
     adapt_init, adapt_update, adapt_get = adaption
   batch_init, batch_get = batch_fn
-  stochastic_gradient = grad(potential_fn, has_aux=True)
+  stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
 
   # We need to define an update function. All array oprations must be
   # implemented via tree_map. This is probably going to change with the
@@ -262,15 +262,10 @@ def langevin_diffusion(
     data_state, mini_batch = batch_get(state.data_state, information=True)
 
     noise = random_tree(split, state.latent_variables)
-    gradient, new_model_state = stochastic_gradient(
+    (potential, new_model_state), gradient = stochastic_gradient(
       state.latent_variables,
       mini_batch,
       state=state.model_state)
-    potential, _ = potential_fn(
-      state.latent_variables,
-      mini_batch,
-      state=state.model_state
-    )
 
     scaled_gradient = tree_scale(-parameters.step_size, gradient)
     scaled_noise = tree_scale(
@@ -300,7 +295,7 @@ def langevin_diffusion(
         adapted_gradient = tree_matmul(manifold.g_inv, scaled_gradient)
         adapted_noise = tree_matmul(manifold.sqrt_g_inv, scaled_noise)
 
-      scaled_gamma = tree_scale(parameters.temperature, manifold.gamma)
+      scaled_gamma = tree_scale(parameters.step_size, manifold.gamma)
       update_step = tree_add(
         tree_add(scaled_gamma, adapted_gradient),
         adapted_noise

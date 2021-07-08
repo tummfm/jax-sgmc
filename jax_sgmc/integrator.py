@@ -15,10 +15,11 @@
 """Defines integrators which form the core of the solvers."""
 
 from collections import namedtuple
+from functools import partial
 
 from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict
 
-from jax import random, tree_unflatten, tree_flatten, value_and_grad
+from jax import random, tree_unflatten, tree_flatten, value_and_grad, named_call
 
 import jax.numpy as jnp
 
@@ -247,6 +248,7 @@ def langevin_diffusion(
 
   # Update according to the integrator update rule
 
+  @partial(named_call, name='integration_step')
   def update_fn(state: langevin_state,
                 parameters: schedule):
     """Updates the integrator state according to a schedule.

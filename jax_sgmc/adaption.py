@@ -45,7 +45,7 @@ from typing import Any, Callable, Tuple
 
 from collections import namedtuple
 
-from jax import tree_util, flatten_util
+from jax import tree_util, flatten_util, lax
 import jax.numpy as jnp
 
 from jax_sgmc.util import Array
@@ -103,6 +103,13 @@ Attributes:
   sqrt_g_inv: Adaption matrix for noise
   gamma: Diffusion due to positional dependence of manifold
 """
+
+covariance = namedtuple(
+  "covariance",
+  ["cov_sq",
+   "inv_cov_sq",
+   "ndim"]
+)
 
 # Todo: Make tree hashable and add caching
 def get_unravel_fn(tree: PyTree):
@@ -321,63 +328,81 @@ def rms_prop() -> AdaptionStrategy:
 
   return init, update, get
 
-@adaption
-def cov_adaption() -> AdaptionStrategy:
-  """Learn the covariance.
-
-  Learn the covariance during burn in.
-
-  """
-
-  def init(sample: Array,
-           burn_in: 0):
-    """Initializes RMSprop algorithm.
-
-    Args:
-      sample: Initial sample to derive the sample size
-      alpha: Adaption speed
-      lmbd: Stabilization constant
-
-    Returns:
-      Returns the inital adaption state
-    """
-    v = jnp.ones_like(sample)
-    return (v, alpha, lmbd)
-
-  def update(state: Tuple[Array, Array, Array],
-             unused_sample: Array,
-             sample_grad: Array,
-             *unused_args: Any,
-             **unused_kwargs: Any):
-    """Updates the RMSprop adaption.
-
-    Args:
-      state: Adaption state
-      sample_grad: Stochastic gradient
-
-    Returns:
-      Returns adapted RMSprop state.
-    """
-
-    v, alpha, lmbd = state
-    new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
-    return new_v, alpha, lmbd
-
-  def get(state: Tuple[Array, Array, Array],
-          unused_sample: Array,
-          unused_sample_grad: Array,
-          *unused_args: Any,
-          **unused_kwargs: Any):
-    """Calculates the current manifold of the RMSprop adaption.
-
-    Args:
-      state: Current RMSprop adaption state
-
-    Returns:
-      Returns a manifold tuple with ``ndim == 1``.
-    """
-    v, _, lmbd = state
-    g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
-    return g, jnp.sqrt(g), jnp.zeros_like(g)
-
-  return init, update, get
+# @adaption
+# def cov_adaption(diagonal=True) -> AdaptionStrategy:
+#   """Learn the covariance.
+#
+#   Learn the covariance during burn in.
+#
+#   Args:
+#     diagonal: Learn only the diagonal elements of the covariance (better memory
+#       usage)
+#
+#   """
+#
+#   def init(sample: Array,
+#            burn_in: 0):
+#     """Initializes RMSprop algorithm.
+#
+#     Args:
+#       sample: Initial sample to derive the sample size
+#       burn_in: Number of steps to update covariance before applying it.
+#
+#     Returns:
+#       Returns the inital adaption state
+#     """
+#     if diagonal:
+#       cov = jnp.ones_like(sample)
+#     else:
+#       cov = jnp.eye(sample.size)
+#
+#     n = 0
+#     mean = jnp.zeros_like(sample)
+#     return (cov, mean, n, burn_in)
+#
+#   def update(state: Tuple[Array, Array, Array, Array],
+#              sample: Array,
+#              unused_sample_grad: Array,
+#              *unused_args: Any,
+#              **unused_kwargs: Any):
+#     """Updates the RMSprop adaption.
+#
+#     Args:
+#       state: Adaption state
+#       sample_grad: Stochastic gradient
+#
+#     Returns:
+#       Returns adapted RMSprop state.
+#     """
+#
+#     # Update the covariance only during burn in
+#     ssq, mean, n, burn_in = state
+#     n += 1
+#     new_mean = mean + (sample - mean) / n
+#
+#     if diagonal:
+#       ssq += jnp.multiply(sample - mean, sample - new_mean)
+#     ssq =
+#
+#     v, alpha, lmbd = state
+#     new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
+#     return new_v, alpha, lmbd
+#
+#   def get(state: Tuple[Array, Array, Array],
+#           unused_sample: Array,
+#           unused_sample_grad: Array,
+#           *unused_args: Any,
+#           **unused_kwargs: Any):
+#     """Calculates the current manifold of the RMSprop adaption.
+#
+#     Args:
+#       state: Current RMSprop adaption state
+#
+#     Returns:
+#       Returns a manifold tuple with ``ndim == 1``.
+#     """
+#     v, _, lmbd = state
+#     g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
+#     return g, jnp.sqrt(g), jnp.zeros_like(g)
+#
+#   return init, update, get

@@ -67,7 +67,8 @@ schedule = namedtuple("schedule",
                       ["step_size",
                        "temperature",
                        "burn_in",
-                       "accept"])
+                       "accept",
+                       "friction"])
 """Auxillary variables for integrator.
 
 Attributes:
@@ -75,6 +76,7 @@ Attributes:
   temperature: Scaling the magnitude of the additional noise
   burn_in: Bool, whether current step can be accepted
   accept: Bool, whether current sample should be saved
+  friction: Friction for SGHMC
 
 """
 
@@ -103,9 +105,8 @@ Attributes:
   samples_collected: Number of samples saved.
 """
 
-# Todo: Where to place burn in?
-#       ++ Burn in has dependency on step size
-#       -- Difficult to manage for thinning
+# Todo: Change scheduler to allow passing kwargs to init function, which do not
+#       change the static properties.
 
 # The scheduler combines the specific scheduler. This makes it easier to
 # implement only rarely used auxillary variables by providing default values.
@@ -114,7 +115,8 @@ Attributes:
 def init_scheduler(step_size: specific_scheduler = None,
                    temperature: specific_scheduler = None,
                    burn_in: specific_scheduler = None,
-                   thinning: specific_scheduler = None
+                   thinning: specific_scheduler = None,
+                   friction: jnp.array = 0.25
                    ) -> Tuple[Callable, Callable, Callable]:
   """Initialize the scheduler.
 
@@ -207,7 +209,8 @@ def init_scheduler(step_size: specific_scheduler = None,
       step_size=jnp.array(current_step_size),
       temperature=jnp.array(current_temperature),
       burn_in=jnp.array(current_burn_in),
-      accept=jnp.array(current_thinning)
+      accept=jnp.array(current_thinning),
+      friction=friction
     )
     return current_schedule
 

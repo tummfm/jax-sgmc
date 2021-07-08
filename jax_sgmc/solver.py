@@ -15,17 +15,31 @@
 """Solvers for Stochastic Gradient Bayesian Inference."""
 
 from functools import partial
-from typing import Callable, Any, Tuple
+from typing import Callable, Any, Tuple, NamedTuple
 
-from jax import lax, jit
+from jax import lax, jit, make_jaxpr, random
 import jax.numpy as jnp
-from jax_sgmc import io, util
+from jax_sgmc import io, util, data, potential, integrator
+from jax_sgmc.util import host_callback
 
 PyTree = Any
+Array = util.Array
 
-# Todo: Implement kernel
-# Todo: Implement chain runner
-# Todo: Implement saving module
+class AMAGOLDState(NamedTuple):
+  """State of the AMAGOLD solver.
+
+  Attributes:
+    full_data_state: Cache state for full data mapping function.
+    potential: True potential of the current sample
+    integrator_state: State of the reversible leapfrog integrator
+    key: PRNGKey for MH correction step
+
+  """
+  full_data_state: data.CacheState
+  potential: Array
+  integrator_state: integrator.leapfrog_state
+  key: Array
+
 
 def mcmc(solver,
          scheduler,
@@ -96,7 +110,7 @@ def mcmc(solver,
     # Return tuple of static and non-static information
     return (iterations, static_information), (init_state, scheduler_state, saving_state)
 
-  # Todo: Remove saved
+  @partial(jit, static_argnums=0)
   def _run(static, init_state):
     iterations, static_information = static
     _update = partial(_uninitialized_update, static_information)
@@ -112,6 +126,7 @@ def mcmc(solver,
       def run_single():
         for state in states:
           init_args = _init(state, iterations)
+          print(make_jaxpr(lambda x: _run(init_args[0], x))(init_args[1]))
           results = _run(*init_args)
           yield postprocess_saving(*results)
       chains = list(run_single())
@@ -170,5 +185,87 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
 
   def get(state):
     return get_integrator(state)
+
+  return init, update, get
+
+
+def amagold(integrator,
+            full_potential_fn) -> Tuple[Callable, Callable, Callable]:
+  """Initializes AMAGOLD integration.
+
+  Args:
+    integrator: Reversible leapfrog integrator.
+    full_potential_fn: Function to calculate true potential.
+
+  Returns:
+    Returns the AMAGOLD solver, a combination of reversible stochastic
+    hamiltonian dynamics and amortized MH corrections steps.
+
+  """
+
+  init_integrator, update_integrator, get_integrator = integrator
+
+  def init(init_sample: PyTree,
+           full_data_state: Any,
+           key: Array = random.PRNGKey(0),
+           **kwargs) -> AMAGOLDState:
+
+    potential, (full_data_state, _) = full_potential_fn(init_sample,
+                                                        full_data_state)
+    key, split = random.split(key)
+    integrator_state = init_integrator(init_sample, key=key,**kwargs)
+
+    state = AMAGOLDState(
+      integrator_state=integrator_state,
+      potential=potential,
+      full_data_state=full_data_state,
+      key=split
+    )
+    return state
+
+  def update(state: AMAGOLDState, schedule):
+    # Call with key to make accepting / rejecting the whole integrator state
+    # pssible
+    key, split = random.split(state.key)
+    proposal = update_integrator(
+      state.integrator_state,
+      schedule,
+      key=split)
+
+    # MH correction step
+    new_potential, (full_data_state, _) = full_potential_fn(
+      proposal.positions,
+      state.full_data_state)
+
+    alpha = jnp.exp(state.potential - new_potential + proposal.potential)
+    key, split = random.split(key)
+    slice = random.uniform(split)
+
+    host_callback.id_print(alpha, what="Acceptance ratio")
+    host_callback.id_print(new_potential, what="New potential")
+    host_callback.id_print(state.potential, what="Old potential")
+    host_callback.id_print(proposal.potential, what="Energy acc")
+    host_callback.id_print(slice < alpha, what="Accepted")
+
+    # If true, the step is accepted
+    new_integrator_state, new_potential = lax.cond(
+      slice < alpha,
+      lambda new_old: new_old[0],
+      lambda new_old: new_old[1],
+      ((proposal, new_potential), (state.integrator_state, state.potential)))
+
+    new_state = AMAGOLDState(
+      key=key,
+      integrator_state=new_integrator_state,
+      potential=new_potential,
+      full_data_state=full_data_state
+    )
+
+    stats = {'acceptance_ratio': alpha}
+
+    return new_state, stats
+
+  def get(state):
+    return get_integrator(state.integrator_state)
 
   return init, update, get

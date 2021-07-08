@@ -252,10 +252,14 @@ def reversible_leapfrog(
 
   def integrate(state: leapfrog_state,
                 parameters: schedule,
-                cov: Union[Array, covariance] = jnp.array(1.0)) -> leapfrog_state:
+                cov: Union[Array, covariance] = jnp.array(1.),
+                key: Array = None) -> leapfrog_state:
 
     # Resample momentum to make process reversible (otherwise skew-reversible)
-    key, split = random.split(state.key)
+    if key is None:
+      key, split = random.split(state.key)
+    else:
+      key, split = random.split(key)
     momentum = _cov_scaled_noise(split, cov, state.momentum)
 
 
@@ -294,9 +298,9 @@ def reversible_leapfrog(
 
   def get_fn(state: leapfrog_state):
     """Returns the latent variables."""
-    # Todo: This is not truely the likelihood
+    # Todo: This is not truly the likelihood
     return {"variables": state.positions,
-            "likelihood": state.potential}
+            "energy": state.potential}
 
 
   return init_fn, integrate, get_fn

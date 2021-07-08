@@ -161,7 +161,7 @@ default_results = default_run(default_integrator[0](sample_2), default_integrato
 
 default = default_results["variables"]
 
-default_likelihoods = (default_results["likelihood"] - default_results["likelihood"].min()) / (default_results["likelihood"].max() - default_results["likelihood"].min())
+default_likelihoods = (default_results["energy"] - default_results["energy"].min()) / (default_results["energy"].max() - default_results["energy"].min())
 
 print(default_results)
 

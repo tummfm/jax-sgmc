@@ -21,7 +21,7 @@ from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict, Union
 
 import numpy as onp
 
-from jax import random, tree_unflatten, tree_flatten, grad, lax
+from jax import random, tree_unflatten, tree_flatten, grad, lax, tree_util, value_and_grad
 
 import jax.numpy as jnp
 
@@ -82,8 +82,176 @@ def random_tree(key, a):
   noise_tree = tree_unflatten(tree_def, noise_leaves)
   return noise_tree
 
-# T as static or dynamic parameter?
-# Low level like this or directly as a class?
+
+def obabo(potential_fn: StochasticPotential,
+          batch_fn: RandomBatch,
+          steps: Array = 10
+          ) -> Tuple[Callable, Callable, Callable]:
+
+  init_data, get_data = batch_fn
+  stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
+
+  def _position_update(scale, cov, position, momentum):
+    if isinstance(cov, covariance):
+      if cov.ndim == 1:
+        scaled_momentum = tree_multiply(cov.inv_cov, momentum)
+      elif cov.ndim == 2:
+        scaled_momentum = tree_matmul(cov.inv_cov, momentum)
+      else:
+        raise ValueError(f"Covariance cannot have dimension greater than 2, "
+                         f"dim is {cov.ndim}")
+    else:
+      scaled_momentum = tree_scale(1 / cov, momentum)
+    # Scale is 0.5 of step size for half momentum update, otherwise it is just
+    # the step size.
+    scaled_momentum = tree_scale(scale, scaled_momentum)
+    return tree_add(position, scaled_momentum)
+
+  # Half step if scale == 0.5 * step_size
+  def _momentum_update(scale, gradient, momentum):
+    scaled_gradient = tree_scale(-1.0 * scale, gradient)
+    return tree_add(scaled_gradient, momentum)
+
+  # Add noise to momentum
+  def _momentum_resampling(parameters, cov, momentum, split):
+    noise = random_tree(split, momentum)
+    if isinstance(cov, covariance):
+      if cov.ndim == 1:
+        noise = tree_multiply(covariance.cov_sqrt, noise)
+      elif cov.ndim == 2:
+        noise = tree_matmul(covariance.cov_sqrt, noise)
+      else:
+        raise ValueError(f"Covariance cannot have dimension greater than 2, "
+                         f"dim is {cov.ndim}")
+    else:
+      noise = tree_scale(jnp.sqrt(cov), noise)
+    momentum_noise = tree_scale(
+      jnp.sqrt((1 - parameters.friction) * parameters.temperature),
+      noise)
+    decayed_momentum = tree_scale(
+      jnp.sqrt(parameters.friction),
+      momentum)
+
+    return tree_add(decayed_momentum, momentum_noise)
+
+  def _leapfrog_steps(state: leapfrog_state,
+                step: jnp.array,
+                parameters: schedule = None,
+                cov: Union[Array, covariance] = jnp.array(1.0)):
+    key, split1, split2 = random.split(state.key, 3)
+
+    refreshed_momentum = _momentum_resampling(parameters,
+                                              cov,
+                                              state.momentum,
+                                              split1)
+    # Get reference data and calculate stochastic gradient
+    data_state, mini_batch = get_data(state.data_state, information=True)
+    (pot_before, model_state), gradient = stochastic_gradient(
+      state.positions,
+      mini_batch,
+      state=state.model_state
+    )
+    updated_momentum = _momentum_update(
+      0.5 * parameters.step_size,
+      gradient,
+      refreshed_momentum)
+    updated_positions = _position_update(
+      parameters.step_size,
+      cov,
+      state.positions,
+      updated_momentum)
+    # Get reference data and calculate stochastic gradient
+    data_state, mini_batch = get_data(data_state, information=True)
+    (pot_after, model_state), gradient = stochastic_gradient(
+      updated_positions,
+      mini_batch,
+      state=model_state
+    )
+    updated_momentum = _momentum_update(
+      0.5 * parameters.step_size,
+      gradient,
+      refreshed_momentum)
+    refreshed_momentum = _momentum_resampling(
+      parameters,
+      cov,
+      updated_momentum,
+      split2)
+
+    # Todo provide stochastic likelihood
+    new_state = leapfrog_state(
+      potential=0.5 * (pot_before + pot_after),
+      positions=updated_positions,
+      momentum=refreshed_momentum,
+      key=key,
+      data_state=data_state,
+      model_state=model_state
+    )
+
+    return new_state, None
+
+  def init_fn(init_sample: PyTree,
+              key: Array = None,
+              batch_kwargs: Dict = None,
+              cov: Union[Array, covariance] = jnp.array(1.0),
+              init_model_state: PyTree = None):
+    """Initializes the initial state of the integrator.
+
+    Args:
+      init_sample: Initial latent variables
+      key: Initial PRNGKey
+      batch_kwargs: Determine the inital state of the random data chain
+      cov: Initial covariance.
+      init_model_state: State of the model.
+
+    Returns:
+      Returns the initial state of the integrator.
+
+    """
+
+    # Initializing the initial state here makes it easier to add additional
+    # variables which might be only necessary in special case
+    if batch_kwargs is None:
+      batch_kwargs = {}
+
+    reference_data_state = init_data(**batch_kwargs)
+
+    if key is None:
+      key = random.PRNGKey(0)
+
+    momentum = tree_util.tree_map(jnp.zeros_like, init_sample)
+
+    init_state = leapfrog_state(
+      potential=jnp.array(0.0),
+      key=key,
+      positions=init_sample,
+      momentum=momentum,
+      data_state=reference_data_state,
+      model_state=init_model_state
+    )
+
+    return init_state
+
+  def integrate(state: leapfrog_state,
+                parameters: schedule,
+                cov: Union[Array, covariance] = jnp.array(1.0)
+                ) -> leapfrog_state:
+
+    # Leapfrog integration
+    state, _ = lax.scan(
+      partial(_leapfrog_steps, parameters=parameters, cov=cov),
+      state,
+      onp.arange(steps))
+
+    return state
+
+  def get_fn(state: leapfrog_state):
+    """Returns the latent variables."""
+    # Todo: This is not truly the likelihood
+    return {"variables": state.positions,
+            "energy": state.potential}
+
+  return init_fn, integrate, get_fn
+
 
 def reversible_leapfrog(
           potential_fn: StochasticPotential,

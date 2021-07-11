@@ -19,6 +19,8 @@ from functools import partial
 
 from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict, Union
 
+import numpy as onp
+
 from jax import random, tree_unflatten, tree_flatten, grad, lax
 
 import jax.numpy as jnp
@@ -110,14 +112,14 @@ def reversible_leapfrog(
   def _position_update(scale, cov, position, momentum):
     if isinstance(cov, covariance):
       if cov.ndim == 1:
-        scaled_momentum = tree_multiply(cov.inv_cov_sq, momentum)
+        scaled_momentum = tree_multiply(cov.inv_cov, momentum)
       elif cov.ndim == 2:
-        scaled_momentum = tree_matmul(cov.inv_cov_sq, momentum)
+        scaled_momentum = tree_matmul(cov.inv_cov, momentum)
       else:
         raise ValueError(f"Covariance cannot have dimension greater than 2, "
                          f"dim is {cov.ndim}")
     else:
-      scaled_momentum = tree_scale(cov, momentum)
+      scaled_momentum = tree_scale(1 / cov, momentum)
     # Scale is 0.5 of step size for half momentum update, otherwise it is just
     # the step size.
     scaled_momentum = tree_scale(scale, scaled_momentum)
@@ -127,9 +129,9 @@ def reversible_leapfrog(
     noise = random_tree(split, tree)
     if isinstance(cov, covariance):
       if cov.ndim == 1:
-        noise = tree_multiply(covariance.cov_sq, noise)
+        noise = tree_multiply(covariance.cov_sqrt, noise)
       elif cov.ndim == 2:
-        noise = tree_matmul(covariance.cov_sq, noise)
+        noise = tree_matmul(covariance.cov_sqrt, noise)
       else:
         raise ValueError(f"Covariance cannot have dimension greater than 2, "
                          f"dim is {cov.ndim}")
@@ -169,12 +171,12 @@ def reversible_leapfrog(
       1 - parameters.step_size * parameters.friction,
       state.momentum
     )
-    scaled_gradient = tree_scale(
-      -parameters.step_size,
+    negative_scaled_gradient = tree_scale(
+      -1.0 * parameters.step_size,
       gradient
     )
     unscaled_momentum = tree_add(
-      tree_add(decayed_momentum, scaled_gradient),
+      tree_add(decayed_momentum, negative_scaled_gradient),
       scaled_noise
     )
     updated_momentum = tree_scale(
@@ -182,21 +184,20 @@ def reversible_leapfrog(
       unscaled_momentum
     )
 
+    # Accumulate the energy
     momentum_sum = tree_add(state.momentum, updated_momentum)
     if isinstance(cov, covariance):
       if cov.ndim == 1:
-        scaled_gradient = tree_multiply(covariance.inv_cov_sq, gradient)
+        scaled_gradient = tree_multiply(covariance.inv_cov, gradient)
       elif cov.ndim == 2:
-        scaled_gradient = tree_matmul(covariance.inv_cov_sq, gradient)
+        scaled_gradient = tree_matmul(covariance.inv_cov, gradient)
       else:
         raise ValueError(f"Covariance cannot have dimension greater than 2, "
                          f"dim is {cov.ndim}")
     else:
-      scaled_gradient = tree_scale(jnp.sqrt(cov), gradient)
+      scaled_gradient = tree_scale(1 / cov, gradient)
     unscaled_energy = tree_dot(momentum_sum, scaled_gradient)
-    acc_pot = state.potential + 0.5 * parameters.step_size + unscaled_energy
-
-    print(acc_pot)
+    acc_pot = state.potential + 0.5 * parameters.step_size * unscaled_energy
 
     new_state = leapfrog_state(
       potential=acc_pot,
@@ -210,16 +211,18 @@ def reversible_leapfrog(
     return new_state, None
 
   def init_fn(init_sample: PyTree,
-              key: Array = random.PRNGKey(0),
+              key: Array = None,
               batch_kwargs: Dict = None,
+              cov: Union[Array, covariance] = jnp.array(1.0),
               init_model_state: PyTree = None):
     """Initializes the initial state of the integrator.
 
     Args:
       init_sample: Initial latent variables
       key: Initial PRNGKey
-      adaption_kwargs: Determine the inital state of the adaption
       batch_kwargs: Determine the inital state of the random data chain
+      cov: Initial covariance.
+      init_model_state: State of the model.
 
     Returns:
       Returns the initial state of the integrator.
@@ -233,9 +236,11 @@ def reversible_leapfrog(
 
     reference_data_state = init_data(**batch_kwargs)
 
-    # The momentum only needs to have correct shape, as it is resampled before
-    # the first update
-    momentum = init_sample
+    # Sample initial momentum
+    if key is None:
+      key = random.PRNGKey(0)
+    key, split = random.split(key)
+    momentum = _cov_scaled_noise(split, cov, init_sample)
 
     init_state = leapfrog_state(
       potential=jnp.array(0.0),
@@ -246,22 +251,19 @@ def reversible_leapfrog(
       model_state=init_model_state
     )
 
-    print(init_state)
-
     return init_state
 
   def integrate(state: leapfrog_state,
                 parameters: schedule,
-                cov: Union[Array, covariance] = jnp.array(1.),
-                key: Array = None) -> leapfrog_state:
+                cov: Union[Array, covariance] = jnp.array(1.0),
+                direction: Array = jnp.array(1.0)) -> leapfrog_state:
 
-    # Resample momentum to make process reversible (otherwise skew-reversible)
-    if key is None:
-      key, split = random.split(state.key)
-    else:
-      key, split = random.split(key)
+    # # Resample momentum to make process reversible (otherwise skew-reversible)
+    key, split = random.split(state.key)
     momentum = _cov_scaled_noise(split, cov, state.momentum)
 
+    # Change direction if last step has been rejected
+    #vmomentum = tree_scale(direction, state.momentum)
 
     # Half step for leapfrog integration
     positions = _position_update(
@@ -272,7 +274,7 @@ def reversible_leapfrog(
       positions=positions,
       momentum=momentum,
       key=key,
-      potential=0,
+      potential=jnp.array(0.0),
       model_state=state.model_state,
       data_state=state.data_state)
 
@@ -280,7 +282,7 @@ def reversible_leapfrog(
     state, _ = lax.scan(
       partial(_body_fun, parameters=parameters, cov=cov),
       state,
-      jnp.arange(steps))
+      onp.arange(steps))
 
     # Final half step
     positions = _position_update(
@@ -289,7 +291,7 @@ def reversible_leapfrog(
     final_state = leapfrog_state(
       positions=positions,
       momentum=state.momentum,
-      key=key,
+      key=state.key,
       potential=state.potential,
       model_state=state.model_state,
       data_state=state.data_state)

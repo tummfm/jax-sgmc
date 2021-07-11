@@ -33,12 +33,14 @@ class AMAGOLDState(NamedTuple):
     potential: True potential of the current sample
     integrator_state: State of the reversible leapfrog integrator
     key: PRNGKey for MH correction step
+    direction: Integrate with positive (1.0) or negative (-1.0) momentum
 
   """
   full_data_state: data.CacheState
   potential: Array
   integrator_state: integrator.leapfrog_state
   key: Array
+  direction: Array
 
 
 def mcmc(solver,
@@ -189,12 +191,12 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
   return init, update, get
 
 
-def amagold(integrator,
+def amagold(integrator_fn,
             full_potential_fn) -> Tuple[Callable, Callable, Callable]:
   """Initializes AMAGOLD integration.
 
   Args:
-    integrator: Reversible leapfrog integrator.
+    integrator_fn: Reversible leapfrog integrator.
     full_potential_fn: Function to calculate true potential.
 
   Returns:
@@ -203,7 +205,7 @@ def amagold(integrator,
 
   """
 
-  init_integrator, update_integrator, get_integrator = integrator
+  init_integrator, update_integrator, get_integrator = integrator_fn
 
   def init(init_sample: PyTree,
            full_data_state: Any,
@@ -213,24 +215,25 @@ def amagold(integrator,
     potential, (full_data_state, _) = full_potential_fn(init_sample,
                                                         full_data_state)
     key, split = random.split(key)
-    integrator_state = init_integrator(init_sample, key=key,**kwargs)
+    # Todo: Init with correct covariance
+    integrator_state = init_integrator(init_sample, key=key, cov=jnp.array(1.0), **kwargs)
 
     state = AMAGOLDState(
       integrator_state=integrator_state,
       potential=potential,
       full_data_state=full_data_state,
-      key=split
+      key=split,
+      direction=jnp.array(1.0)
     )
     return state
 
   def update(state: AMAGOLDState, schedule):
-    # Call with key to make accepting / rejecting the whole integrator state
-    # pssible
-    key, split = random.split(state.key)
+    key, split = random.split(state.key, 2)
     proposal = update_integrator(
       state.integrator_state,
       schedule,
-      key=split)
+      direction=state.direction,
+      cov=jnp.array(1.0))
 
     # MH correction step
     new_potential, (full_data_state, _) = full_potential_fn(
@@ -238,27 +241,43 @@ def amagold(integrator,
       state.full_data_state)
 
     alpha = jnp.exp(state.potential - new_potential + proposal.potential)
-    key, split = random.split(key)
+    log_alpha = state.potential - new_potential + proposal.potential
     slice = random.uniform(split)
 
     host_callback.id_print(alpha, what="Acceptance ratio")
     host_callback.id_print(new_potential, what="New potential")
     host_callback.id_print(state.potential, what="Old potential")
     host_callback.id_print(proposal.potential, what="Energy acc")
-    host_callback.id_print(slice < alpha, what="Accepted")
+    host_callback.id_print(jnp.log(slice) < log_alpha, what="Accepted")
+    host_callback.id_print(slice, what="slice")
 
     # If true, the step is accepted
-    new_integrator_state, new_potential = lax.cond(
-      slice < alpha,
+    mh_integrator_state, new_potential, direction = lax.cond(
+      jnp.log(slice) < log_alpha,
       lambda new_old: new_old[0],
       lambda new_old: new_old[1],
-      ((proposal, new_potential), (state.integrator_state, state.potential)))
+      ((proposal, new_potential, 1.0),
+       (state.integrator_state, state.potential, -1.0)))
+
+    new_integrator_state = integrator.leapfrog_state(
+      positions=mh_integrator_state.positions,
+      momentum=mh_integrator_state.momentum,
+      model_state=mh_integrator_state.model_state,
+      potential=mh_integrator_state.potential,
+      # These parameters must be provided from the updated state, otherwise
+      # the noise and the random data is not resampled
+      data_state=proposal.data_state,
+      key=proposal.key
+    )
+
+    host_callback.id_print(direction, what="Direction")
 
     new_state = AMAGOLDState(
       key=key,
       integrator_state=new_integrator_state,
       potential=new_potential,
-      full_data_state=full_data_state
+      full_data_state=full_data_state,
+      direction=direction
     )
 
     stats = {'acceptance_ratio': alpha}

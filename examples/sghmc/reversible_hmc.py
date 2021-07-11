@@ -144,10 +144,10 @@ sample_2 = {"w": jnp.ones((N, 1)), "sigma": jnp.array(10.0)}
 
 
 # Schedulers
-default_step_size = scheduler.polynomial_step_size_first_last(first=0.01,
+default_step_size = scheduler.polynomial_step_size_first_last(first=0.005,
                                                               last=0.0005)
 
-burn_in = scheduler.initial_burn_in(0)
+burn_in = scheduler.initial_burn_in(2500)
 default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 2000)
 
 default_scheduler = scheduler.init_scheduler(step_size=default_step_size)

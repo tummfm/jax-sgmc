@@ -45,7 +45,7 @@ from typing import Any, Callable, Tuple
 
 from collections import namedtuple
 
-from jax import tree_util, flatten_util
+from jax import tree_util, flatten_util, lax
 import jax.numpy as jnp
 
 from jax_sgmc.util import Array
@@ -103,6 +103,13 @@ Attributes:
   sqrt_g_inv: Adaption matrix for noise
   gamma: Diffusion due to positional dependence of manifold
 """
+
+covariance = namedtuple(
+  "covariance",
+  ["cov_sqrt",
+   "inv_cov",
+   "ndim"]
+)
 
 # Todo: Make tree hashable and add caching
 def get_unravel_fn(tree: PyTree):

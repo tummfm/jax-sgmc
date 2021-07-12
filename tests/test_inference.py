@@ -88,9 +88,11 @@ class TestSGLD:
                                                        batch_fn)
     default_step_size = scheduler.polynomial_step_size_first_last(first=0.001,
                                                                   last=0.000005)
-    burn_in = scheduler.initial_burn_in(20000)
-    default_random_thinning = scheduler.random_thinning(default_step_size,
-                                                        burn_in, 4000)
+    burn_in = scheduler.initial_burn_in(n=20000)
+    default_random_thinning = scheduler.random_thinning(
+      step_size_schedule=default_step_size,
+      burn_in_schedule=burn_in,
+      selections=4000)
     default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
                                                  burn_in=burn_in,
                                                  thinning=default_random_thinning)
@@ -111,9 +113,11 @@ class TestSGLD:
                                                    rms_prop)
     rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                               last=0.001)
-    burn_in = scheduler.initial_burn_in(20000)
-    rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in,
-                                                    4000)
+    burn_in = scheduler.initial_burn_in(n=20000)
+    rms_random_thinning = scheduler.random_thinning(
+      step_size_schedule=rms_step_size,
+      burn_in_schedule=burn_in,
+      selections=4000)
     rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                              burn_in=burn_in,
                                              thinning=rms_random_thinning)

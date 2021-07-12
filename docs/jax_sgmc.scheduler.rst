@@ -1,7 +1,6 @@
 jax_sgmc.scheduler
 =======================
 
-
 .. automodule:: jax_sgmc.scheduler
 
 

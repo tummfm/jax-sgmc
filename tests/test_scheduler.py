@@ -91,9 +91,9 @@ class TestStepSize():
     last = jnp.array(last)
     gamma = jnp.array(gamma)
 
-    schedule = scheduler.polynomial_step_size_first_last(first,
-                                                         last,
-                                                         gamma)
+    schedule = scheduler.polynomial_step_size_first_last(first=first,
+                                                         last=last,
+                                                         gamma=gamma)
 
     state = schedule.init(iterations)
 
@@ -106,7 +106,7 @@ class TestBurnIn():
   @pytest.mark.parametrize("n", [123, 243])
   def test_initial_burn_in(self, n):
     """Test, that no off by one error exists."""
-    burn_in = scheduler.initial_burn_in(n)
+    burn_in = scheduler.initial_burn_in(n=n)
 
     state = burn_in.init(1000)
 
@@ -136,10 +136,12 @@ class TestThinning():
     subject to burn in."""
 
     burn_in, non_zero, iterations = burn_in
-    step_size = scheduler.polynomial_step_size(1.0, 1.0, 1.0)
+    step_size = scheduler.polynomial_step_size(a=1.0, b=1.0, gamma=1.0)
 
     thinning = scheduler.random_thinning(
-      step_size, burn_in, int(0.5 * non_zero.size))
+      step_size_schedule=step_size,
+      burn_in_schedule=burn_in,
+      selections=int(0.5 * non_zero.size))
     state, _ = thinning.init(iterations)
 
     accepted = 0

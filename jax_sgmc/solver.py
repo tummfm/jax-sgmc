@@ -15,7 +15,7 @@
 """Solvers for Stochastic Gradient Bayesian Inference."""
 
 from functools import partial
-from typing import Callable, Any, Tuple
+from typing import Callable, Any, Tuple, Union, Dict
 
 from jax import lax, jit
 import jax.numpy as jnp
@@ -106,7 +106,9 @@ def mcmc(solver,
       jnp.arange(iterations))
     return saving_state, saved
 
-  def run(*states, iterations: int = 1e5):
+  def run(*states: Union[PyTree, Tuple[PyTree]],
+          schedulers: Union[Dict, Tuple[Dict]] = None,
+          iterations: int = 1e5):
     # The same schedule for all chains.
     if strategy == "map":
       def run_single():

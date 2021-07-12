@@ -20,7 +20,7 @@ __________
     :toctree: _autosummary
 
     polynomial_step_size
-    cyclic_step_size
+    polynomial_step_size_first_last
 
 Temperature
 ____________

@@ -288,7 +288,7 @@ def broadcast_arguments(fun):
 ################################################################################
 
 @broadcast_arguments
-def constant_temperature() -> specific_scheduler:
+def constant_temperature(**kwargs) -> specific_scheduler:
   """Scale the added noise with an unchanged constant.
 
   Args:
@@ -298,6 +298,7 @@ def constant_temperature() -> specific_scheduler:
     Returns a triplet as described above.
 
   """
+  del kwargs
 
   def init_fn(iterations:int,
               tau: Array = 1.0
@@ -345,7 +346,7 @@ def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
 ################################################################################
 
 @broadcast_arguments
-def polynomial_step_size() -> specific_scheduler:
+def polynomial_step_size(**kwargs) -> specific_scheduler:
   """Polynomial descresing step size schedule.
 
   Implements the original proposal of a polynomial step size schedule
@@ -360,6 +361,7 @@ def polynomial_step_size() -> specific_scheduler:
     Returns triplet as described above.
 
   """
+  del kwargs
 
   # The internal state is just an array, which holds the step size for all the
   # iterations
@@ -389,7 +391,7 @@ def polynomial_step_size() -> specific_scheduler:
   return specific_scheduler(init_fn, update_fn, get_fn)
 
 @broadcast_arguments
-def polynomial_step_size_first_last() -> specific_scheduler:
+def polynomial_step_size_first_last(**kwargs) -> specific_scheduler:
   """Initializes polynomial step size schedule via first and last step.
 
   Args:
@@ -402,7 +404,7 @@ def polynomial_step_size_first_last() -> specific_scheduler:
     step size.
 
   """
-
+  del kwargs
 
   # Calculates the required coefficients of the polynomial
   def find_ab(its, gamma, first, last):
@@ -474,7 +476,7 @@ def cyclic_burn_in(beta: Array=1.0, k:int=1):
   raise NotImplementedError
 
 @broadcast_arguments
-def initial_burn_in() -> specific_scheduler:
+def initial_burn_in(**kwargs) -> specific_scheduler:
   """Discard the first n steps.
 
   Args:
@@ -484,6 +486,7 @@ def initial_burn_in() -> specific_scheduler:
     Returns specific scheduler.
 
   """
+  del kwargs
 
   def init_fn(iterations: int, n: Array = 0) -> Array:
     del iterations
@@ -508,7 +511,7 @@ def initial_burn_in() -> specific_scheduler:
 # Thinning provides information about the number of samples which will be saved.
 
 @broadcast_arguments
-def random_thinning() -> specific_scheduler:
+def random_thinning(**kwargs) -> specific_scheduler:
   """Random thinning weighted by the step size.
 
   Randomly select samples not subject to burn in. The probability of selection
@@ -525,6 +528,7 @@ def random_thinning() -> specific_scheduler:
     Returns a scheduler marking the accepted samples.
 
   """
+  del kwargs
 
   def init_fn(iterations: int,
               step_size_schedule: specific_scheduler,
@@ -552,7 +556,8 @@ def random_thinning() -> specific_scheduler:
                         jnp.arange(iterations))
 
     # Check that a sufficient number of elements can be drawn
-    # assert jnp.count_nonzero(probs) >= selections, "Cannot select enough values"
+    assert jnp.count_nonzero(probs) >= selections, "Cannot select enough values"
+
     # Draw the iterations which should be accepted
     accepted_its = random.choice(key,
                                  jnp.arange(iterations),

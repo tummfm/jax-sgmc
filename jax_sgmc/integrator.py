@@ -38,6 +38,36 @@ leapfrog_state = namedtuple("leapfrog_state",
                              "model_state",
                              "data_state",
                              "key"])
+"""
+Attributes:
+  positions: Latent variables in hamiltonian dynamics formulation
+  momentum: Momentum with the same shape as the latent variables
+  potential: Accumulated energy to calculate MH-correction step
+  model_state: State of the model in the likelihood
+  data_state: State of the random data function
+  key: PRNGKey
+"""
+
+obabo_state = namedtuple("obabo_state",
+                         ["positions",
+                          "momentum",
+                          "potential",
+                          "model_state",
+                          "data_state",
+                          "key",
+                          "kinetic_energy_start",
+                          "kinetic_energy_end"])
+"""
+Attributes:
+  positions: Latent variables in hamiltonian dynamics formulation
+  momentum: Momentum with the same shape as the latent variables
+  potential: Stochastic potential
+  model_state: State of the model in the likelihood
+  data_state: State of the random data function
+  key: PRNGKey
+  kinetic_energy_start: Kinetic energy after the first 1/4-step
+  kintetic_energy_end: Kintetic energy after the last 3/4-step
+"""
 
 langevin_state = namedtuple("langevin_state",
                             ["latent_variables",
@@ -57,12 +87,7 @@ Attributes:
   potential: Stochastic potential from last evaluation
 """
 
-# Todo: Correct typing:
-#       - ReferenceData class is replaced by batch_fn()
-#       - MiniBatchState either in integrator state or seperate
-
 PyTree = Any
-LangevinIntegrator = Callable[[langevin_state, Iterable], langevin_state]
 
 def random_tree(key, a):
   """Build a tree shaped like a where all nodes are normal distributed.
@@ -87,9 +112,42 @@ def obabo(potential_fn: StochasticPotential,
           batch_fn: RandomBatch,
           steps: Array = 10
           ) -> Tuple[Callable, Callable, Callable]:
+  """Initializes the OBABO integration scheme.
+
+  The OBABO integration scheme is reversible even when using stochastic
+  gradients and provides second order accuracy.
+
+  [1] https://arxiv.org/abs/2102.01691
+
+  Args:
+    potential_fn: Likelihood and prior applied over a minibatch of data
+    batch_fn: Function to draw a mini-batch of reference data
+    steps: Number of integration steps.
+
+  Returns:
+    Returns a function running the time OBABO integrator for T
+    steps.
+
+  """
 
   init_data, get_data = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
+
+  # Helper functions to calculate the kinetic energy, update the position,
+  # refresh and update the momentum.
+
+  def _kinetic_energy(cov, momentum):
+    if isinstance(cov, covariance):
+      if cov.ndim == 1:
+        scaled_momentum = tree_multiply(cov.inv_cov, momentum)
+      elif cov.ndim == 2:
+        scaled_momentum = tree_matmul(cov.inv_cov, momentum)
+      else:
+        raise ValueError(f"Covariance cannot have dimension greater than 2, "
+                         f"dim is {cov.ndim}")
+    else:
+      scaled_momentum = tree_scale(1 / cov, momentum)
+    return 0.5 * tree_dot(momentum, scaled_momentum)
 
   def _position_update(scale, cov, position, momentum):
     if isinstance(cov, covariance):
@@ -125,74 +183,87 @@ def obabo(potential_fn: StochasticPotential,
                          f"dim is {cov.ndim}")
     else:
       noise = tree_scale(jnp.sqrt(cov), noise)
+    permanence = jnp.exp(-1.0 * parameters.friction * parameters.step_size)
     momentum_noise = tree_scale(
-      jnp.sqrt((1 - parameters.friction) * parameters.temperature),
+      jnp.sqrt((1 - permanence) * parameters.temperature),
       noise)
-    decayed_momentum = tree_scale(
-      jnp.sqrt(parameters.friction),
-      momentum)
+    decayed_momentum = tree_scale(permanence,momentum)
 
     return tree_add(decayed_momentum, momentum_noise)
 
-  def _leapfrog_steps(state: leapfrog_state,
+  # A single OBABO-step of the integrator
+  def _leapfrog_steps(state: obabo_state,
                 step: jnp.array,
                 parameters: schedule = None,
                 cov: Union[Array, covariance] = jnp.array(1.0)):
     key, split1, split2 = random.split(state.key, 3)
+    # Need the refreshed momentum only for the acceptance step
 
     refreshed_momentum = _momentum_resampling(parameters,
                                               cov,
                                               state.momentum,
                                               split1)
-    # Get reference data and calculate stochastic gradient
+
+    # The kinetic energy from the first step is necessary to calculate the
+    # acceptance probability
+    start_energy = lax.select(
+      step == 0,
+      _kinetic_energy(cov, refreshed_momentum),
+      state.kinetic_energy_start)
+
+    # Momentum update with stochastic gradient
     data_state, mini_batch = get_data(state.data_state, information=True)
     (pot_before, model_state), gradient = stochastic_gradient(
       state.positions,
       mini_batch,
-      state=state.model_state
-    )
+      state=state.model_state)
     updated_momentum = _momentum_update(
       0.5 * parameters.step_size,
       gradient,
       refreshed_momentum)
+
     updated_positions = _position_update(
       parameters.step_size,
       cov,
       state.positions,
       updated_momentum)
-    # Get reference data and calculate stochastic gradient
+
+    # Momentum update with stochastic gradient
     data_state, mini_batch = get_data(data_state, information=True)
     (pot_after, model_state), gradient = stochastic_gradient(
       updated_positions,
       mini_batch,
-      state=model_state
-    )
+      state=model_state )
     updated_momentum = _momentum_update(
       0.5 * parameters.step_size,
       gradient,
       refreshed_momentum)
+
     refreshed_momentum = _momentum_resampling(
       parameters,
       cov,
       updated_momentum,
       split2)
 
-    # Todo provide stochastic likelihood
-    new_state = leapfrog_state(
+    # The kinetic energy of the last step is necessary to
+    # calculate the acceptance probability for the MH step.
+    end_energy = _kinetic_energy(cov, updated_momentum)
+
+    new_state = obabo_state(
       potential=0.5 * (pot_before + pot_after),
       positions=updated_positions,
       momentum=refreshed_momentum,
       key=key,
       data_state=data_state,
-      model_state=model_state
-    )
+      model_state=model_state,
+      kinetic_energy_start=start_energy,
+      kinetic_energy_end=end_energy)
 
     return new_state, None
 
   def init_fn(init_sample: PyTree,
               key: Array = None,
               batch_kwargs: Dict = None,
-              cov: Union[Array, covariance] = jnp.array(1.0),
               init_model_state: PyTree = None):
     """Initializes the initial state of the integrator.
 
@@ -200,7 +271,6 @@ def obabo(potential_fn: StochasticPotential,
       init_sample: Initial latent variables
       key: Initial PRNGKey
       batch_kwargs: Determine the inital state of the random data chain
-      cov: Initial covariance.
       init_model_state: State of the model.
 
     Returns:
@@ -220,21 +290,22 @@ def obabo(potential_fn: StochasticPotential,
 
     momentum = tree_util.tree_map(jnp.zeros_like, init_sample)
 
-    init_state = leapfrog_state(
+    init_state = obabo_state(
+      kinetic_energy_start=jnp.array(0.0),
+      kinetic_energy_end=jnp.array(0.0),
       potential=jnp.array(0.0),
       key=key,
       positions=init_sample,
       momentum=momentum,
       data_state=reference_data_state,
-      model_state=init_model_state
-    )
+      model_state=init_model_state)
 
     return init_state
 
-  def integrate(state: leapfrog_state,
+  def integrate(state: obabo_state,
                 parameters: schedule,
                 cov: Union[Array, covariance] = jnp.array(1.0)
-                ) -> leapfrog_state:
+                ) -> obabo_state:
 
     # Leapfrog integration
     state, _ = lax.scan(
@@ -246,7 +317,6 @@ def obabo(potential_fn: StochasticPotential,
 
   def get_fn(state: leapfrog_state):
     """Returns the latent variables."""
-    # Todo: This is not truly the likelihood
     return {"variables": state.positions,
             "energy": state.potential}
 
@@ -423,8 +493,8 @@ def reversible_leapfrog(
 
   def integrate(state: leapfrog_state,
                 parameters: schedule,
-                cov: Union[Array, covariance] = jnp.array(1.0),
-                direction: Array = jnp.array(1.0)) -> leapfrog_state:
+                cov: Union[Array, covariance] = jnp.array(1.0)
+                ) -> leapfrog_state:
 
     # # Resample momentum to make process reversible (otherwise skew-reversible)
     key, split = random.split(state.key)

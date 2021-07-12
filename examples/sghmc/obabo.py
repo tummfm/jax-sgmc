@@ -135,7 +135,7 @@ rms_prop = adaption.rms_prop()
 # Integrators
 default_integrator = integrator.obabo(potential_fn,
                                       batch_fn,
-                                      steps=10)
+                                      steps=15)
 
 # Initial value for starting
 sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}
@@ -144,12 +144,13 @@ sample_2 = {"w": jnp.ones((N, 1)), "sigma": jnp.array(10.0)}
 
 # Schedulers
 default_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
-                                                              last=0.005)
+                                                              last=0.001)
 
 burn_in = scheduler.initial_burn_in(2500)
 default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 2000)
 
-default_scheduler = scheduler.init_scheduler(step_size=default_step_size)
+default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
+                                             friction=1e5)
 
 
 default_sgld = solver.sgmc(default_integrator)

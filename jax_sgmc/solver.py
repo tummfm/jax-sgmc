@@ -14,6 +14,7 @@
 
 """Solvers for Stochastic Gradient Bayesian Inference."""
 
+import itertools
 from functools import partial
 from typing import Callable, Any, Tuple, Union, Dict
 
@@ -58,43 +59,61 @@ def mcmc(solver,
 
   @partial(jit, static_argnums=(0,))
   def _uninitialized_update(unused_static_information, state, _):
-    solver_state, scheduler_state, saving_state = state
-    schedule = scheduler_get(scheduler_state)
-    new_state, stats = solver_update(solver_state, schedule)
+    solver_state, scheduler_states, saving_state = state
+    if len(scheduler_states) == 1:
+      schedule = scheduler_get(scheduler_states[0])
+      schedules = [schedule]
+    else:
+      schedules = util.list_vmap(scheduler_get)(*scheduler_states)
+    new_state, stats = solver_update(solver_state, *schedules)
     # Kepp the sample if it is not subject to burn in or thinning.
-    keep = jnp.logical_and(schedule.burn_in, schedule.accept)
+    keep = jnp.logical_and(schedules[0].burn_in, schedules[0].accept)
     saving_state, saved = save(
       saving_state,
       keep,
       solver_get(new_state),
-      scheduler_state=scheduler_state,
+      scheduler_state=scheduler_states,
       solver_state=solver_state)
     # Update the scheduler with additional information from the integrator, such
     # as the acceptance ratio of AMAGOLD
     if stats is not None:
-      scheduler_state = scheduler_next(scheduler_state, **stats)
+      next_fn = partial(scheduler_next, **stats)
     else:
-      scheduler_state = scheduler_next(scheduler_state)
-    return (new_state, scheduler_state, saving_state), saved
+      next_fn = scheduler_next
+
+    if len(scheduler_states) == 1:
+      scheduler_state = next_fn(scheduler_states[0])
+      scheduler_states = [scheduler_state]
+    else:
+      scheduler_states = util.list_vmap(next_fn)(*scheduler_states)
+    return (new_state, scheduler_states, saving_state), saved
 
   # Scan over the update function. Postprocessing the samples is required if
   # saving is None to sort out not accepted samples. Samples are not accepted
   # due tu burn in or thinning.
 
   # Intialize a single chain
-  def _init(init_state, iterations):
-    scheduler_state, static_information = scheduler_init(iterations)
+  def _init(init_state, iterations, schedulers=None):
+    main_scheduler, static_information = scheduler_init(iterations)
+    # Some solvers might require additional schedulers, such as parallel
+    # tempering.
+    if schedulers is not None:
+      helper_schedulers = [scheduler_init(iterations, **kwargs)[0]
+                           for kwargs in schedulers]
+      scheduler_states = [main_scheduler] + helper_schedulers
+    else:
+      scheduler_states = [main_scheduler]
     if loading is None:
       # Define what the saving module is expected to save
       saving_state = init_saving(
         solver_get(init_state),
-        (init_state, scheduler_state),
+        (init_state, scheduler_states),
         static_information)
     else:
       raise NotImplementedError("Loading of checkpoints is currently not "
                                 "supported.")
     # Return tuple of static and non-static information
-    return (iterations, static_information), (init_state, scheduler_state, saving_state)
+    return (iterations, static_information), (init_state, scheduler_states, saving_state)
 
   # Todo: Remove saved
   def _run(static, init_state):
@@ -109,18 +128,17 @@ def mcmc(solver,
   def run(*states: Union[PyTree, Tuple[PyTree]],
           schedulers: Union[Dict, Tuple[Dict]] = None,
           iterations: int = 1e5):
-    # The same schedule for all chains.
     if strategy == "map":
       def run_single():
         for state in states:
-          init_args = _init(state, iterations)
+          init_args = _init(state, iterations, schedulers=schedulers)
           results = _run(*init_args)
           yield postprocess_saving(*results)
       chains = list(run_single())
     else:
       # Initialize the states sequentially
-      static_info, init_states = zip(*[_init(state, iterations)
-                                       for state in states])
+      static_info, init_states = zip(
+        *[_init(state, iterations, schedulers=schedulers) for state in states])
       # Static information is the same for all chains
       if strategy == "pmap":
         mapped_run = util.list_pmap(partial(_run, static_info[0]))
@@ -167,6 +185,7 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
     return init_integrator(*args, **kwargs)
 
   def update(state, schedule):
+
     # No statistics such as acceptance ratio
     return update_integrator(state, schedule), None
 
@@ -174,3 +193,16 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
     return get_integrator(state)
 
   return init, update, get
+
+
+def parallel_tempering(integrator) -> Tuple[Callable, Callable, Callable]:
+
+  def init(normal_sample, tempered_sample, **kwargs):
+    pass
+
+  # Multiple
+  def update(state, normal_schedule, hot_schedule):
+    pass
+
+  def get(state):
+    pass

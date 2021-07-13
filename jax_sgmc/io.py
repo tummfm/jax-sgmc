@@ -284,8 +284,13 @@ saving_state = namedtuple("saving_state",
                            "saved_samples",
                            "data"])
 
-Saving = Tuple[Callable[[], saving_state],
-               Callable[[saving_state, scheduler.schedule, Any, Any, Any], Union[Any, NoReturn]],
+Saving = Tuple[Callable[[PyTree, PyTree, PyTree], saving_state],
+               Callable[[saving_state,
+                         jnp.bool_,
+                         PyTree,
+                         PyTree,
+                         PyTree],
+                        Union[Any, NoReturn]],
                Callable[[Any], Union[Any, NoReturn]]]
 
 class DataCollector(metaclass=abc.ABCMeta):

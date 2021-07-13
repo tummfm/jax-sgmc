@@ -384,7 +384,7 @@ def minibatch_potential(prior: Prior,
                          reference_data: MiniBatch,
                          state: PyTree = None,
                          mask: Array = None,
-                         variance = False) -> Tuple[Array, PyTree]:
+                         variance: bool = False) -> Tuple[Array, PyTree]:
     # Never differentiate w. r. t. reference data
     reference_data = lax.stop_gradient(reference_data)
 

@@ -18,11 +18,12 @@ import itertools
 from functools import partial
 from typing import Callable, Any, Tuple, Union, Dict
 
-from jax import lax, jit
+from jax import lax, jit, random
 import jax.numpy as jnp
 from jax_sgmc import io, util
 
 PyTree = Any
+Array = util.Array
 
 # Todo: Implement kernel
 # Todo: Implement chain runner
@@ -195,14 +196,70 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
   return init, update, get
 
 
-def parallel_tempering(integrator) -> Tuple[Callable, Callable, Callable]:
+def parallel_tempering(integrator,
+                       sa_schedule: Callable = lambda n: 1 / n
+                       ) -> Tuple[Callable, Callable, Callable]:
 
-  def init(normal_sample, tempered_sample, **kwargs):
-    pass
+  init_integrator, update_integrator, get_integrator = integrator
 
-  # Multiple
+  #Todo: Maybe also provide pmap?
+
+  vmapped_update = util.list_vmap(lambda args: update_integrator(*args))
+
+  def init(normal_sample: PyTree,
+           tempered_sample: PyTree,
+           ssq_init: Array = jnp.array(0.0),
+           key: Array = random.PRNGKey(0),
+           F: Array = jnp.array(1.0),
+           **kwargs):
+    key, split1, split2 = random.split(key, 3)
+    print("normal")
+    print(normal_sample)
+    print("Hot")
+    print(tempered_sample)
+
+    normal_chain = init_integrator(normal_sample, key=split1, **kwargs)
+    hot_chain = init_integrator(tempered_sample, key=split2, **kwargs)
+
+    return normal_chain, hot_chain, ssq_init, F, 0, key
+
+  # Hot schedule is an additional schedule, which has no influence on the
+  # saved samples.
   def update(state, normal_schedule, hot_schedule):
-    pass
+    normal_chain, hot_chain, ssq_estimate, F, step, key = state
 
+    step += 1
+
+    # Vectorized evaluation of both chains
+    normal_chain, hot_chain = vmapped_update(
+      [normal_chain, normal_schedule],
+      [hot_chain, hot_schedule])
+
+    # Update of std_estimate
+    step_size = sa_schedule(step)
+    ssq_estimate = ((1 - step_size) * ssq_estimate
+                     + step_size * normal_chain.variance)
+
+    # Swapping step
+    temps = 1 / normal_schedule.temperature - 1 / hot_schedule.temperature
+    correction = temps * ssq_estimate / F
+    log_s =  temps * (normal_chain.potential - hot_chain.potential - correction)
+
+    key, split = random.split(key)
+    log_u = jnp.log(random.uniform(key))
+
+    # Swap the chains at random
+    (normal_chain, hot_chain) = lax.cond(
+      log_u < log_s,
+      lambda cold_hot: cold_hot,
+      lambda cold_hot: (cold_hot[1], cold_hot[0]),
+      (normal_chain, hot_chain))
+
+    return (normal_chain, hot_chain, ssq_estimate, F, step, key), None
+
+  # Return only the results of the normally tempered chain
   def get(state):
-    pass
+    print(state)
+    return get_integrator(state[0])
+
+  return init, update, get

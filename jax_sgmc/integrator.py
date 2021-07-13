@@ -18,7 +18,7 @@ from collections import namedtuple
 
 from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict
 
-from jax import random, tree_unflatten, tree_flatten, grad
+from jax import random, tree_unflatten, tree_flatten, grad, value_and_grad
 
 import jax.numpy as jnp
 
@@ -37,7 +37,8 @@ langevin_state = namedtuple("langevin_state",
                              "key",
                              "adapt_state",
                              "data_state",
-                             "potential"])
+                             "potential",
+                             "variance"])
 """State of the langevin diffusion integrator.
 
 Attributes:
@@ -47,6 +48,7 @@ Attributes:
   data_state: State of the reference data cache
   model_state: Variables not considered during inference
   potential: Stochastic potential from last evaluation
+  variance: Variance of stochastic potential over mini-batch
 """
 
 # Todo: Correct typing:
@@ -182,7 +184,7 @@ def langevin_diffusion(
   if adaption is not None:
     adapt_init, adapt_update, adapt_get = adaption
   batch_init, batch_get = batch_fn
-  stochastic_gradient = grad(potential_fn, has_aux=True)
+  stochastic_gradient = value_and_grad(potential_fn, has_aux=True)
 
   # We need to define an update function. All array oprations must be
   # implemented via tree_map. This is probably going to change with the
@@ -232,7 +234,8 @@ def langevin_diffusion(
       adapt_state=adaption_state,
       data_state=reference_data_state,
       model_state=init_model_state,
-      potential=jnp.array(0.0)
+      potential=jnp.array(0.0),
+      variance=jnp.array(1.0)
     )
 
     return init_state
@@ -262,15 +265,11 @@ def langevin_diffusion(
     data_state, mini_batch = batch_get(state.data_state, information=True)
 
     noise = random_tree(split, state.latent_variables)
-    gradient, new_model_state = stochastic_gradient(
+    (potential, (variance, new_model_state)), gradient = stochastic_gradient(
       state.latent_variables,
       mini_batch,
-      state=state.model_state)
-    potential, _ = potential_fn(
-      state.latent_variables,
-      mini_batch,
-      state=state.model_state
-    )
+      state=state.model_state,
+      variance=True)
 
     scaled_gradient = tree_scale(-parameters.step_size, gradient)
     scaled_noise = tree_scale(
@@ -314,7 +313,8 @@ def langevin_diffusion(
       adapt_state=adapt_state,
       data_state=data_state,
       model_state=new_model_state,
-      potential=jnp.array(potential, dtype=state.potential.dtype)
+      potential=jnp.array(potential, dtype=state.potential.dtype),
+      variance=variance
     )
 
     return new_state

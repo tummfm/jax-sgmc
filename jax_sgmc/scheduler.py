@@ -67,6 +67,65 @@ information such as the total count of accepted samples.
   >>> print(get_fn(sched_b))
   schedule(step_size=DeviceArray(0.05, dtype=float32), temperature=DeviceArray(1., dtype=float32), burn_in=DeviceArray(1., dtype=float32), accept=DeviceArray(True, dtype=bool))
 
+Schedulers
+-----------
+
+Step-size
+__________
+
+.. autosummary::
+    :toctree: _autosummary
+
+    polynomial_step_size
+    polynomial_step_size_first_last
+
+Temperature
+____________
+
+.. autosummary::
+    :toctree: _autosummary
+
+    constant_temperature
+    cyclic_temperature
+
+Burn In
+________
+
+.. autosummary::
+    :toctree: _autosummary
+
+    cyclic_burn_in
+    initial_burn_in
+
+Thinning
+__________
+
+.. autosummary::
+    :toctree: _autosummary
+
+    random_thinning
+
+
+Developer Information
+----------------------
+
+Global and Local Scheduler Arguments
+_____________________________________
+
+- *Global only* arguments are provided by position to the scheduler
+- *Global and local* arguments are provided by keyword to the scheduler and the
+  init function such that they can be overwritten.
+
+For example:
+
+::
+
+  def some_scheduler(global_arg, global_or_local=0.0):
+
+    def init_fn(global_or_local = global_or_local):
+      # Use local arg
+    ...
+
 """
 
 # Todo: Correct typing
@@ -255,40 +314,13 @@ def init_scheduler(step_size: specific_scheduler = None,
 
   return init_fn, update_fn, get_fn
 
-
-def broadcast_arguments(fun):
-  """Passes global initialization args to init function. """
-
-  @functools.wraps(fun)
-  def wrapper(static_kwargs = None, **global_kwargs):
-    if static_kwargs is None:
-      init_fn, update_fn, get_fn = fun()
-    else:
-      init_fn, update_fn, get_fn = fun(**static_kwargs)
-
-    def new_init_fn(iterations: Array, **kwargs):
-      # Do not overwrite global args
-      assert set(global_kwargs.keys()) != set(kwargs.keys())
-      return init_fn(iterations, **global_kwargs, **kwargs)
-
-    new_scheduler = specific_scheduler(
-      init=new_init_fn,
-      update=update_fn,
-      get=get_fn)
-
-    return new_scheduler
-
-  return wrapper
-
-
 ################################################################################
 #
 # Temperature
 #
 ################################################################################
 
-@broadcast_arguments
-def constant_temperature(**kwargs) -> specific_scheduler:
+def constant_temperature(tau: Array = 1.0) -> specific_scheduler:
   """Scale the added noise with an unchanged constant.
 
   Args:
@@ -298,10 +330,9 @@ def constant_temperature(**kwargs) -> specific_scheduler:
     Returns a triplet as described above.
 
   """
-  del kwargs
 
-  def init_fn(iterations:int,
-              tau: Array = 1.0
+  def init_fn(iterations: int,
+              tau: Array = tau
               ) -> Array:
     del iterations
     return tau
@@ -345,8 +376,10 @@ def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
 #
 ################################################################################
 
-@broadcast_arguments
-def polynomial_step_size(**kwargs) -> specific_scheduler:
+def polynomial_step_size(a: Array = 1.0,
+                         b: Array = 1.0,
+                         gamma: Array = 0.33
+                         ) -> specific_scheduler:
   """Polynomial descresing step size schedule.
 
   Implements the original proposal of a polynomial step size schedule
@@ -361,15 +394,14 @@ def polynomial_step_size(**kwargs) -> specific_scheduler:
     Returns triplet as described above.
 
   """
-  del kwargs
 
   # The internal state is just an array, which holds the step size for all the
   # iterations
 
   def init_fn(iterations: int,
-              a: Array = 1.0,
-              b: Array = 1.0,
-              gamma: Array = 0.33
+              a: Array = a,
+              b: Array = b,
+              gamma: Array = gamma
               ) -> Array:
     assert gamma >= 0, f"Gamma must be positive: gamma = {gamma}"
     assert a > 0, f"a must be positive: a = {a}"
@@ -390,8 +422,11 @@ def polynomial_step_size(**kwargs) -> specific_scheduler:
 
   return specific_scheduler(init_fn, update_fn, get_fn)
 
-@broadcast_arguments
-def polynomial_step_size_first_last(**kwargs) -> specific_scheduler:
+
+def polynomial_step_size_first_last(first: Array = 1.0,
+                                    last: Array = 1.0,
+                                    gamma: Array = 0.33
+                                    ) -> specific_scheduler:
   """Initializes polynomial step size schedule via first and last step.
 
   Args:
@@ -404,7 +439,6 @@ def polynomial_step_size_first_last(**kwargs) -> specific_scheduler:
     step size.
 
   """
-  del kwargs
 
   # Calculates the required coefficients of the polynomial
   def find_ab(its, gamma, first, last):
@@ -417,9 +451,9 @@ def polynomial_step_size_first_last(**kwargs) -> specific_scheduler:
     return a, b
 
   def init_fn(iterations: int,
-              first: Array = 1.0,
-              last: Array = 1.0,
-              gamma: Array = 0.33
+              first: Array = first,
+              last: Array = last,
+              gamma: Array = gamma
               ) -> Array:
     # Check for valid parameters
     assert gamma > 0, f"Gamma must be bigger than 0, is {gamma}"
@@ -475,8 +509,7 @@ def cyclic_burn_in(beta: Array=1.0, k:int=1):
   """
   raise NotImplementedError
 
-@broadcast_arguments
-def initial_burn_in(**kwargs) -> specific_scheduler:
+def initial_burn_in(n: Array = 0) -> specific_scheduler:
   """Discard the first n steps.
 
   Args:
@@ -486,9 +519,8 @@ def initial_burn_in(**kwargs) -> specific_scheduler:
     Returns specific scheduler.
 
   """
-  del kwargs
 
-  def init_fn(iterations: int, n: Array = 0) -> Array:
+  def init_fn(iterations: int, n: Array = n) -> Array:
     del iterations
     return n
 
@@ -510,8 +542,11 @@ def initial_burn_in(**kwargs) -> specific_scheduler:
 
 # Thinning provides information about the number of samples which will be saved.
 
-@broadcast_arguments
-def random_thinning(**kwargs) -> specific_scheduler:
+def random_thinning(step_size_schedule: specific_scheduler,
+                    burn_in_schedule: specific_scheduler,
+                    selections: Array,
+                    key: Array = None
+                    ) -> specific_scheduler:
   """Random thinning weighted by the step size.
 
   Randomly select samples not subject to burn in. The probability of selection
@@ -528,13 +563,12 @@ def random_thinning(**kwargs) -> specific_scheduler:
     Returns a scheduler marking the accepted samples.
 
   """
-  del kwargs
 
   def init_fn(iterations: int,
-              step_size_schedule: specific_scheduler,
-              burn_in_schedule: specific_scheduler,
-              selections: Array,
-              key: Array = None
+              step_size_schedule: specific_scheduler = step_size_schedule,
+              burn_in_schedule: specific_scheduler = burn_in_schedule,
+              selections: Array = selections,
+              key: Array = key
               ) -> Tuple[Array, Array]:
     if key is None:
       key = random.PRNGKey(0)

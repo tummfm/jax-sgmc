@@ -104,10 +104,11 @@ Attributes:
   gamma: Diffusion due to positional dependence of manifold
 """
 
+# Todo: Replace covariance by mass matrix
 covariance = namedtuple(
   "covariance",
-  ["cov_sq",
-   "inv_cov_sq",
+  ["cov_sqrt",
+   "inv_cov_sqrt",
    "ndim"]
 )
 

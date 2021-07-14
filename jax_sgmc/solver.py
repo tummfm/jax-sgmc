@@ -14,15 +14,12 @@
 
 """Solvers for Stochastic Gradient Bayesian Inference."""
 
-import itertools
 from functools import partial
 from typing import Callable, Any, Tuple, NamedTuple, Dict, Union
 
 from jax import lax, jit, random
 import jax.numpy as jnp
 from jax_sgmc import io, util, data, potential, integrator
-from jax_sgmc.util import host_callback
-from jax_sgmc.adaption import covariance
 
 PyTree = Any
 Array = util.Array
@@ -35,14 +32,12 @@ class AMAGOLDState(NamedTuple):
     potential: True potential of the current sample
     integrator_state: State of the reversible leapfrog integrator
     key: PRNGKey for MH correction step
-    direction: Integrate with positive (1.0) or negative (-1.0) momentum
 
   """
   full_data_state: data.CacheState
   potential: Array
   integrator_state: integrator.leapfrog_state
   key: Array
-  direction: Array
 
 class SGGMCState(NamedTuple):
   """State of the AMAGOLD solver.
@@ -278,7 +273,7 @@ def parallel_tempering(integrator,
     log_s =  temps * (normal_chain.potential - hot_chain.potential - correction)
 
     key, split = random.split(key)
-    log_u = jnp.log(random.uniform(key))
+    log_u = jnp.log(random.uniform(split))
 
     # Swap the chains at random
     (normal_chain, hot_chain) = lax.cond(
@@ -327,8 +322,7 @@ def amagold(integrator_fn,
       integrator_state=integrator_state,
       potential=potential,
       full_data_state=full_data_state,
-      key=split,
-      direction=jnp.array(1.0)
+      key=split
     )
     return state
 
@@ -337,7 +331,6 @@ def amagold(integrator_fn,
     proposal = update_integrator(
       state.integrator_state,
       schedule,
-      direction=state.direction,
       cov=jnp.array(1.0))
 
     # MH correction step
@@ -349,20 +342,13 @@ def amagold(integrator_fn,
     log_alpha = state.potential - new_potential + proposal.potential
     slice = random.uniform(split)
 
-    host_callback.id_print(alpha, what="Acceptance ratio")
-    host_callback.id_print(new_potential, what="New potential")
-    host_callback.id_print(state.potential, what="Old potential")
-    host_callback.id_print(proposal.potential, what="Energy acc")
-    host_callback.id_print(jnp.log(slice) < log_alpha, what="Accepted")
-    host_callback.id_print(slice, what="slice")
-
     # If true, the step is accepted
-    mh_integrator_state, new_potential, direction = lax.cond(
+    mh_integrator_state, new_potential = lax.cond(
       jnp.log(slice) < log_alpha,
       lambda new_old: new_old[0],
       lambda new_old: new_old[1],
-      ((proposal, new_potential, 1.0),
-       (state.integrator_state, state.potential, -1.0)))
+      ((proposal, new_potential),
+       (state.integrator_state, state.potential)))
 
     new_integrator_state = integrator.leapfrog_state(
       positions=mh_integrator_state.positions,
@@ -375,14 +361,11 @@ def amagold(integrator_fn,
       key=proposal.key
     )
 
-    host_callback.id_print(direction, what="Direction")
-
     new_state = AMAGOLDState(
       key=key,
       integrator_state=new_integrator_state,
       potential=new_potential,
       full_data_state=full_data_state,
-      direction=direction
     )
 
     stats = {'acceptance_ratio': alpha}

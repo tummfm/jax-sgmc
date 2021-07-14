@@ -130,7 +130,6 @@ For example:
 
 # Todo: Correct typing
 
-import functools
 from collections import namedtuple
 from typing import Callable, Tuple
 
@@ -157,8 +156,7 @@ schedule = namedtuple("schedule",
                       ["step_size",
                        "temperature",
                        "burn_in",
-                       "accept",
-                       "friction"])
+                       "accept"])
 """Auxillary variables for integrator.
 
 Attributes:
@@ -166,7 +164,6 @@ Attributes:
   temperature: Scaling the magnitude of the additional noise
   burn_in: Bool, whether current step can be accepted
   accept: Bool, whether current sample should be saved
-  friction: Friction for SGHMC
 
 """
 
@@ -208,7 +205,6 @@ def init_scheduler(step_size: specific_scheduler = None,
                    temperature: specific_scheduler = None,
                    burn_in: specific_scheduler = None,
                    thinning: specific_scheduler = None,
-                   friction: jnp.array = 0.25
                    ) -> Tuple[Callable, Callable, Callable]:
   """Initialize the scheduler.
 
@@ -311,7 +307,6 @@ def init_scheduler(step_size: specific_scheduler = None,
       temperature=jnp.array(current_temperature),
       burn_in=jnp.array(current_burn_in),
       accept=jnp.array(current_thinning),
-      friction=friction
     )
     return current_schedule
 

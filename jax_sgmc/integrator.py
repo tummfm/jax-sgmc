@@ -325,11 +325,11 @@ def obabo(potential_fn: StochasticPotential,
   return init_fn, integrate, get_fn
 
 
-def reversible_leapfrog(
-          potential_fn: StochasticPotential,
-          batch_fn: RandomBatch,
-          steps: Array = 10
-          ) -> Tuple[Callable, Callable, Callable]:
+def reversible_leapfrog(potential_fn: StochasticPotential,
+                        batch_fn: RandomBatch,
+                        steps: Array = 10,
+                        friction: Array = 0.25
+                        ) -> Tuple[Callable, Callable, Callable]:
   """Initializes a reversible leapfrog integrator.
 
   AMAGOLD requires a reversible leapfrog integrator with half step at the
@@ -397,7 +397,7 @@ def reversible_leapfrog(
     key, split = random.split(state.key)
     noise = _cov_scaled_noise(split, cov, state.momentum)
     scaled_noise = tree_scale(
-      jnp.sqrt(4 * parameters.friction * parameters.step_size),
+      jnp.sqrt(4 * friction * parameters.step_size),
       noise)
 
     data_state, mini_batch = get_data(state.data_state, information=True)
@@ -408,7 +408,7 @@ def reversible_leapfrog(
     )
 
     decayed_momentum = tree_scale(
-      1 - parameters.step_size * parameters.friction,
+      1 - parameters.step_size * friction,
       state.momentum
     )
     negative_scaled_gradient = tree_scale(
@@ -420,7 +420,7 @@ def reversible_leapfrog(
       scaled_noise
     )
     updated_momentum = tree_scale(
-      1 / (1 + parameters.step_size * parameters.friction),
+      1 / (1 + parameters.step_size * friction),
       unscaled_momentum
     )
 
@@ -454,7 +454,8 @@ def reversible_leapfrog(
               key: Array = None,
               batch_kwargs: Dict = None,
               cov: Union[Array, covariance] = jnp.array(1.0),
-              init_model_state: PyTree = None):
+              init_model_state: PyTree = None,
+              ):
     """Initializes the initial state of the integrator.
 
     Args:

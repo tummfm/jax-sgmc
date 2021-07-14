@@ -45,7 +45,7 @@ from typing import Any, Callable, Tuple
 
 from collections import namedtuple
 
-from jax import tree_util, flatten_util, lax
+from jax import tree_util, flatten_util, jit, named_call, lax
 import jax.numpy as jnp
 
 from jax_sgmc.util import Array
@@ -125,7 +125,7 @@ def get_unravel_fn(tree: PyTree):
 
   """
   _, unravel_fn = flatten_util.ravel_pytree(tree)
-  return tree_util.Partial(unravel_fn)
+  return tree_util.Partial(jit(unravel_fn))
 
 def adaption(adaption_fn: Adaption):
   """Decorator to make adaption strategies operate on 1D arrays."""
@@ -133,13 +133,16 @@ def adaption(adaption_fn: Adaption):
   @functools.wraps(adaption_fn)
   def pytree_adaption(*args, **kwargs) -> AdaptionStrategy:
     init, update, get = adaption_fn(*args, **kwargs)
+    # Name call for debugging
+    named_update = named_call(update, name='update_adaption_state')
+    named_get = named_call(get, name='get_adapted_manifold')
     @functools.wraps(init)
     def new_init(x0: PyTree,
                  *init_args,
                  **init_kwargs) -> adaption_state:
       # Calculate the flattened state and the ravel and unravel fun
       ravel_fn = tree_util.Partial(
-        lambda tree: flatten_util.ravel_pytree(tree)[0]
+        jit(lambda tree: flatten_util.ravel_pytree(tree)[0])
       )
       unravel_fn = get_unravel_fn(x0)
       x0_flat = ravel_fn(x0)
@@ -174,12 +177,12 @@ def adaption(adaption_fn: Adaption):
 
       # Update with flattened arguments
       if state.flat_potential is None:
-        new_state = update(
+        new_state = named_update(
           state.state, x_flat, grad_flat,
           *update_args, **update_kwargs
         )
       else:
-        new_state = update(
+        new_state = named_update(
           state.state, x_flat, grad_flat,
           mini_batch, state.flat_potential,
           *update_args, **update_kwargs)
@@ -202,19 +205,19 @@ def adaption(adaption_fn: Adaption):
 
       # Get with flattened arguments
       if state.flat_potential is None:
-        g_inv, sqrt_g_inv, gamma = get(state.state,
-                                       x_flat,
-                                       grad_flat,
-                                       *get_args,
-                                       **get_kwargs)
+        g_inv, sqrt_g_inv, gamma = named_get(state.state,
+                                             x_flat,
+                                             grad_flat,
+                                             *get_args,
+                                             **get_kwargs)
       else:
-        g_inv, sqrt_g_inv, gamma = get(state.state,
-                                       x_flat,
-                                       grad_flat,
-                                       mini_batch,
-                                       state.flat_potential,
-                                       *get_args,
-                                       **get_kwargs)
+        g_inv, sqrt_g_inv, gamma = named_get(state.state,
+                                             x_flat,
+                                             grad_flat,
+                                             mini_batch,
+                                             state.flat_potential,
+                                             *get_args,
+                                             **get_kwargs)
 
       if g_inv.ndim == 1 and sqrt_g_inv.ndim == 1:
         unraveled_manifold = manifold(

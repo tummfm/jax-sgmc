@@ -21,7 +21,7 @@ from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict, Union
 
 import numpy as onp
 
-from jax import random, tree_unflatten, tree_flatten, grad, lax, tree_util, value_and_grad
+from jax import random, tree_unflatten, tree_flatten, grad, lax, tree_util, value_and_grad, named_call
 
 import jax.numpy as jnp
 
@@ -613,7 +613,7 @@ def langevin_diffusion(
   if adaption is not None:
     adapt_init, adapt_update, adapt_get = adaption
   batch_init, batch_get = batch_fn
-  stochastic_gradient = value_and_grad(potential_fn, has_aux=True)
+  stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
 
   # We need to define an update function. All array oprations must be
   # implemented via tree_map. This is probably going to change with the
@@ -679,6 +679,7 @@ def langevin_diffusion(
 
   # Update according to the integrator update rule
 
+  @partial(named_call, name='integration_step')
   def update_fn(state: langevin_state,
                 parameters: schedule):
     """Updates the integrator state according to a schedule.
@@ -728,7 +729,7 @@ def langevin_diffusion(
         adapted_gradient = tree_matmul(manifold.g_inv, scaled_gradient)
         adapted_noise = tree_matmul(manifold.sqrt_g_inv, scaled_noise)
 
-      scaled_gamma = tree_scale(parameters.temperature, manifold.gamma)
+      scaled_gamma = tree_scale(parameters.step_size, manifold.gamma)
       update_step = tree_add(
         tree_add(scaled_gamma, adapted_gradient),
         adapted_noise

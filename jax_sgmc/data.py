@@ -369,13 +369,22 @@ class DataLoader(metaclass=abc.ABCMeta):
     return format, mb_info
 
   def initializer_batch(self, mb_size: int = None) -> PyTree:
-    """Returns a zero-like mini-batch. """
+    """Returns a zero-like mini-batch.
+
+    Args:
+      mb_size: Number of observations in a batch. If ``None``, the returned
+        pytree has the shape of a single observation.
+
+    """
     obs_format = self._format
 
     # Append the cache size to the batch_format
     def append_cache_size(leaf):
-      new_shape = tuple(int(s) for s in
-                        itertools.chain([mb_size], leaf.shape))
+      if mb_size is None:
+        new_shape = tuple(int(s) for s in leaf.shape)
+      else:
+        new_shape = tuple(int(s) for s in
+                          itertools.chain([mb_size], leaf.shape))
       return jnp.zeros(
         dtype=leaf.dtype,
         shape=new_shape

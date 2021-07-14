@@ -180,7 +180,7 @@ from functools import partial
 
 from typing import Callable, Any, AnyStr, Optional, Tuple, Union
 
-from jax import vmap, pmap, lax, tree_util
+from jax import vmap, pmap, lax, tree_util, named_call
 
 import jax.numpy as jnp
 
@@ -298,6 +298,7 @@ def minibatch_potential(prior: Prior,
       stochastic_variance = 1 / (n - 1) * jnp.sum(jnp.multiply(mask, sq))
     return stochastic_potential, stochastic_variance, new_state
 
+  @partial(named_call, name='evaluate_stochastic_potential')
   def potential_function(sample: PyTree,
                          reference_data: MiniBatch,
                          state: PyTree = None,
@@ -379,6 +380,7 @@ def full_potential(prior: Callable[[PyTree], Array],
     unscaled_potential = potential * n / N
     return unscaled_potential, state
 
+  @partial(named_call, name='evaluate_true_potential')
   def sum_batched_evaluations(sample: PyTree,
                               data_state: CacheState,
                               state: PyTree = None):

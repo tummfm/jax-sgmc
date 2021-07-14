@@ -72,33 +72,23 @@ Batched Likelihood
 ___________________
 
 Some models already accept a batch of reference data. In this case, the
-potential function can be constructed by setting ``is_batched = True``.
-The mask provides information about which of the batched observations are valid.
-Invalid samples only occur during the full potential evaluation, so during the
-stochastic potential evaluation no mask argument is provided.
+potential function can be constructed by setting ``is_batched = True``. In this
+case, it is expected that the returned likelihoods are a vectore with shape
+``(N,)``, where N is the batch-size.
 
-Some solver need information about the variance of the stochastic potential over
-the reference batch. Therefore, this variance needs to be passed by the batched
-likelihood function. However, as the variance is only used for the stochastic
-potential and not for the full potential, a nan value can be returend for the
-masked evaluations.
 
   >>> @partial(vmap, in_axes=(None, 0))
-  ... def batch_eval(sample, observation):
+  ... def batched_likelihood(sample, observation):
   ...   likelihoods = jscp.stats.norm.logpdf(observation['mean'],
   ...                                        loc=sample['mean'],
   ...                                        scale=sample['std'])
   ...   # Only valid samples contribute to the likelihood
   ...   return jnp.sum(likelihoods)
   >>>
-  >>> # This function calculates a single likelihood for a batch of observations.
-  >>> def batched_likelihood(samle, observations, mask=None):
-  ...   likelihoods = batch_eval(samle, observations)
-  ...   # To ensure compatibility with the full potential evaluation.
-  ...   if mask is None:
-  ...     return jnp.sum(likelihoods), jnp.var(likelihoods)
-  ...   else:
-  ...     return jnp.sum(mask * likelihoods), jnp.nan
+  >>> stochastic_potential_fn = potential.minibatch_potential(prior,
+  ...                                                         batched_likelihood,
+  ...                                                         is_batched=True,
+  ...                                                         strategy='map')
   >>>
   >>> new_random_data_state, random_batch = batch_get(random_data_state, information=True)
   >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
@@ -111,7 +101,7 @@ masked evaluations.
   ...                                            variance=True)
   >>>
   >>> print(variance)
-  7.4554925
+  7.45549
 
 
 Full Potential
@@ -143,12 +133,7 @@ Here, the likelihood written for a single observation can be re-used.
 Bached Likelihood
 __________________
 
-In the case that the likelihood accepts a batch of observations, using the
-full dataset mapping requires implementing a mask. The mask provides
-information whether an observation is valid or just a filler value to ensure
-equal batch shapes.
-Because we implemented the mask argument as kwarg in the batched likelihood for
-the stochastic potential evaluation, we can easily re-use it here.
+The batched likelihood can also be used to calculate the full potential.
 
   >>> prior = lambda unused_sample: 0.0
   >>>
@@ -176,9 +161,13 @@ as first positional argument.
   ...                                        scale=sample['std'])
   ...   return jnp.sum(likelihoods), (n, new_mean)
   >>>
-  >>> potential_fn = potential.minibatch_potential(prior, statefull_likelihood, has_state=True)
+  >>> potential_fn = potential.minibatch_potential(prior,
+  ...                                              statefull_likelihood,
+  ...                                              has_state=True)
   >>>
-  >>> potential_eval, new_state = potential_fn(test_sample, random_batch, state=(jnp.array(2), jnp.ones(5)))
+  >>> potential_eval, new_state = potential_fn(test_sample,
+  ...                                          random_batch,
+  ...                                          state=(jnp.array(2), jnp.ones(5)))
   >>>
   >>> print(potential_eval)
   883.183
@@ -216,8 +205,8 @@ FullPotential = Callable[[PyTree, CacheState], Tuple[Array, PyTree]]
 def minibatch_potential(prior: Prior,
                         likelihood: Callable,
                         strategy: AnyStr = "map",
-                        has_state = False,
-                        is_batched = False) -> StochasticPotential:
+                        has_state: bool = False,
+                        is_batched: bool = False) -> StochasticPotential:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -244,141 +233,70 @@ def minibatch_potential(prior: Prior,
     mini-batch.
   """
 
-  # The final function to evaluate the potential including likelihood and prio
-  if is_batched:
-    # The likelihood is already provided for a batch of data
-    def batch_potential(state: PyTree,
-                        sample: PyTree,
-                        reference_data: MiniBatch,
-                        mask: Array):
-      # Approximate the potential by taking the average and scaling it to the
-      # full data set size
-      batch_data, batch_information = reference_data
-      N = batch_information.observation_count
-      n = batch_information.batch_size
-      if mask is None:
-        if has_state:
-          batch_likelihood, batch_variance, new_state = likelihood(
-            state, sample, batch_data)
-        else:
-          batch_likelihood, batch_variance = likelihood(
-            sample, batch_data)
-          new_state = None
-      else:
-        if has_state:
-          batch_likelihood, batch_variance, new_state = likelihood(
-            state, sample, batch_data, mask)
-        else:
-          batch_likelihood, batch_variance = likelihood(
-            sample, batch_data, mask)
-          new_state = None
-      stochastic_potential = - N / n * batch_likelihood
-      return stochastic_potential, batch_variance, new_state
-  elif strategy == 'map':
-    def batch_potential(state: PyTree,
-                        sample: PyTree,
-                        reference_data: MiniBatch,
-                        mask: Array):
-      # The sample stays the same, therefore, it should be added to the
-      # likelihood.
-      if has_state:
-        marginal_likelihood = partial(likelihood, state, sample)
-      else:
-        marginal_likelihood = partial(likelihood, sample)
-      batch_data, batch_information = reference_data
-      N = batch_information.observation_count
-      n = batch_information.batch_size
-      # The mask is only necessary for the full potential evaluation
-      if mask is None:
-        def single_likelihood_evaluation(cumsum, observation):
-          if has_state:
-            likelihood_value, state = marginal_likelihood(observation)
-          else:
-            likelihood_value = marginal_likelihood(observation)
-            state = None
-          next_cumsum = cumsum + likelihood_value
-          return next_cumsum, (likelihood_value, state)
-      else:
-        def single_likelihood_evaluation(cumsum, it):
-          observation, mask = it
-          if has_state:
-            likelihood_value, state = marginal_likelihood(observation)
-          else:
-            likelihood_value = marginal_likelihood(observation)
-            state = None
-          next_cumsum = cumsum + likelihood_value * mask
-          return next_cumsum, (likelihood_value * mask, state)
+  # State is always passed to simplify usage in solvers
+  def stateful_likelihood(state: PyTree,
+                          sample: PyTree,
+                          reference_data: PyTree):
+    if has_state:
+      lks, state = likelihood(state, sample, reference_data)
+    else:
+      lks = likelihood(sample, reference_data)
+      state = None
+    return lks, state
 
-      # Approximate the potential by taking the average and scaling it to the
-      # full data set size
-      startsum = jnp.array([0.0])
-      if mask is None:
-        cumsum, (likelihoods, new_states) = lax.scan(
-          single_likelihood_evaluation,
-          startsum,
-          batch_data)
-        batch_variance = jnp.var(likelihoods)
-      else:
-        cumsum, (likelihoods, new_states) = lax.scan(
-          single_likelihood_evaluation,
-          startsum,
-          (batch_data, mask))
-        # Todo: Variance for masked arrays
-        batch_variance = jnp.nan
-      stochastic_potential = - N / n * cumsum
-      if has_state:
-        new_state = tree_util.tree_map(
-          lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape),
-          new_states,
-          state)
-      else:
-        new_state = None
-      return stochastic_potential, batch_variance, new_state
-  elif strategy in ('vmap', 'pmap'):
-    if strategy == 'pmap':
-      if has_state:
-        batched_likelihood = pmap(likelihood,
-                                  in_axes=(None, None, 0))
-      else:
-        batched_likelihood = pmap(likelihood,
-                                  in_axes=(None, 0))
-    if strategy == 'vmap':
-      if has_state:
-        batched_likelihood = vmap(likelihood,
-                                  in_axes=(None, None, 0))
-      else:
-        batched_likelihood = vmap(likelihood,
-                                  in_axes=(None, 0))
-    def batch_potential(state: PyTree,
-                        sample: PyTree,
-                        reference_data: MiniBatch,
-                        mask: Array):
-      # Approximate the potential by taking the average and scaling it to the
-      # full data set size
-      batch_data, batch_information = reference_data
-      N = batch_information.observation_count
-      n = batch_information.batch_size
-      if has_state:
-        batch_likelihoods, new_states = batched_likelihood(state, sample, batch_data)
-        new_state = tree_util.tree_map(
-          lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape),
-          new_states,
-          state)
-      else:
-        batch_likelihoods = batched_likelihood(sample, batch_data)
-        new_state = None
-      # The mask is only necessary for the full potential evaluation
-      if mask is None:
-        stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
-        stochastic_variance = jnp.var(batch_likelihoods)
-      else:
-        stochastic_potential = - N / n * jnp.sum(
-          jnp.multiply(batch_likelihoods, mask), axis=0)
-        # Todo: Variance for masked arrays
-        stochastic_variance = jnp.nan
-      return stochastic_potential, stochastic_variance, new_state
+  # Define the strategies to evaluate the likelihoods sequantially, vectorized
+  # or in parallel
+  if is_batched:
+    batched_likelihood = stateful_likelihood
+  elif strategy == 'map':
+    def batched_likelihood(state: PyTree,
+                           sample: PyTree,
+                           reference_data: PyTree):
+      partial_likelihood = partial(stateful_likelihood, state, sample)
+      return lax.map(partial_likelihood, reference_data)
+  elif strategy == 'pmap':
+    batched_likelihood = pmap(stateful_likelihood,
+                              in_axes=(None, None, 0))
+  elif strategy == 'vmap':
+    batched_likelihood = vmap(stateful_likelihood,
+                              in_axes=(None, None, 0))
   else:
     raise NotImplementedError(f"Strategy {strategy} is unknown")
+
+
+  def batch_potential(state: PyTree,
+                      sample: PyTree,
+                      reference_data: MiniBatch,
+                      mask: Array):
+    # Approximate the potential by taking the average and scaling it to the
+    # full data set size
+    batch_data, batch_information = reference_data
+    N = batch_information.observation_count
+    n = batch_information.batch_size
+
+    batch_likelihoods, new_states = batched_likelihood(
+      state, sample, batch_data)
+    if is_batched:
+      # Batched evaluation returns single state
+      new_state = new_states
+    elif state:
+      new_state = tree_util.tree_map(
+        lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape),
+        new_states, state)
+    else:
+      new_state = None
+
+    # The mask is only necessary for the full potential evaluation
+    if mask is None:
+      stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
+      stochastic_variance = jnp.var(batch_likelihoods)
+    else:
+      stochastic_potential = - N / n * jnp.sum(
+        jnp.multiply(batch_likelihoods, mask), axis=0)
+      # Undo scaling when calculating the variance
+      sq = jnp.square(batch_likelihoods + stochastic_potential / N)
+      stochastic_variance = 1 / (n - 1) * jnp.sum(jnp.multiply(mask, sq))
+    return stochastic_potential, stochastic_variance, new_state
 
   def potential_function(sample: PyTree,
                          reference_data: MiniBatch,

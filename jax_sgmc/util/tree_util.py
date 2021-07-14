@@ -86,3 +86,19 @@ def tree_matmul(tree_mat: Array, tree_vec: PyTree):
   # Todo: Redefine without need for flatten util
   vec_flat, unravel_fn = flatten_util.ravel_pytree(tree_vec)
   return unravel_fn(jnp.matmul(tree_mat, vec_flat))
+
+def tree_dot(tree_a: PyTree, tree_b: PyTree):
+  """Scalar product of two pytrees.
+
+  Args:
+    tree_a: First pytree
+    tree_b: Second pytree with same tree stree structure and leaf shape as
+      tree_a
+
+  Returns:
+    Returns a scalar, which is the sum of the element-wise product of all leaves.
+
+  """
+  leaves_a = tree_util.tree_leaves(tree_a)
+  leaves_b = tree_util.tree_leaves(tree_b)
+  return sum((jnp.sum(jnp.multiply(a, b)) for a, b in zip(leaves_a, leaves_b)))

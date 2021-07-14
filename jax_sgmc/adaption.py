@@ -106,8 +106,8 @@ Attributes:
 
 covariance = namedtuple(
   "covariance",
-  ["cov_sqrt",
-   "inv_cov",
+  ["cov_sq",
+   "inv_cov_sq",
    "ndim"]
 )
 

@@ -304,6 +304,7 @@ def obabo(potential_fn: StochasticPotential,
 
     return init_state
 
+  @partial(named_call, name='obabo_integration')
   def integrate(state: obabo_state,
                 parameters: schedule,
                 cov: Union[Array, covariance] = jnp.array(1.0)
@@ -494,6 +495,7 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
     return init_state
 
+  @partial(named_call, name='leapfrog_integration')
   def integrate(state: leapfrog_state,
                 parameters: schedule,
                 cov: Union[Array, covariance] = jnp.array(1.0)
@@ -679,7 +681,7 @@ def langevin_diffusion(
 
   # Update according to the integrator update rule
 
-  @partial(named_call, name='integration_step')
+  @partial(named_call, name='langevin_diffusion_step')
   def update_fn(state: langevin_state,
                 parameters: schedule):
     """Updates the integrator state according to a schedule.

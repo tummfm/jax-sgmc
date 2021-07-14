@@ -17,7 +17,7 @@
 from functools import partial
 from typing import Callable, Any, Tuple, NamedTuple, Dict, Union
 
-from jax import lax, jit, random
+from jax import lax, jit, random, named_call
 import jax.numpy as jnp
 from jax_sgmc import io, util, data, potential, integrator
 
@@ -212,6 +212,7 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
   def init(*args, **kwargs):
     return init_integrator(*args, **kwargs)
 
+  @partial(named_call, name='update_step')
   def update(state, schedule):
 
     # No statistics such as acceptance ratio
@@ -252,6 +253,7 @@ def parallel_tempering(integrator,
 
   # Hot schedule is an additional schedule, which has no influence on the
   # saved samples.
+  @partial(named_call, name='resgld_swap_step')
   def update(state, normal_schedule, hot_schedule):
     normal_chain, hot_chain, ssq_estimate, F, step, key = state
 
@@ -326,6 +328,7 @@ def amagold(integrator_fn,
     )
     return state
 
+  @partial(named_call, name='amagold_mh_step')
   def update(state: AMAGOLDState, schedule):
     key, split = random.split(state.key, 2)
     proposal = update_integrator(
@@ -417,6 +420,7 @@ def sggmc(integrator_fn,
     )
     return state
 
+  @partial(named_call, name='sggmc_mh_step')
   def update(state: SGGMCState, schedule) -> Tuple[SGGMCState, Dict]:
     # Todo: Change cov
     cov = jnp.array(1.0)

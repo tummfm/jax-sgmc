@@ -413,6 +413,7 @@ def adaptive_step_size(burn_in = 0,
            decay_constant=decay_constant,
            speed_constant=speed_constant,
            target_acceptance_rate=target_acceptance_rate):
+    del iterations
 
     x_bar = jnp.log(initial_step_size)
     h_bar = 0.0
@@ -422,6 +423,7 @@ def adaptive_step_size(burn_in = 0,
     return init_state
 
   def update(state: Array, iteration: int, acceptance_ratio=0.0, **kwargs):
+    del kwargs
     burn_in, x_bar, h_bar, alpha, t0, kappa, gamma, mu = state
     m = iteration + 1
 
@@ -436,17 +438,13 @@ def adaptive_step_size(burn_in = 0,
     x_bar *= (1 - lr)
     x_bar += lr * x
 
-    host_callback.id_print(h_bar, what="h_bar")
-    host_callback.id_print(iteration, what="iteration")
-
     # Only update during burn in
     x_bar = jnp.where(iteration < burn_in, x_bar, x_bar_old)
-    host_callback.id_print(x_bar, what="x_bar")
 
     return burn_in, x_bar, h_bar, alpha, t0, kappa, gamma, mu
 
   def get(state: Array, iteration: int, **kwargs):
-    host_callback.id_print(jnp.exp(state[1]), what="Step size")
+    del iteration, kwargs
     return jnp.exp(state[1])
 
   return specific_scheduler(init, update, get)

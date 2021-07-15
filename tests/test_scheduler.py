@@ -41,9 +41,9 @@ class TestScheduler:
                   {"tau": 0.5})]
 
   @pytest.mark.parametrize(
-    "step_size, temperature, burn_in",
+    "step_size, burn_in, temperature",
     itertools.product(step_size, burn_in, temperature))
-  def test_scheduler(self, step_size, temperature, burn_in):
+  def test_scheduler(self, step_size, burn_in, temperature):
     """Test that the scheduler can initialize all specific schedulers. Moreover,
     the capability to provide default values is tested. """
 
@@ -68,6 +68,7 @@ class TestScheduler:
     state, _ = schedule[0](iterations)
 
     for _ in range(iterations):
+
       sched = schedule[2](state)
       state = schedule[1](state)
 
@@ -108,7 +109,7 @@ class TestBurnIn():
     """Test, that no off by one error exists."""
     burn_in = scheduler.initial_burn_in(n=n)
 
-    state = burn_in.init(1000)
+    state, _ = burn_in.init(1000)
 
     # Check that samples are not accepted
     for idx in range(n):
@@ -125,7 +126,7 @@ class TestThinning():
   def burn_in(self, request):
     iterations = request.param
     accepted = random.bernoulli(random.PRNGKey(0), p=0.3, shape=(100,))
-    init = lambda *args: None
+    init = lambda *args: (None, onp.sum(accepted))
     update = lambda *args, **kwargs: None
     get = lambda _, iteration, **kwargs: accepted[iteration]
     nonzero, = onp.nonzero(accepted)

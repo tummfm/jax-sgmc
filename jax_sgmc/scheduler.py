@@ -647,7 +647,7 @@ def random_thinning(step_size_schedule: specific_scheduler,
       key = random.PRNGKey(0)
 
     step_size_state = step_size_schedule.init(iterations)
-    burn_in_state = burn_in_schedule.init(iterations)
+    burn_in_state, _ = burn_in_schedule.init(iterations)
 
     def update_fn(state, iteration):
       step_size_state, burn_in_state = state

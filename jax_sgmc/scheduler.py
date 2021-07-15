@@ -78,6 +78,7 @@ __________
 
     polynomial_step_size
     polynomial_step_size_first_last
+    adaptive_step_size
 
 Temperature
 ____________
@@ -138,6 +139,7 @@ from jax import lax
 from jax import random
 
 from jax_sgmc.util import Array
+from jax_sgmc.util import host_callback
 
 specific_scheduler = namedtuple("specific_scheduler",
                                 ["init",
@@ -245,6 +247,12 @@ def init_scheduler(step_size: specific_scheduler = None,
     thinning_state, total_samples = thinning.init(
       iterations,
       **scheduler_kwargs.get('thinning', {}))
+    burn_in_state, collected_samples = burn_in.init(
+      iterations,
+      **scheduler_kwargs.get('burn_in', {}))
+    # If not thinning is provided, collect all samples not subject to burn in
+    total_samples = min(total_samples, collected_samples)
+
     init_state = scheduler_state(
       state=state,
       step_size_state=step_size.init(
@@ -253,9 +261,7 @@ def init_scheduler(step_size: specific_scheduler = None,
       temperature_state=temperature.init(
         iterations,
         **scheduler_kwargs.get('temperature', {})),
-      burn_in_state=burn_in.init(
-        iterations,
-        **scheduler_kwargs.get('burn_in', {})),
+      burn_in_state=burn_in_state,
       thinning_state=thinning_state)
     static = static_information(
       samples_collected=total_samples)
@@ -284,8 +290,7 @@ def init_scheduler(step_size: specific_scheduler = None,
       step_size_state=step_size_state,
       temperature_state=temperature_state,
       burn_in_state=burn_in_state,
-      thinning_state=thinning_state
-    )
+      thinning_state=thinning_state)
     return updated_scheduler_state
 
   def get_fn(state: scheduler_state, **kwargs) -> schedule:
@@ -373,6 +378,79 @@ def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
 # Step Size
 #
 ################################################################################
+
+def adaptive_step_size(burn_in = 0,
+                       initial_step_size = 0.05,
+                       stabilization_constant = 100,
+                       decay_constant = 0.75,
+                       speed_constant = 0.05,
+                       target_acceptance_rate=0.02):
+  """Dual averaging scheme to tune step size for schemes with MH-step.
+
+  The adaptive step size uses the dual averaging scheme to optimize the
+  acceptance rate, as proposed by [1].
+
+  [1] https://arxiv.org/abs/1111.4246
+
+  Args:
+    burn_in: Initial iterations, in which the step size should be tuned
+    initial_step_size: Initial value of the step size
+    speed_constant: Bigger constant stabilizes adaption against initial
+      iterations
+    decay_constant: Controls decay of learning rate of the step size
+    speed_constant: Weights acceptance ratio statistics
+    target_acceptance_rate: Desired acceptance rate
+
+  Returns:
+    Returns a specific step size scheduler.
+
+  """
+
+  def init(iterations: int,
+           burn_in=burn_in,
+           initial_step_size=initial_step_size,
+           stabilization_constant=stabilization_constant,
+           decay_constant=decay_constant,
+           speed_constant=speed_constant,
+           target_acceptance_rate=target_acceptance_rate):
+
+    x_bar = jnp.log(initial_step_size)
+    h_bar = 0.0
+    init_state = (
+      burn_in, x_bar, h_bar, target_acceptance_rate, stabilization_constant,
+      decay_constant, speed_constant, jnp.log(10 * initial_step_size))
+    return init_state
+
+  def update(state: Array, iteration: int, acceptance_ratio=0.0, **kwargs):
+    burn_in, x_bar, h_bar, alpha, t0, kappa, gamma, mu = state
+    m = iteration + 1
+
+    h_bar *= (1 - 1/(m + t0))
+    h_bar += 1/(m + t0) * (target_acceptance_rate - acceptance_ratio)
+
+    x = mu - jnp.sqrt(m) / gamma * h_bar
+
+    lr = jnp.power(m, -kappa)
+
+    x_bar_old = x_bar
+    x_bar *= (1 - lr)
+    x_bar += lr * x
+
+    host_callback.id_print(h_bar, what="h_bar")
+    host_callback.id_print(iteration, what="iteration")
+
+    # Only update during burn in
+    x_bar = jnp.where(iteration < burn_in, x_bar, x_bar_old)
+    host_callback.id_print(x_bar, what="x_bar")
+
+    return burn_in, x_bar, h_bar, alpha, t0, kappa, gamma, mu
+
+  def get(state: Array, iteration: int, **kwargs):
+    host_callback.id_print(jnp.exp(state[1]), what="Step size")
+    return jnp.exp(state[1])
+
+  return specific_scheduler(init, update, get)
+
 
 def polynomial_step_size(a: Array = 1.0,
                          b: Array = 1.0,
@@ -518,9 +596,8 @@ def initial_burn_in(n: Array = 0) -> specific_scheduler:
 
   """
 
-  def init_fn(iterations: int, n: Array = n) -> Array:
-    del iterations
-    return n
+  def init_fn(iterations: int, n: Array = n) -> Tuple[Array, Array]:
+    return n, iterations - n
 
   def update_fn(state: Array, iteration: int, **kwargs) -> Array:
     del iteration, kwargs

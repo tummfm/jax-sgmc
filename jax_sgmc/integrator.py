@@ -112,7 +112,8 @@ def random_tree(key, a):
 
 def obabo(potential_fn: StochasticPotential,
           batch_fn: RandomBatch,
-          steps: Array = 10
+          steps: Array = 10,
+          friction: Array = 1.0,
           ) -> Tuple[Callable, Callable, Callable]:
   """Initializes the OBABO integration scheme.
 
@@ -185,7 +186,7 @@ def obabo(potential_fn: StochasticPotential,
                          f"dim is {cov.ndim}")
     else:
       noise = tree_scale(jnp.sqrt(cov), noise)
-    permanence = jnp.exp(-1.0 * parameters.friction * parameters.step_size)
+    permanence = jnp.exp(-1.0 * friction * parameters.step_size)
     momentum_noise = tree_scale(
       jnp.sqrt((1 - permanence) * parameters.temperature),
       noise)
@@ -340,6 +341,8 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
     potential_fn: Likelihood and prior applied over a minibatch of data
     batch_fn: Function to draw a mini-batch of reference data
     steps: Number of intermediate leapfrog steps
+    friction: Decay of momentum to counteract induced noise due to stochastic
+     gradients
 
   Returns:
     Returns a function running the time reversible leapfrog integrator for T

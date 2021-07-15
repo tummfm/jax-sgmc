@@ -32,12 +32,14 @@ class AMAGOLDState(NamedTuple):
     potential: True potential of the current sample
     integrator_state: State of the reversible leapfrog integrator
     key: PRNGKey for MH correction step
+    acceptance_ratio: Acceptance ratio used in last step.
 
   """
   full_data_state: data.CacheState
   potential: Array
   integrator_state: integrator.leapfrog_state
   key: Array
+  acceptance_ratio: Array
 
 class SGGMCState(NamedTuple):
   """State of the AMAGOLD solver.
@@ -241,10 +243,6 @@ def parallel_tempering(integrator,
            F: Array = jnp.array(1.0),
            **kwargs):
     key, split1, split2 = random.split(key, 3)
-    print("normal")
-    print(normal_sample)
-    print("Hot")
-    print(tempered_sample)
 
     normal_chain = init_integrator(normal_sample, key=split1, **kwargs)
     hot_chain = init_integrator(tempered_sample, key=split2, **kwargs)
@@ -324,8 +322,8 @@ def amagold(integrator_fn,
       integrator_state=integrator_state,
       potential=potential,
       full_data_state=full_data_state,
-      key=split
-    )
+      key=split,
+      acceptance_ratio=(jnp.array(0.0), jnp.array(0.0)))
     return state
 
   @partial(named_call, name='amagold_mh_step')
@@ -341,8 +339,9 @@ def amagold(integrator_fn,
       proposal.positions,
       state.full_data_state)
 
-    alpha = jnp.exp(state.potential - new_potential + proposal.potential)
+    # Limit acceptance ratio to 1.0
     log_alpha = state.potential - new_potential + proposal.potential
+    log_alpha = jnp.where(log_alpha > 0.0, 0.0, log_alpha)
     slice = random.uniform(split)
 
     # If true, the step is accepted
@@ -361,22 +360,24 @@ def amagold(integrator_fn,
       # These parameters must be provided from the updated state, otherwise
       # the noise and the random data is not resampled
       data_state=proposal.data_state,
-      key=proposal.key
-    )
+      key=proposal.key)
 
     new_state = AMAGOLDState(
       key=key,
       integrator_state=new_integrator_state,
       potential=new_potential,
       full_data_state=full_data_state,
-    )
+      acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size))
 
-    stats = {'acceptance_ratio': alpha}
+    stats = {'acceptance_ratio': jnp.exp(log_alpha)}
 
     return new_state, stats
 
-  def get(state):
-    return get_integrator(state.integrator_state)
+  def get(state: AMAGOLDState) -> Dict:
+    int_dict = get_integrator(state.integrator_state)
+    int_dict['acceptance_ratio'] = state.acceptance_ratio[0]
+    int_dict['step_size'] = state.acceptance_ratio[1]
+    return int_dict
 
   return init, update, get
 
@@ -416,8 +417,7 @@ def sggmc(integrator_fn,
       potential=potential,
       full_data_state=full_data_state,
       key=split,
-      acceptance_ratio=jnp.array(0.0)
-    )
+      acceptance_ratio=(jnp.array(0.0), jnp.array(0.0)))
     return state
 
   @partial(named_call, name='sggmc_mh_step')
@@ -462,16 +462,14 @@ def sggmc(integrator_fn,
       data_state=proposal.data_state,
       key=proposal.key,
       kinetic_energy_start=0.0,
-      kinetic_energy_end=0.0
-    )
+      kinetic_energy_end=0.0)
 
     new_state = SGGMCState(
       key=key,
       integrator_state=new_integrator_state,
       potential=new_potential,
       full_data_state=full_data_state,
-      acceptance_ratio=jnp.exp(log_alpha)
-    )
+      acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size))
 
     stats = {'acceptance_ratio': jnp.exp(log_alpha)}
 
@@ -479,7 +477,8 @@ def sggmc(integrator_fn,
 
   def get(state: SGGMCState) -> Dict:
     int_dict = get_integrator(state.integrator_state)
-    int_dict['acceptance_ratio'] = state.acceptance_ratio
+    int_dict['acceptance_ratio'] = state.acceptance_ratio[0]
+    int_dict['step_size'] = state.acceptance_ratio[1]
     return int_dict
 
   return init, update, get

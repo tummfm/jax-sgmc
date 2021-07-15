@@ -93,7 +93,7 @@ w_npy = mcmc.get_samples()["weights"]
 ################################################################################
 
 
-M = 10
+M = 50
 cs = 1000
 
 data_loader = data.NumpyDataLoader(x=x, y=y)
@@ -141,25 +141,29 @@ rms_prop = adaption.rms_prop()
 # Integrators
 default_integrator = integrator.obabo(potential_fn,
                                       batch_fn,
-                                      steps=20)
+                                      steps=5,
+                                      friction=1e5)
 
 # Initial value for starting
-sample = {"w": jnp.zeros(4), "sigma": jnp.array(2.0)}
+# sample = {"w": jnp.zeros(4), "sigma": jnp.array(2.0)}
 
 # Converged sample
-# sample = {"w": jnp.array([0.1, -0.5, -0.15, -0.65]), "sigma": jnp.array(0.7)}
+sample = {"w": jnp.array([0.1, -0.5, -0.15, -0.65]), "sigma": jnp.array(0.7)}
 
 # Schedulers
 # default_step_size = scheduler.polynomial_step_size_first_last(first=0.5,
 #                                                              last=0.001)
-default_step_size = scheduler.polynomial_step_size(0.0005, gamma=0.0)
+default_step_size = scheduler.adaptive_step_size(burn_in=5000,
+                                                 initial_step_size = 0.05,
+                                                 stabilization_constant = 100,
+                                                 decay_constant = 0.75,
+                                                 speed_constant = 0.05,
+                                                 target_acceptance_rate=0.02)
 
 burn_in = scheduler.initial_burn_in(0)
 default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 2000)
 
-default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
-                                             friction=1e2)
-
+default_scheduler = scheduler.init_scheduler(step_size=default_step_size)
 
 amagold = solver.sggmc(default_integrator, full_potential_fn)
 
@@ -185,6 +189,10 @@ plt.figure()
 plt.title("Acceptance Ratio")
 plt.plot(default_results["acceptance_ratio"])
 plt.plot(jnp.cumsum(default_results["acceptance_ratio"]) / (1 + jnp.arange(default_results["acceptance_ratio"].size)))
+
+plt.figure()
+plt.title("Step size")
+plt.plot(default_results["step_size"])
 
 plt.figure()
 plt.title("Sigma")

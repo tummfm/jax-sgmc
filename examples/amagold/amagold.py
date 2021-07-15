@@ -148,13 +148,18 @@ default_integrator = integrator.reversible_leapfrog(potential_fn,
 sample = {"w": jnp.zeros(4), "sigma": jnp.array(2.0)}
 
 # Schedulers
-default_step_size = scheduler.polynomial_step_size_first_last(first=0.005,
-                                                              last=0.0005)
+default_step_size = scheduler.adaptive_step_size(burn_in=5000,
+                                                 initial_step_size = 0.05,
+                                                 stabilization_constant = 100,
+                                                 decay_constant = 0.75,
+                                                 speed_constant = 0.05,
+                                                 target_acceptance_rate=0.05)
 
-burn_in = scheduler.initial_burn_in(0)
+burn_in = scheduler.initial_burn_in(2000)
 default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 2000)
 
-default_scheduler = scheduler.init_scheduler(step_size=default_step_size)
+default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
+                                             burn_in=burn_in)
 
 
 amagold = solver.amagold(default_integrator, full_potential_fn)
@@ -177,7 +182,14 @@ print(default_results)
 # Results
 #
 ################################################################################
+plt.figure()
+plt.title("Acceptance Ratio")
+plt.plot(default_results["acceptance_ratio"])
+plt.plot(jnp.cumsum(default_results["acceptance_ratio"]) / (1 + jnp.arange(default_results["acceptance_ratio"].size)))
 
+plt.figure()
+plt.title("Step size")
+plt.plot(default_results["step_size"])
 
 plt.figure()
 plt.title("Sigma")
@@ -186,10 +198,8 @@ plt.plot(default["sigma"], label="SGHMC")
 
 plt.legend()
 
-# Now, only take the last 4000 steps
-
-w_default = default["w"][-4000:,:]
-default_likelihoods = default_likelihoods[-4000:]
+w_default = default["w"]
+default_likelihoods = default_likelihoods
 
 # Contours of numpyro solution
 

@@ -41,7 +41,7 @@ class TestDecorator:
                                                     (1.0, 1.0)])
   def test_args_kwargs(self, random_tree, test_arg, test_kwarg):
 
-    @adaption.adaption
+    @adaption.adaption(adaption.Manifold)
     def init_adaption():
       def init(sample, arg, kwarg=1.0):
         return sample, arg, kwarg
@@ -67,14 +67,16 @@ class TestDecorator:
     assert update_state.state[3] == test_arg
     assert update_state.state[4] == test_kwarg
 
-    assert manifold.ndim == 1
-    test_util.check_close(manifold.g_inv, util.tree_scale(test_arg, random_tree))
-    test_util.check_close(manifold.sqrt_g_inv, util.tree_scale(test_kwarg, random_tree))
-    test_util.check_close(manifold.gamma, util.tree_scale(0.0, random_tree))
+    assert manifold.g_inv.ndim == 1
+    assert manifold.sqrt_g_inv.ndim == 1
+    assert manifold.gamma.ndim == 1
+    test_util.check_close(manifold.g_inv.tensor, util.tree_scale(test_arg, random_tree))
+    test_util.check_close(manifold.sqrt_g_inv.tensor, util.tree_scale(test_kwarg, random_tree))
+    test_util.check_close(manifold.gamma.tensor, util.tree_scale(0.0, random_tree))
 
   @pytest.mark.parametrize("diag", [True, False])
   def test_diag_full(self, diag, random_tree):
-    @adaption.adaption
+    @adaption.adaption(adaption.Manifold)
     def init_adaption():
       def init(*args):
         return None
@@ -93,8 +95,8 @@ class TestDecorator:
 
     # Assert correctness of diagonal / full manifold
     if diag:
-      assert manifold.ndim == 1
-      test_util.check_close(util.tree_multiply(manifold.g_inv, random_tree), random_tree)
+      assert manifold.g_inv.ndim == 1
+      test_util.check_close(util.tree_multiply(manifold.g_inv.tensor, random_tree), random_tree)
     else:
-      assert manifold.ndim == 2
-      test_util.check_close(util.tree_matmul(manifold.g_inv, random_tree), random_tree)
+      assert manifold.g_inv.ndim == 2
+      test_util.check_close(util.tree_matmul(manifold.g_inv.tensor, random_tree), random_tree)

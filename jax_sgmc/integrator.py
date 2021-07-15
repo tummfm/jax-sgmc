@@ -28,7 +28,7 @@ import jax.numpy as jnp
 from jax_sgmc.adaption import AdaptionStrategy, covariance
 from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.data import RandomBatch, CacheState
-from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tree_matmul, tree_dot
+from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tensor_matmul, tree_dot
 from jax_sgmc.scheduler import schedule
 
 leapfrog_state = namedtuple("leapfrog_state",
@@ -727,18 +727,13 @@ def langevin_diffusion(
         gradient,
         mini_batch)
 
-      if manifold.ndim == 1:
-        adapted_gradient = tree_multiply(manifold.g_inv, scaled_gradient)
-        adapted_noise = tree_multiply(manifold.sqrt_g_inv, scaled_noise)
-      else:
-        adapted_gradient = tree_matmul(manifold.g_inv, scaled_gradient)
-        adapted_noise = tree_matmul(manifold.sqrt_g_inv, scaled_noise)
+      adapted_gradient = tensor_matmul(manifold.g_inv, scaled_gradient)
+      adapted_noise = tensor_matmul(manifold.sqrt_g_inv, scaled_noise)
+      scaled_gamma = tree_scale(parameters.step_size, manifold.gamma.tensor)
 
-      scaled_gamma = tree_scale(parameters.step_size, manifold.gamma)
       update_step = tree_add(
         tree_add(scaled_gamma, adapted_gradient),
-        adapted_noise
-      )
+        adapted_noise)
 
     # Conclude the variable update by adding the step to the current samples
     new_sample = tree_add(state.latent_variables, update_step)
@@ -749,8 +744,7 @@ def langevin_diffusion(
       data_state=data_state,
       model_state=new_model_state,
       potential=jnp.array(potential, dtype=state.potential.dtype),
-      variance=variance
-    )
+      variance=variance)
 
     return new_state
 

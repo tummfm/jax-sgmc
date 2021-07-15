@@ -14,7 +14,7 @@
 
 """Defines types special to jax.edited.bak or this library. """
 
-from typing import Any
+from typing import Any, NamedTuple
 from functools import partial
 
 from jax import tree_util
@@ -24,7 +24,36 @@ import jax.numpy as jnp
 Array = jnp.ndarray
 PyTree = Any
 
-# Probably not important
+class Tensor(NamedTuple):
+  """Vector and matrix pytree-products.
+
+  Attributes:
+    ndim: Dimension of the pytree (1: vector, 2: matrix)
+    tensor: Data of the pytree
+
+  """
+  ndim: int
+  tensor: PyTree
+
+def tensor_matmul(matrix: Tensor, vector: PyTree):
+  """Matrix vector product with a tensor and a pytree.
+
+  Distinguishes between full matrices and diagonal matrices.
+
+  Args:
+    matrix: Matrix in tensor format
+    vector: PyTree, which is compatible to the tensor
+
+  """
+  if matrix.ndim == 0:
+    return tree_scale(matrix.tensor, vector)
+  elif matrix.ndim == 1:
+    return tree_multiply(matrix.tensor, vector)
+  elif matrix.ndim == 2:
+    return tree_matmul(matrix.tensor, vector)
+  else:
+    raise NotImplementedError(f"Cannot multiply matrix with dimension "
+                              f"{matrix.ndim}")
 
 def tree_multiply(tree_a: PyTree, tree_b: PyTree) -> PyTree:
   """Maps elementwise product over two vectors.

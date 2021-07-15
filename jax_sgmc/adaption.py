@@ -41,14 +41,14 @@ potential.
 
 import functools
 
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Tuple, NamedTuple
 
 from collections import namedtuple
 
 from jax import tree_util, flatten_util, jit, named_call, lax
 import jax.numpy as jnp
 
-from jax_sgmc.util import Array
+from jax_sgmc.util import Array, Tensor
 
 # Todo: Correctly specify the return type
 
@@ -88,21 +88,21 @@ Attributes:
   flat_potential: Potential function on the flattened pytree
 """
 
-manifold = namedtuple(
-  "manifold",
-  ["ndim",
-   "g_inv",
-   "sqrt_g_inv",
-   "gamma"]
-)
-"""Adapted manifold.
+class Manifold(NamedTuple):
+  """Adapted manifold.
 
-Attributes:
-  ndim: Diagonal or full adaption.
-  g_inv: Adaption matrix for gradient
-  sqrt_g_inv: Adaption matrix for noise
-  gamma: Diffusion due to positional dependence of manifold
-"""
+  Attributes:
+    g_inv: Inverse manifold.
+    sqrt_g_inv: Square root of inverse manifold.
+    gamma: Diffusion to correct for positional dependence of manifold.
+
+  """
+  g_inv: Tensor
+  sqrt_g_inv: Tensor
+  gamma: Tensor
+
+class MassMatrix(NamedTuple):
+  """Mass matrix for HMC. """
 
 # Todo: Replace covariance by mass matrix
 covariance = namedtuple(
@@ -127,7 +127,10 @@ def get_unravel_fn(tree: PyTree):
   _, unravel_fn = flatten_util.ravel_pytree(tree)
   return tree_util.Partial(jit(unravel_fn))
 
-def adaption(adaption_fn: Adaption):
+def adaption(quantity: namedtuple = tuple):
+  return functools.partial(_adaption, quantity=quantity)
+
+def _adaption(adaption_fn: Adaption, quantity: namedtuple = tuple):
   """Decorator to make adaption strategies operate on 1D arrays."""
 
   @functools.wraps(adaption_fn)
@@ -198,44 +201,36 @@ def adaption(adaption_fn: Adaption):
                 grad_x: PyTree,
                 mini_batch: PyTree,
                 *get_args,
-                **get_kwargs):
+                **get_kwargs
+                ) -> quantity:
       # Flat the params and the gradient
       x_flat = state.ravel_fn(x)
       grad_flat = state.ravel_fn(grad_x)
 
       # Get with flattened arguments
       if state.flat_potential is None:
-        g_inv, sqrt_g_inv, gamma = named_get(state.state,
-                                             x_flat,
-                                             grad_flat,
-                                             *get_args,
-                                             **get_kwargs)
+        adapted_quantities = named_get(state.state,
+                                       x_flat,
+                                       grad_flat,
+                                       *get_args,
+                                       **get_kwargs)
       else:
-        g_inv, sqrt_g_inv, gamma = named_get(state.state,
-                                             x_flat,
-                                             grad_flat,
-                                             mini_batch,
-                                             state.flat_potential,
-                                             *get_args,
-                                             **get_kwargs)
+        adapted_quantities = named_get(state.state,
+                                       x_flat,
+                                       grad_flat,
+                                       mini_batch,
+                                       state.flat_potential,
+                                       *get_args,
+                                       **get_kwargs)
 
-      if g_inv.ndim == 1 and sqrt_g_inv.ndim == 1:
-        unraveled_manifold = manifold(
-          ndim=1,
-          g_inv=state.unravel_fn(g_inv),
-          sqrt_g_inv=state.unravel_fn(sqrt_g_inv),
-          gamma=state.unravel_fn(gamma)
-        )
-      else:
-        unraveled_manifold = manifold(
-          ndim=2,
-          g_inv=g_inv,
-          sqrt_g_inv=sqrt_g_inv,
-          gamma=state.unravel_fn(gamma)
-        )
+      def unravel_quantities():
+        for q in adapted_quantities:
+          if q.ndim == 1:
+            yield Tensor(ndim=1, tensor=state.unravel_fn(q))
+          else:
+            yield Tensor(ndim=2, tensor=q)
 
-      # Unravel the results
-      return unraveled_manifold
+      return quantity(*unravel_quantities())
     return new_init, new_update, new_get
   return pytree_adaption
 
@@ -265,7 +260,7 @@ static_conditioning_state = namedtuple(
 #
 #   # Get a zero pytree
 
-@adaption
+@adaption(quantity=Manifold)
 def rms_prop() -> AdaptionStrategy:
   """RMSprop adaption.
 

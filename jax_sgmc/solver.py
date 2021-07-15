@@ -229,6 +229,23 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
 def parallel_tempering(integrator,
                        sa_schedule: Callable = lambda n: 1 / n
                        ) -> Tuple[Callable, Callable, Callable]:
+  """Exchange samples from a normal and tempered chain.
+
+  This solver runs an additional tempered chain, from which no samples are
+  drawn. The normal chain and the additional chain exchange samples at random
+  by a reversible jump process [1].
+
+  [1] https://arxiv.org/abs/2008.05367v3
+
+  Args:
+    integrator: standard langevin diffusion integrator
+    sa_schedule: learning rate schedule to estimate the standard deviation of
+      the stochastic potential
+
+  Returns:
+    Returns the reSGLD solver.
+
+  """
 
   init_integrator, update_integrator, get_integrator = integrator
 

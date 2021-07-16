@@ -439,14 +439,10 @@ def sggmc(integrator_fn,
 
   @partial(named_call, name='sggmc_mh_step')
   def update(state: SGGMCState, schedule) -> Tuple[SGGMCState, Dict]:
-    # Todo: Change cov
-    cov = jnp.array(1.0)
-
     key, split = random.split(state.key, 2)
     proposal = update_integrator(
       state.integrator_state,
-      schedule,
-      cov=cov)
+      schedule)
 
     # MH correction step
     new_potential, (full_data_state, _) = full_potential_fn(
@@ -479,7 +475,9 @@ def sggmc(integrator_fn,
       data_state=proposal.data_state,
       key=proposal.key,
       kinetic_energy_start=0.0,
-      kinetic_energy_end=0.0)
+      kinetic_energy_end=0.0,
+      mass_matrix_state=proposal.mass_matrix_state
+    )
 
     new_state = SGGMCState(
       key=key,

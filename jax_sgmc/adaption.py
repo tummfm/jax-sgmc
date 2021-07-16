@@ -48,7 +48,7 @@ from collections import namedtuple
 from jax import tree_util, flatten_util, jit, named_call, lax
 import jax.numpy as jnp
 
-from jax_sgmc.util import Array, Tensor
+from jax_sgmc.util import Array, Tensor, host_callback
 
 # Todo: Correctly specify the return type
 
@@ -103,14 +103,8 @@ class Manifold(NamedTuple):
 
 class MassMatrix(NamedTuple):
   """Mass matrix for HMC. """
-
-# Todo: Replace covariance by mass matrix
-covariance = namedtuple(
-  "covariance",
-  ["cov_sqrt",
-   "inv_cov_sqrt",
-   "ndim"]
-)
+  inv: PyTree
+  sqrt: PyTree
 
 # Todo: Make tree hashable and add caching
 def get_unravel_fn(tree: PyTree):
@@ -324,5 +318,87 @@ def rms_prop() -> AdaptionStrategy:
     v, _, lmbd = state
     g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
     return g, jnp.sqrt(g), jnp.zeros_like(g)
+
+  return init, update, get
+
+
+@adaption(quantity=MassMatrix)
+def mass_matrix(diagonal=True, burn_in=1000):
+  """Adapt the mass matrix for HMC.
+
+  Args:
+    diagonal: Restrict the adapted matrix to be diagonal
+    burn_in: Number of steps in which the matrix should be updated
+
+  Returns:
+    Returns an adaption strategy for the mass matrix.
+
+  """
+
+  def _update_matrix(args):
+    iteration, ssq, _, _ = args
+    if diagonal:
+      inv = ssq / iteration
+      sqrt = jnp.sqrt(iteration / ssq)
+      host_callback.id_print(inv, what="Covariance")
+    else:
+      inv = ssq / iteration
+      eigw, eigv = jnp.linalg.eigh(ssq / iteration)
+      # Todo: More effective computation
+      sqrt = jnp.matmul(jnp.transpose(eigv), jnp.matmul(jnp.diag(jnp.sqrt(eigw)), eigv))
+      print(sqrt)
+    host_callback.id_print(inv, what="Covariance")
+    return inv, sqrt
+
+  def init(sample: Array):
+    iteration = 0
+    mean = jnp.zeros_like(sample)
+    if diagonal:
+      ssq = jnp.zeros_like(sample)
+    else:
+      ssq = jnp.zeros((sample.size, sample.size))
+
+    if diagonal:
+      m_inv = jnp.ones_like(sample)
+      m_sqrt = jnp.ones_like(sample)
+    else:
+      m_inv = jnp.eye(sample.size)
+      m_sqrt = jnp.eye(sample.size)
+
+    return iteration, mean, ssq, m_inv, m_sqrt
+
+  def update(state: Tuple[Array, Array, Array, Array, Array],
+             sample: Array,
+             sample_grad: Array,
+             *args: Any,
+             **kwargs: Any):
+    del sample_grad, args, kwargs
+    iteration, mean, ssq, m_inv, m_sqrt = state
+
+    iteration += 1
+    new_mean = (iteration - 1) / iteration * mean + 1 / iteration * sample
+    if diagonal:
+      ssq += jnp.multiply(sample - mean, sample - new_mean)
+    else:
+      ssq += jnp.outer(sample - mean, sample - new_mean)
+
+    # Only update once
+    new_m_inv, new_m_sqrt = lax.cond(
+      iteration == burn_in,
+      _update_matrix,
+      lambda arg: (arg[2], arg[3]),
+      (iteration, ssq, m_inv, m_sqrt))
+
+    return iteration, new_mean, ssq, new_m_inv, new_m_sqrt
+
+  def get(state: Tuple[Array, Array, Array, Array, Array],
+          sample: Array,
+          sample_grad: Array,
+          *args: Any,
+          **kwargs: Any):
+    del sample, sample_grad, args, kwargs
+    _, _, _, m_inv, m_sqrt = state
+
+    return m_inv, m_sqrt
 
   return init, update, get

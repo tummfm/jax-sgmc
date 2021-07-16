@@ -25,7 +25,7 @@ from jax import random, tree_unflatten, tree_flatten, grad, lax, tree_util, valu
 
 import jax.numpy as jnp
 
-from jax_sgmc.adaption import AdaptionStrategy, covariance
+from jax_sgmc.adaption import AdaptionStrategy, MassMatrix
 from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.data import RandomBatch, CacheState
 from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tensor_matmul, tree_dot
@@ -55,6 +55,7 @@ obabo_state = namedtuple("obabo_state",
                           "model_state",
                           "data_state",
                           "key",
+                          "mass_matrix_state",
                           "kinetic_energy_start",
                           "kinetic_energy_end"])
 """
@@ -114,6 +115,7 @@ def obabo(potential_fn: StochasticPotential,
           batch_fn: RandomBatch,
           steps: Array = 10,
           friction: Array = 1.0,
+          mass_matrix = None
           ) -> Tuple[Callable, Callable, Callable]:
   """Initializes the OBABO integration scheme.
 
@@ -126,6 +128,8 @@ def obabo(potential_fn: StochasticPotential,
     potential_fn: Likelihood and prior applied over a minibatch of data
     batch_fn: Function to draw a mini-batch of reference data
     steps: Number of integration steps.
+    friction: Controls impact of momentum from previous step
+    mass_matrix: Mass matrix adaption function.
 
   Returns:
     Returns a function running the time OBABO integrator for T
@@ -135,34 +139,26 @@ def obabo(potential_fn: StochasticPotential,
 
   init_data, get_data = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
+  if mass_matrix:
+    init_mass_matrix, update_mass_matrix, get_mass_matrix = mass_matrix
 
   # Helper functions to calculate the kinetic energy, update the position,
   # refresh and update the momentum.
 
-  def _kinetic_energy(cov, momentum):
-    if isinstance(cov, covariance):
-      if cov.ndim == 1:
-        scaled_momentum = tree_multiply(cov.inv_cov, momentum)
-      elif cov.ndim == 2:
-        scaled_momentum = tree_matmul(cov.inv_cov, momentum)
-      else:
-        raise ValueError(f"Covariance cannot have dimension greater than 2, "
-                         f"dim is {cov.ndim}")
+  def _kinetic_energy(mass_state, momentum):
+    if mass_matrix:
+      mass = get_mass_matrix(mass_state, momentum, momentum, None)
+      scaled_momentum = tensor_matmul(mass.inv, momentum)
     else:
-      scaled_momentum = tree_scale(1 / cov, momentum)
+      scaled_momentum = tree_scale(1 / mass_state, momentum)
     return 0.5 * tree_dot(momentum, scaled_momentum)
 
-  def _position_update(scale, cov, position, momentum):
-    if isinstance(cov, covariance):
-      if cov.ndim == 1:
-        scaled_momentum = tree_multiply(cov.inv_cov, momentum)
-      elif cov.ndim == 2:
-        scaled_momentum = tree_matmul(cov.inv_cov, momentum)
-      else:
-        raise ValueError(f"Covariance cannot have dimension greater than 2, "
-                         f"dim is {cov.ndim}")
+  def _position_update(scale, mass_state, position, momentum):
+    if mass_matrix:
+      mass = get_mass_matrix(mass_state, position, position, None)
+      scaled_momentum = tensor_matmul(mass.inv, momentum)
     else:
-      scaled_momentum = tree_scale(1 / cov, momentum)
+      scaled_momentum = tree_scale(1 / mass_state, momentum)
     # Scale is 0.5 of step size for half momentum update, otherwise it is just
     # the step size.
     scaled_momentum = tree_scale(scale, scaled_momentum)
@@ -174,18 +170,13 @@ def obabo(potential_fn: StochasticPotential,
     return tree_add(scaled_gradient, momentum)
 
   # Add noise to momentum
-  def _momentum_resampling(parameters, cov, momentum, split):
+  def _momentum_resampling(parameters, mass_state, momentum, split):
     noise = random_tree(split, momentum)
-    if isinstance(cov, covariance):
-      if cov.ndim == 1:
-        noise = tree_multiply(covariance.cov_sqrt, noise)
-      elif cov.ndim == 2:
-        noise = tree_matmul(covariance.cov_sqrt, noise)
-      else:
-        raise ValueError(f"Covariance cannot have dimension greater than 2, "
-                         f"dim is {cov.ndim}")
+    if mass_matrix:
+      mass = get_mass_matrix(mass_state, momentum, momentum, None)
+      noise = tensor_matmul(mass.sqrt, noise)
     else:
-      noise = tree_scale(jnp.sqrt(cov), noise)
+      noise = tree_scale(jnp.sqrt(mass_state), noise)
     permanence = jnp.exp(-1.0 * friction * parameters.step_size)
     momentum_noise = tree_scale(
       jnp.sqrt((1 - permanence) * parameters.temperature),
@@ -197,13 +188,12 @@ def obabo(potential_fn: StochasticPotential,
   # A single OBABO-step of the integrator
   def _leapfrog_steps(state: obabo_state,
                 step: jnp.array,
-                parameters: schedule = None,
-                cov: Union[Array, covariance] = jnp.array(1.0)):
+                parameters: schedule = None):
     key, split1, split2 = random.split(state.key, 3)
     # Need the refreshed momentum only for the acceptance step
 
     refreshed_momentum = _momentum_resampling(parameters,
-                                              cov,
+                                              state.mass_matrix_state,
                                               state.momentum,
                                               split1)
 
@@ -211,7 +201,7 @@ def obabo(potential_fn: StochasticPotential,
     # acceptance probability
     start_energy = lax.select(
       step == 0,
-      _kinetic_energy(cov, refreshed_momentum),
+      _kinetic_energy(state.mass_matrix_state, refreshed_momentum),
       state.kinetic_energy_start)
 
     # Momentum update with stochastic gradient
@@ -227,7 +217,7 @@ def obabo(potential_fn: StochasticPotential,
 
     updated_positions = _position_update(
       parameters.step_size,
-      cov,
+      state.mass_matrix_state,
       state.positions,
       updated_momentum)
 
@@ -244,13 +234,13 @@ def obabo(potential_fn: StochasticPotential,
 
     refreshed_momentum = _momentum_resampling(
       parameters,
-      cov,
+      state.mass_matrix_state,
       updated_momentum,
       split2)
 
     # The kinetic energy of the last step is necessary to
     # calculate the acceptance probability for the MH step.
-    end_energy = _kinetic_energy(cov, updated_momentum)
+    end_energy = _kinetic_energy(state.mass_matrix_state, updated_momentum)
 
     new_state = obabo_state(
       potential=0.5 * (pot_before + pot_after),
@@ -260,14 +250,16 @@ def obabo(potential_fn: StochasticPotential,
       data_state=data_state,
       model_state=model_state,
       kinetic_energy_start=start_energy,
-      kinetic_energy_end=end_energy)
+      kinetic_energy_end=end_energy,
+      mass_matrix_state=state.mass_matrix_state)
 
     return new_state, None
 
   def init_fn(init_sample: PyTree,
               key: Array = None,
               batch_kwargs: Dict = None,
-              init_model_state: PyTree = None):
+              init_model_state: PyTree = None,
+              init_cov: Array = jnp.array(1.0)):
     """Initializes the initial state of the integrator.
 
     Args:
@@ -275,6 +267,7 @@ def obabo(potential_fn: StochasticPotential,
       key: Initial PRNGKey
       batch_kwargs: Determine the inital state of the random data chain
       init_model_state: State of the model.
+      init_cov: Single scale covariance if mass matrix is not adapted
 
     Returns:
       Returns the initial state of the integrator.
@@ -285,6 +278,11 @@ def obabo(potential_fn: StochasticPotential,
     # variables which might be only necessary in special case
     if batch_kwargs is None:
       batch_kwargs = {}
+
+    if mass_matrix:
+      mass_matrix_state = init_mass_matrix(init_sample)
+    else:
+      mass_matrix_state = init_cov
 
     reference_data_state = init_data(**batch_kwargs)
 
@@ -301,19 +299,38 @@ def obabo(potential_fn: StochasticPotential,
       positions=init_sample,
       momentum=momentum,
       data_state=reference_data_state,
-      model_state=init_model_state)
+      model_state=init_model_state,
+      mass_matrix_state=mass_matrix_state)
 
     return init_state
 
   @partial(named_call, name='obabo_integration')
   def integrate(state: obabo_state,
-                parameters: schedule,
-                cov: Union[Array, covariance] = jnp.array(1.0)
+                parameters: schedule
                 ) -> obabo_state:
+
+    if mass_matrix:
+      data_state, mini_batch = get_data(state.data_state, information=True)
+      _, gradient = stochastic_gradient(
+        state.positions,
+        mini_batch,
+        state=state.model_state)
+
+      new_mass_state = update_mass_matrix(state.mass_matrix_state, state.positions, gradient, mini_batch)
+      state = obabo_state(
+        positions=state.positions,
+        momentum=state.momentum,
+        potential=state.potential,
+        mass_matrix_state=new_mass_state,
+        key=state.key,
+        data_state=state.data_state,
+        kinetic_energy_start=state.kinetic_energy_start,
+        kinetic_energy_end=state.kinetic_energy_end,
+        model_state=state.model_state)
 
     # Leapfrog integration
     state, _ = lax.scan(
-      partial(_leapfrog_steps, parameters=parameters, cov=cov),
+      partial(_leapfrog_steps, parameters=parameters),
       state,
       onp.arange(steps))
 

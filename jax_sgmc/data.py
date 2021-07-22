@@ -901,9 +901,8 @@ def full_reference_data(data_loader: DataLoader,
                        fun,
                        information=information,
                        masking=masking)
-    out, results = lax.scan(
+    (data_state, carry), results = lax.scan(
       _body_fn, (data_state, carry), onp.arange(num_iterations))
-    data_state, carry = out
 
     if masking:
       true_results = results
@@ -915,8 +914,7 @@ def full_reference_data(data_loader: DataLoader,
       # Invalid results (fillers) must be thrown away
       true_results = tree_util.tree_map(
         lambda leaf: leaf[0:mb_information.observation_count],
-        concat_results
-      )
+        concat_results)
 
     return data_state, (true_results, carry)
 

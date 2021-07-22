@@ -186,6 +186,7 @@ import jax.numpy as jnp
 
 from jax_sgmc import util
 from jax_sgmc.data import CacheState, MiniBatch
+from jax_sgmc.util import host_callback
 
 # Here we define special types
 
@@ -242,7 +243,8 @@ def minibatch_potential(prior: Prior,
     else:
       lks = likelihood(sample, reference_data)
       state = None
-    return lks, state
+    # Ensure that a scalar is returned to avoid broadcasting with mask
+    return jnp.squeeze(lks), state
 
   # Define the strategies to evaluate the likelihoods sequantially, vectorized
   # or in parallel
@@ -291,8 +293,7 @@ def minibatch_potential(prior: Prior,
       stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
       stochastic_variance = jnp.var(batch_likelihoods)
     else:
-      stochastic_potential = - N / n * jnp.sum(
-        jnp.multiply(batch_likelihoods, mask), axis=0)
+      stochastic_potential = - N / n * jnp.dot(batch_likelihoods, mask)
       # Undo scaling when calculating the variance
       sq = jnp.square(batch_likelihoods + stochastic_potential / N)
       stochastic_variance = 1 / (n - 1) * jnp.sum(jnp.multiply(mask, sq))
@@ -365,7 +366,7 @@ def full_potential(prior: Callable[[PyTree], Array],
 
   # Can use the potential evaluation strategy for a minibatch of data. The prior
   # must be evaluated independently.
-  batch_potential = minibatch_potential(lambda sample: 0.0,
+  batch_potential = minibatch_potential(lambda _: 0.0,
                                         likelihood,
                                         strategy=strategy,
                                         has_state=has_state,

@@ -10,8 +10,8 @@ from jax import random, jit, test_util
 import pytest
 
 # from jax_sgmc.data import mini_batch
-from jax_sgmc.potential import minibatch_potential
-from jax_sgmc.data import mini_batch_information
+from jax_sgmc.potential import minibatch_potential, full_potential
+from jax_sgmc.data import mini_batch_information, NumpyDataLoader, full_reference_data
 
 # Todo: Test the potential evaluation function on arbitrary pytrees.
 
@@ -245,3 +245,51 @@ class TestPotential():
     test_util.check_close(new_state_map, sample)
     test_util.check_close(new_state_vmap, sample)
     test_util.check_close(new_state_pmap, sample)
+
+  @pytest.mark.parametrize("obs, dim, mbsize", itertools.product([7, 11], [3, 5], [2, 3]))
+  def test_full_potential(self, potential, obs, dim, mbsize):
+    prior, likelihood = potential
+    # Setup potential
+
+    scan_pot = minibatch_potential(prior, likelihood, strategy="map")
+
+    # Setup reference data
+    key = random.PRNGKey(0)
+
+    split1, split2 = random.split(key, 2)
+    observations = {"scale": random.exponential(split1, shape=(obs,)),
+                    "power": random.exponential(split2, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(observation_count=obs,
+                                                          batch_size=obs)
+    sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
+    init_state = {"scale": jnp.array([0.0]), "base": jnp.zeros(dim)}
+
+    reference_sol, _ = scan_pot(sample, reference_data, state=init_state)
+
+    # Initialize dataloader for full potential evaluation
+    data_loader = NumpyDataLoader(**observations)
+    full_data_map = full_reference_data(data_loader, cached_batches_count=2, mb_size=mbsize)
+
+    map_data_state = full_data_map[0]()
+    vmap_data_state = full_data_map[0]()
+    pmap_data_state = full_data_map[0]()
+
+    map_pot = full_potential(prior, likelihood, strategy="map", full_data_map=full_data_map[1])
+    vmap_pot = full_potential(prior, likelihood, strategy="vmap", full_data_map=full_data_map[1])
+    pmap_pot =  full_potential(prior, likelihood, strategy="pmap", full_data_map=full_data_map[1])
+
+    map_sol, _ = map_pot(sample, map_data_state)
+    vmap_sol, _ = vmap_pot(sample, vmap_data_state)
+    pmap_sol, _ = pmap_pot(sample, pmap_data_state)
+
+    print("Reference solution")
+    print(reference_sol)
+    print("Map solution")
+    print(map_sol)
+    print("Vmap solution")
+    print(vmap_sol)
+    print("Pmap solution")
+    print(pmap_sol)
+
+    assert False
+    test_util.check_close(reference_sol, map_sol)

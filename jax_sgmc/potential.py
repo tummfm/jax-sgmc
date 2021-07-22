@@ -363,6 +363,7 @@ def full_potential(prior: Callable[[PyTree], Array],
     a dataset mapping from the :mod:`jax_sgmc.data` module.
 
   """
+  assert strategy != 'pmap', "Pmap is currently not supported"
 
   # Can use the potential evaluation strategy for a minibatch of data. The prior
   # must be evaluated independently.

@@ -1,11 +1,12 @@
 """Test the evaluation of the potential."""
 
+from functools import partial
 import itertools
 
 import jax
 import jax.numpy as jnp
 
-from jax import random, jit, test_util
+from jax import random, jit, test_util, lax
 
 import pytest
 
@@ -272,24 +273,41 @@ class TestPotential():
 
     map_data_state = full_data_map[0]()
     vmap_data_state = full_data_map[0]()
-    pmap_data_state = full_data_map[0]()
 
     map_pot = full_potential(prior, likelihood, strategy="map", full_data_map=full_data_map[1])
     vmap_pot = full_potential(prior, likelihood, strategy="vmap", full_data_map=full_data_map[1])
-    pmap_pot =  full_potential(prior, likelihood, strategy="pmap", full_data_map=full_data_map[1])
 
     map_sol, _ = map_pot(sample, map_data_state)
     vmap_sol, _ = vmap_pot(sample, vmap_data_state)
-    pmap_sol, _ = pmap_pot(sample, pmap_data_state)
 
-    print("Reference solution")
-    print(reference_sol)
-    print("Map solution")
-    print(map_sol)
-    print("Vmap solution")
-    print(vmap_sol)
-    print("Pmap solution")
-    print(pmap_sol)
-
-    assert False
     test_util.check_close(reference_sol, map_sol)
+    test_util.check_close(reference_sol, vmap_sol)
+
+  @pytest.mark.parametrize("obs, dim, mbsize", itertools.product([7, 11], [3, 5], [2, 3]))
+  def test_variance(self, potential, obs, dim, mbsize):
+    prior, likelihood = potential
+    # Setup potential
+
+    scan_pot = minibatch_potential(prior, likelihood, strategy="map")
+
+    # Setup reference data
+    key = random.PRNGKey(0)
+
+    split1, split2 = random.split(key, 2)
+    observations = {"scale": random.exponential(split1, shape=(obs,)),
+                    "power": random.exponential(split2, shape=(obs, dim))}
+    reference_data = observations, mini_batch_information(observation_count=obs,
+                                                          batch_size=obs)
+
+    sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
+    pot_results = lambda obs: scan_pot(
+      sample,
+      (jax.tree_map(partial(jnp.expand_dims, axis=0), obs),
+       mini_batch_information(observation_count=1, batch_size=1)))
+
+    likelihoods, _ = lax.map(pot_results, observations)
+    true_variance = jnp.var(likelihoods)
+
+    _, (variance, _) = scan_pot(sample, reference_data, variance=True)
+
+    test_util.check_close(variance, true_variance)

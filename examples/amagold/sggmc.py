@@ -14,6 +14,8 @@
 
 import numpy as onp
 
+import os
+
 import jax
 import jax.numpy as jnp
 from jax import random
@@ -22,6 +24,7 @@ from jax.scipy.stats import norm
 from jax import test_util
 test_util.set_host_platform_device_count(2)
 
+import numpyro
 from numpyro import sample as npy_smpl
 import numpyro.infer as npy_inf
 import numpyro.distributions as npy_dist
@@ -37,6 +40,9 @@ from jax_sgmc import io
 from jax_sgmc import scheduler
 from jax_sgmc import integrator
 from jax_sgmc import solver
+
+# numpyro.util.set_platform('cpu')
+os.environ.update(CUDA_VISIBLE_DEVICES = str(1))
 
 import time
 ################################################################################
@@ -59,7 +65,6 @@ x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
                x[:, 3]]).transpose()
 y = jnp.matmul(x, w) + noise
 
-
 ################################################################################
 #
 # Solution with numpyro
@@ -80,7 +85,7 @@ def numpyro_model(y_obs=None):
 # Collect 1000 samples
 
 kernel = npy_inf.HMC(numpyro_model)
-mcmc = npy_inf.MCMC(kernel, 1000, 1000)
+mcmc = npy_inf.MCMC(kernel, num_warmup=1000, num_samples=1000)
 mcmc.run(random.PRNGKey(0), y_obs=y)
 mcmc.print_summary()
 
@@ -93,7 +98,7 @@ w_npy = mcmc.get_samples()["weights"]
 ################################################################################
 
 
-M = 50
+M = 10
 cs = 1000
 
 data_loader = data.NumpyDataLoader(x=x, y=y)
@@ -133,17 +138,17 @@ full_potential_fn = potential.full_potential(prior=prior,
 # == Solver Setup ==============================================================
 
 # Number of iterations
-iterations = 5000
+iterations = 10000
 
 # Adaption strategy
-mass_adaption = adaption.mass_matrix(burn_in=1000, diagonal=False)
+mass_adaption = adaption.mass_matrix(burn_in=2500, diagonal=False)
 
 # Integrators
 default_integrator = integrator.obabo(potential_fn,
                                       batch_fn,
-                                      steps=5,
-                                      friction=10,
-                                      mass_matrix=mass_adaption)
+                                      steps=10,
+                                      friction=100,
+                                      const_mass={"w": 0.1 * jnp.ones(4), "sigma": 0.001})
 
 # Initial value for starting
 sample = {"w": jnp.zeros(4), "sigma": jnp.array(2.0)}
@@ -155,23 +160,23 @@ sample = {"w": jnp.zeros(4), "sigma": jnp.array(2.0)}
 # default_step_size = scheduler.polynomial_step_size_first_last(first=0.5,
 #                                                              last=0.001)
 default_step_size = scheduler.adaptive_step_size(burn_in=5000,
-                                                 initial_step_size = 0.01,
-                                                 stabilization_constant = 1000,
+                                                 initial_step_size = 0.001,
+                                                 stabilization_constant = 100,
                                                  decay_constant = 0.75,
                                                  speed_constant = 0.02,
-                                                 target_acceptance_rate=0.05)
+                                                 target_acceptance_rate=0.52)
 
 burn_in = scheduler.initial_burn_in(0)
 default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 2000)
 
 default_scheduler = scheduler.init_scheduler(step_size=default_step_size)
 
-amagold = solver.sggmc(default_integrator, full_potential_fn)
+sggmc = solver.sggmc(default_integrator, full_potential_fn)
 
 full_data_state = full_data_init()
-amagold_state = amagold[0](sample, full_data_state)
+amagold_state = sggmc[0](sample, full_data_state)
 
-default_run = solver.mcmc(amagold, default_scheduler)
+default_run = solver.mcmc(sggmc, default_scheduler)
 
 default_results = default_run(amagold_state, iterations=iterations)["samples"]
 

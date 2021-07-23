@@ -45,7 +45,6 @@ Attributes:
   model_state: State of the model in the likelihood
   data_state: State of the random data function
   key: PRNGKey
-  mass_state: State of the mass matrix adaption
 """
 
 obabo_state = namedtuple("obabo_state",
@@ -66,7 +65,7 @@ Attributes:
   data_state: State of the random data function
   key: PRNGKey
   kinetic_energy_start: Kinetic energy after the first 1/4-step
-  kintetic_energy_end: Kintetic energy after the last 3/4-step
+  kinetic_energy_end: Kinetic energy after the last 3/4-step
 """
 
 langevin_state = namedtuple("langevin_state",
@@ -337,7 +336,7 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
                         batch_fn: RandomBatch,
                         steps: int = 10,
                         friction: Array = 0.25,
-                        mass_matrix = None
+                        const_mass: PyTree = None
                         ) -> Tuple[Callable, Callable, Callable]:
   """Initializes a reversible leapfrog integrator.
 
@@ -350,6 +349,7 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
     steps: Number of intermediate leapfrog steps
     friction: Decay of momentum to counteract induced noise due to stochastic
      gradients
+    const_mass: Mass matrix to be used when no mass matrix is adapted
 
   Returns:
     Returns a function running the time reversible leapfrog integrator for T
@@ -359,14 +359,15 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
   init_data, get_data = batch_fn
   stochastic_gradient = grad(potential_fn, has_aux=True)
-  if mass_matrix:
-    mass_init, mass_update, mass_get = mass_matrix
+
+  # Calculate the inverse and the square root
+  if const_mass:
+    const_mass = init_mass(const_mass)
+  else:
+    const_mass = None
 
   def _position_update(scale, mass, position, momentum):
-    if mass_matrix:
-      scaled_momentum = tensor_matmul(mass.inv, momentum)
-    else:
-      scaled_momentum = tree_scale(1 / mass, momentum)
+    scaled_momentum = tensor_matmul(mass.inv, momentum)
     # Scale is 0.5 of step size for half momentum update, otherwise it is just
     # the step size.
     scaled_momentum = tree_scale(scale, scaled_momentum)
@@ -374,11 +375,15 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
   def _cov_scaled_noise(split, mass, tree):
     noise = random_tree(split, tree)
-    if mass_matrix:
-      noise = tensor_matmul(mass.sqrt, noise)
-    else:
-      noise = tree_scale(jnp.sqrt(mass), noise)
+    noise = tensor_matmul(mass.sqrt, noise)
     return noise
+
+  def _energy(old_momentum, new_momentum, mass, gradient, scale):
+    # Accumulate the energy
+    momentum_sum = tree_add(old_momentum, new_momentum)
+    scaled_gradient = tensor_matmul(mass.inv, gradient)
+    unscaled_energy = tree_dot(momentum_sum, scaled_gradient)
+    return scale * unscaled_energy
 
   def _body_fun(state: leapfrog_state,
                 step: jnp.array,
@@ -420,23 +425,21 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       1 / (1 + parameters.step_size * friction),
       unscaled_momentum)
 
-    # Accumulate the energy
-    momentum_sum = tree_add(state.momentum, updated_momentum)
-    if mass_matrix:
-      scaled_gradient = tensor_matmul(mass.inv, gradient)
-    else:
-      scaled_gradient = tree_scale(1 / mass, gradient)
-    unscaled_energy = tree_dot(momentum_sum, scaled_gradient)
-    acc_pot = state.potential + 0.5 * parameters.step_size * unscaled_energy
+    energy = _energy(
+      state.momentum,
+      updated_momentum,
+      mass,
+      gradient,
+      0.5 * parameters.step_size)
+    accumulated_energy = energy + state.potential
 
     new_state = leapfrog_state(
-      potential=acc_pot,
+      potential=accumulated_energy,
       key=key,
       positions=positions,
       momentum=updated_momentum,
       data_state=data_state,
-      model_state=model_state,
-      mass_state=state.mass_state)
+      model_state=model_state)
 
     return new_state, None
 
@@ -444,7 +447,7 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
               key: Array = None,
               batch_kwargs: Dict = None,
               init_model_state: PyTree = None,
-              init_cov: Array = jnp.array(1.0)):
+              mass: PyTree = None):
     """Initializes the initial state of the integrator.
 
     Args:
@@ -465,19 +468,6 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       batch_kwargs = {}
 
     reference_data_state = init_data(**batch_kwargs)
-
-    if mass_matrix:
-      mass_state = mass_init(init_sample)
-      data_state, mini_batch = get_data(reference_data_state, information=True)
-      gradient, model_state = stochastic_gradient(
-        init_sample,
-        mini_batch,
-        state=init_model_state)
-      mass_state = mass_update(init_sample, gradient, mini_batch)
-      mass = mass_get(init_sample, gradient, mini_batch)
-    else:
-      mass_state = init_cov
-      mass = init_cov
 
     # Sample initial momentum
     if key is None:

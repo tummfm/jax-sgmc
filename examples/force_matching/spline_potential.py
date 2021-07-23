@@ -360,7 +360,7 @@ def tabulated_neighbor_list(displacement_or_metric: DisplacementOrMetricFn,
   dr_threshold = jnp.array(dr_threshold, f32)
 
   # Note: cannot provide the spline parameters via kwargs because only per-perticle parameters are supported
-  spline = custom_interpolate.MonotonicInterpolate(x_vals, y_vals)
+  spline = MonotonicInterpolate(x_vals, y_vals, extrapolation={'type': 'repulsion'})
   tabulated_partial = partial(tabulated, spline=spline)
 
   energy_fn = smap.pair_neighbor_list(

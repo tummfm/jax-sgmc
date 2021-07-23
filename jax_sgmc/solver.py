@@ -20,6 +20,7 @@ from typing import Callable, Any, Tuple, NamedTuple, Dict, Union
 from jax import lax, jit, random, named_call
 import jax.numpy as jnp
 from jax_sgmc import io, util, data, potential, integrator
+from jax_sgmc.util import host_callback
 
 PyTree = Any
 Array = util.Array
@@ -50,6 +51,7 @@ class SGGMCState(NamedTuple):
     integrator_state: State of the reversible leapfrog integrator
     key: PRNGKey for MH correction step
     acceptance_ratio: Acceptance ratio used in last step.
+    mass_state: State of the mass adaption
 
   """
   full_data_state: data.CacheState
@@ -57,6 +59,7 @@ class SGGMCState(NamedTuple):
   integrator_state: integrator.obabo_state
   key: Array
   acceptance_ratio: Array
+  mass_state: PyTree
 
 def mcmc(solver,
          scheduler,
@@ -333,7 +336,7 @@ def amagold(integrator_fn,
                                                         full_data_state)
     key, split = random.split(key)
     # Todo: Init with correct covariance
-    integrator_state = init_integrator(init_sample, key=key, cov=jnp.array(1.0), **kwargs)
+    integrator_state = init_integrator(init_sample, key=key, init_cov=jnp.array(1.0), **kwargs)
 
     state = AMAGOLDState(
       integrator_state=integrator_state,
@@ -348,8 +351,7 @@ def amagold(integrator_fn,
     key, split = random.split(state.key, 2)
     proposal = update_integrator(
       state.integrator_state,
-      schedule,
-      cov=jnp.array(1.0))
+      schedule)
 
     # MH correction step
     new_potential, (full_data_state, _) = full_potential_fn(
@@ -374,6 +376,7 @@ def amagold(integrator_fn,
       momentum=mh_integrator_state.momentum,
       model_state=mh_integrator_state.model_state,
       potential=mh_integrator_state.potential,
+      mass_state=proposal.mass_state,
       # These parameters must be provided from the updated state, otherwise
       # the noise and the random data is not resampled
       data_state=proposal.data_state,
@@ -385,6 +388,12 @@ def amagold(integrator_fn,
       potential=new_potential,
       full_data_state=full_data_state,
       acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size))
+
+    host_callback.id_print(jnp.exp(log_alpha), what="Acceptance Ratio")
+    host_callback.id_print(log_alpha, what="Log Acceptance Ratio")
+    host_callback.id_print(schedule.step_size, what="Step size")
+    host_callback.id_print(proposal.positions, what="Proposal")
+
 
     stats = {'acceptance_ratio': jnp.exp(log_alpha)}
 
@@ -399,7 +408,9 @@ def amagold(integrator_fn,
   return init, update, get
 
 def sggmc(integrator_fn,
-          full_potential_fn) -> Tuple[Callable, Callable, Callable]:
+          full_potential_fn,
+          mass_adaption: Callable = None
+          ) -> Tuple[Callable, Callable, Callable]:
   """Guided Gradient Monte Carlo using Stochastic Gradients.
 
   The OBABO integration scheme is reversible even when using stochastic
@@ -411,6 +422,7 @@ def sggmc(integrator_fn,
   Args:
     integrator_fn: Reversible leapfrog integrator.
     full_potential_fn: Function to calculate true potential.
+    mass_adaption: Function to predict the mass during warmup.
 
   Returns:
     Returns the SGGMC solver.
@@ -418,31 +430,48 @@ def sggmc(integrator_fn,
   """
 
   init_integrator, update_integrator, get_integrator = integrator_fn
+  if mass_adaption:
+    init_mass, update_mass, get_mass = mass_adaption
 
   def init(init_sample: PyTree,
            full_data_state: Any,
            key: Array = random.PRNGKey(0),
+           initial_mass: PyTree = None,
            **kwargs) -> SGGMCState:
 
-    potential, (full_data_state, _) = full_potential_fn(init_sample,
+    full_pot, (full_data_state, _) = full_potential_fn(init_sample,
                                                         full_data_state)
     key, split = random.split(key)
     integrator_state = init_integrator(init_sample, key=key, **kwargs)
 
+    if mass_adaption:
+      mass_state = init_mass(init_sample, initial_mass)
+    else:
+      mass_state = None
+
+
     state = SGGMCState(
       integrator_state=integrator_state,
-      potential=potential,
+      potential=full_pot,
       full_data_state=full_data_state,
       key=split,
+      mass_state=mass_state,
       acceptance_ratio=(jnp.array(0.0), jnp.array(0.0)))
     return state
 
   @partial(named_call, name='sggmc_mh_step')
   def update(state: SGGMCState, schedule) -> Tuple[SGGMCState, Dict]:
+    # Get the current mass
+    if mass_adaption:
+      mass = get_mass(state.mass_state)
+    else:
+      mass = None
+
     key, split = random.split(state.key, 2)
     proposal = update_integrator(
       state.integrator_state,
-      schedule)
+      schedule,
+      mass=mass)
 
     # MH correction step
     new_potential, (full_data_state, _) = full_potential_fn(
@@ -454,6 +483,9 @@ def sggmc(integrator_fn,
     # Limit the probability to 1.0 to ensure correct calculation of acceptance
     # ratio statistics.
     log_alpha = jnp.where(log_alpha <= 0, log_alpha, 0.0)
+    host_callback.id_print(jnp.exp(log_alpha), what="Acceptance Ratio")
+    host_callback.id_print(schedule.step_size, what="Step size")
+    # host_callback.id_print(proposal.positions, what="Proposal")
 
     slice = random.uniform(split)
 
@@ -475,15 +507,20 @@ def sggmc(integrator_fn,
       data_state=proposal.data_state,
       key=proposal.key,
       kinetic_energy_start=0.0,
-      kinetic_energy_end=0.0,
-      mass_matrix_state=proposal.mass_matrix_state
-    )
+      kinetic_energy_end=0.0)
+
+    # Adapt the mass
+    if mass_adaption:
+      mass_state = update_mass(state.mass_state, mh_integrator_state.positions)
+    else:
+      mass_state = None
 
     new_state = SGGMCState(
       key=key,
       integrator_state=new_integrator_state,
       potential=new_potential,
       full_data_state=full_data_state,
+      mass_state=mass_state,
       acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size))
 
     stats = {'acceptance_ratio': jnp.exp(log_alpha)}

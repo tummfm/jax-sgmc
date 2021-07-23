@@ -16,20 +16,19 @@
 
 from collections import namedtuple
 from functools import partial
-
-from typing import AnyStr, Callable, Any, Tuple, Iterable, Dict, Union
-
-import numpy as onp
-
-from jax import random, tree_unflatten, tree_flatten, grad, lax, tree_util, value_and_grad, named_call
+from typing import AnyStr, Callable, Any, Tuple, Dict, Union
 
 import jax.numpy as jnp
+import numpy as onp
+from jax import random, tree_unflatten, tree_flatten, grad, lax, tree_util, \
+  value_and_grad, named_call
 
 from jax_sgmc.adaption import AdaptionStrategy, MassMatrix
-from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.data import RandomBatch, CacheState
-from jax_sgmc.util import Array, tree_scale, tree_add, tree_multiply, tensor_matmul, tree_dot
+from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.scheduler import schedule
+from jax_sgmc.util import Array, tree_scale, tree_add, tensor_matmul, \
+  tree_dot, Tensor
 
 leapfrog_state = namedtuple("leapfrog_state",
                             ["positions",
@@ -46,6 +45,7 @@ Attributes:
   model_state: State of the model in the likelihood
   data_state: State of the random data function
   key: PRNGKey
+  mass_state: State of the mass matrix adaption
 """
 
 obabo_state = namedtuple("obabo_state",
@@ -55,7 +55,6 @@ obabo_state = namedtuple("obabo_state",
                           "model_state",
                           "data_state",
                           "key",
-                          "mass_matrix_state",
                           "kinetic_energy_start",
                           "kinetic_energy_end"])
 """
@@ -92,6 +91,18 @@ Attributes:
 
 PyTree = Any
 
+def init_mass(mass):
+  inv_mass = tree_util.tree_map(
+    partial(jnp.power, x2=1.0),
+    mass)
+  sqrt_mass = tree_util.tree_map(
+    jnp.sqrt,
+    mass)
+  inv_mass = Tensor(ndim=1, tensor=inv_mass)
+  sqrt_mass = Tensor(ndim=1, tensor=sqrt_mass)
+  return MassMatrix(inv=inv_mass, sqrt=sqrt_mass)
+
+
 def random_tree(key, a):
   """Build a tree shaped like a where all nodes are normal distributed.
 
@@ -115,7 +126,7 @@ def obabo(potential_fn: StochasticPotential,
           batch_fn: RandomBatch,
           steps: Array = 10,
           friction: Array = 1.0,
-          mass_matrix = None
+          const_mass: PyTree = None,
           ) -> Tuple[Callable, Callable, Callable]:
   """Initializes the OBABO integration scheme.
 
@@ -129,7 +140,8 @@ def obabo(potential_fn: StochasticPotential,
     batch_fn: Function to draw a mini-batch of reference data
     steps: Number of integration steps.
     friction: Controls impact of momentum from previous step
-    mass_matrix: Mass matrix adaption function.
+    const_mass: Mass matrix if no matrix is adapted. Must have the same tree
+      structure as the sample
 
   Returns:
     Returns a function running the time OBABO integrator for T
@@ -139,28 +151,22 @@ def obabo(potential_fn: StochasticPotential,
 
   init_data, get_data = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
-  if mass_matrix:
-    init_mass_matrix, update_mass_matrix, get_mass_matrix = mass_matrix
+
+  # Calculate the inverse and the square root
+  if const_mass:
+    const_mass = init_mass(const_mass)
+  else:
+    const_mass = None
 
   # Helper functions to calculate the kinetic energy, update the position,
   # refresh and update the momentum.
 
-  def _kinetic_energy(mass_state, momentum):
-    if mass_matrix:
-      mass = get_mass_matrix(mass_state, momentum, momentum, None)
-      scaled_momentum = tensor_matmul(mass.inv, momentum)
-    else:
-      scaled_momentum = tree_scale(1 / mass_state, momentum)
+  def _kinetic_energy(mass, momentum):
+    scaled_momentum = tensor_matmul(mass.inv, momentum)
     return 0.5 * tree_dot(momentum, scaled_momentum)
 
-  def _position_update(scale, mass_state, position, momentum):
-    if mass_matrix:
-      mass = get_mass_matrix(mass_state, position, position, None)
-      scaled_momentum = tensor_matmul(mass.inv, momentum)
-    else:
-      scaled_momentum = tree_scale(1 / mass_state, momentum)
-    # Scale is 0.5 of step size for half momentum update, otherwise it is just
-    # the step size.
+  def _position_update(scale, mass, position, momentum):
+    scaled_momentum = tensor_matmul(mass.inv, momentum)
     scaled_momentum = tree_scale(scale, scaled_momentum)
     return tree_add(position, scaled_momentum)
 
@@ -170,38 +176,36 @@ def obabo(potential_fn: StochasticPotential,
     return tree_add(scaled_gradient, momentum)
 
   # Add noise to momentum
-  def _momentum_resampling(parameters, mass_state, momentum, split):
+  def _momentum_resampling(parameters, mass, momentum, split):
     noise = random_tree(split, momentum)
-    if mass_matrix:
-      mass = get_mass_matrix(mass_state, momentum, momentum, None)
-      noise = tensor_matmul(mass.sqrt, noise)
-    else:
-      noise = tree_scale(jnp.sqrt(mass_state), noise)
+    noise = tensor_matmul(mass.sqrt, noise)
     permanence = jnp.exp(-1.0 * friction * parameters.step_size)
     momentum_noise = tree_scale(
       jnp.sqrt((1 - permanence) * parameters.temperature),
       noise)
-    decayed_momentum = tree_scale(permanence,momentum)
+    decayed_momentum = tree_scale(permanence, momentum)
 
     return tree_add(decayed_momentum, momentum_noise)
 
   # A single OBABO-step of the integrator
   def _leapfrog_steps(state: obabo_state,
-                step: jnp.array,
-                parameters: schedule = None):
-    key, split1, split2 = random.split(state.key, 3)
+                      step: jnp.array,
+                      mass: PyTree,
+                      parameters: schedule = None):
+    key, split1, split2 = random.split(state.key, num=3)
     # Need the refreshed momentum only for the acceptance step
 
-    refreshed_momentum = _momentum_resampling(parameters,
-                                              state.mass_matrix_state,
-                                              state.momentum,
-                                              split1)
+    refreshed_momentum = _momentum_resampling(
+      parameters,
+      mass,
+      state.momentum,
+      split1)
 
     # The kinetic energy from the first step is necessary to calculate the
     # acceptance probability
     start_energy = lax.select(
       step == 0,
-      _kinetic_energy(state.mass_matrix_state, refreshed_momentum),
+      _kinetic_energy(mass, refreshed_momentum),
       state.kinetic_energy_start)
 
     # Momentum update with stochastic gradient
@@ -215,9 +219,10 @@ def obabo(potential_fn: StochasticPotential,
       gradient,
       refreshed_momentum)
 
+    # Position update with momentum
     updated_positions = _position_update(
       parameters.step_size,
-      state.mass_matrix_state,
+      mass,
       state.positions,
       updated_momentum)
 
@@ -234,13 +239,13 @@ def obabo(potential_fn: StochasticPotential,
 
     refreshed_momentum = _momentum_resampling(
       parameters,
-      state.mass_matrix_state,
+      mass,
       updated_momentum,
       split2)
 
     # The kinetic energy of the last step is necessary to
     # calculate the acceptance probability for the MH step.
-    end_energy = _kinetic_energy(state.mass_matrix_state, updated_momentum)
+    end_energy = _kinetic_energy(mass, updated_momentum)
 
     new_state = obabo_state(
       potential=0.5 * (pot_before + pot_after),
@@ -250,8 +255,7 @@ def obabo(potential_fn: StochasticPotential,
       data_state=data_state,
       model_state=model_state,
       kinetic_energy_start=start_energy,
-      kinetic_energy_end=end_energy,
-      mass_matrix_state=state.mass_matrix_state)
+      kinetic_energy_end=end_energy)
 
     return new_state, None
 
@@ -259,7 +263,7 @@ def obabo(potential_fn: StochasticPotential,
               key: Array = None,
               batch_kwargs: Dict = None,
               init_model_state: PyTree = None,
-              init_cov: Array = jnp.array(1.0)):
+              mass: PyTree = None):
     """Initializes the initial state of the integrator.
 
     Args:
@@ -267,7 +271,7 @@ def obabo(potential_fn: StochasticPotential,
       key: Initial PRNGKey
       batch_kwargs: Determine the inital state of the random data chain
       init_model_state: State of the model.
-      init_cov: Single scale covariance if mass matrix is not adapted
+      mass: Mass matrix
 
     Returns:
       Returns the initial state of the integrator.
@@ -278,11 +282,6 @@ def obabo(potential_fn: StochasticPotential,
     # variables which might be only necessary in special case
     if batch_kwargs is None:
       batch_kwargs = {}
-
-    if mass_matrix:
-      mass_matrix_state = init_mass_matrix(init_sample)
-    else:
-      mass_matrix_state = init_cov
 
     reference_data_state = init_data(**batch_kwargs)
 
@@ -299,38 +298,28 @@ def obabo(potential_fn: StochasticPotential,
       positions=init_sample,
       momentum=momentum,
       data_state=reference_data_state,
-      model_state=init_model_state,
-      mass_matrix_state=mass_matrix_state)
+      model_state=init_model_state)
 
     return init_state
 
   @partial(named_call, name='obabo_integration')
   def integrate(state: obabo_state,
-                parameters: schedule
+                parameters: schedule,
+                mass: PyTree = None
                 ) -> obabo_state:
 
-    if mass_matrix:
-      data_state, mini_batch = get_data(state.data_state, information=True)
-      _, gradient = stochastic_gradient(
-        state.positions,
-        mini_batch,
-        state=state.model_state)
+    # If the mass is not adapted, take the constant mass if provided
+    if const_mass is None:
+      cms = init_mass(tree_util.tree_map(jnp.ones_like, state.positions))
+    else:
+      cms = const_mass
 
-      new_mass_state = update_mass_matrix(state.mass_matrix_state, state.positions, gradient, mini_batch)
-      state = obabo_state(
-        positions=state.positions,
-        momentum=state.momentum,
-        potential=state.potential,
-        mass_matrix_state=new_mass_state,
-        key=state.key,
-        data_state=state.data_state,
-        kinetic_energy_start=state.kinetic_energy_start,
-        kinetic_energy_end=state.kinetic_energy_end,
-        model_state=state.model_state)
+    if mass is None:
+      mass = cms
 
     # Leapfrog integration
     state, _ = lax.scan(
-      partial(_leapfrog_steps, parameters=parameters),
+      partial(_leapfrog_steps, parameters=parameters, mass=mass),
       state,
       onp.arange(steps))
 
@@ -346,8 +335,9 @@ def obabo(potential_fn: StochasticPotential,
 
 def reversible_leapfrog(potential_fn: StochasticPotential,
                         batch_fn: RandomBatch,
-                        steps: Array = 10,
-                        friction: Array = 0.25
+                        steps: int = 10,
+                        friction: Array = 0.25,
+                        mass_matrix = None
                         ) -> Tuple[Callable, Callable, Callable]:
   """Initializes a reversible leapfrog integrator.
 
@@ -369,54 +359,44 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
   init_data, get_data = batch_fn
   stochastic_gradient = grad(potential_fn, has_aux=True)
+  if mass_matrix:
+    mass_init, mass_update, mass_get = mass_matrix
 
-  def _position_update(scale, cov, position, momentum):
-    if isinstance(cov, covariance):
-      if cov.ndim == 1:
-        scaled_momentum = tree_multiply(cov.inv_cov, momentum)
-      elif cov.ndim == 2:
-        scaled_momentum = tree_matmul(cov.inv_cov, momentum)
-      else:
-        raise ValueError(f"Covariance cannot have dimension greater than 2, "
-                         f"dim is {cov.ndim}")
+  def _position_update(scale, mass, position, momentum):
+    if mass_matrix:
+      scaled_momentum = tensor_matmul(mass.inv, momentum)
     else:
-      scaled_momentum = tree_scale(1 / cov, momentum)
+      scaled_momentum = tree_scale(1 / mass, momentum)
     # Scale is 0.5 of step size for half momentum update, otherwise it is just
     # the step size.
     scaled_momentum = tree_scale(scale, scaled_momentum)
     return tree_add(position, scaled_momentum)
 
-  def _cov_scaled_noise(split, cov, tree):
+  def _cov_scaled_noise(split, mass, tree):
     noise = random_tree(split, tree)
-    if isinstance(cov, covariance):
-      if cov.ndim == 1:
-        noise = tree_multiply(covariance.cov_sqrt, noise)
-      elif cov.ndim == 2:
-        noise = tree_matmul(covariance.cov_sqrt, noise)
-      else:
-        raise ValueError(f"Covariance cannot have dimension greater than 2, "
-                         f"dim is {cov.ndim}")
+    if mass_matrix:
+      noise = tensor_matmul(mass.sqrt, noise)
     else:
-      noise = tree_scale(jnp.sqrt(cov), noise)
+      noise = tree_scale(jnp.sqrt(mass), noise)
     return noise
 
   def _body_fun(state: leapfrog_state,
                 step: jnp.array,
                 parameters: schedule = None,
-                cov: Union[Array, covariance] = jnp.array(1.0)):
+                mass: Union[Array, PyTree] = jnp.array(1.0)):
     # Full step not required in first iteration because of the half step at the
     # beginning
     positions = lax.cond(step == 0,
                          lambda pos: pos,
                          lambda pos: _position_update(
                            parameters.step_size,
-                           cov,
+                           mass,
                            pos,
                            state.momentum),
                          state.positions)
 
     key, split = random.split(state.key)
-    noise = _cov_scaled_noise(split, cov, state.momentum)
+    noise = _cov_scaled_noise(split, mass, state.momentum)
     scaled_noise = tree_scale(
       jnp.sqrt(4 * friction * parameters.step_size),
       noise)
@@ -425,38 +405,27 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
     gradient, model_state = stochastic_gradient(
       positions,
       mini_batch,
-      state=state.model_state
-    )
+      state=state.model_state)
 
     decayed_momentum = tree_scale(
       1 - parameters.step_size * friction,
-      state.momentum
-    )
+      state.momentum)
     negative_scaled_gradient = tree_scale(
       -1.0 * parameters.step_size,
-      gradient
-    )
+      gradient)
     unscaled_momentum = tree_add(
       tree_add(decayed_momentum, negative_scaled_gradient),
-      scaled_noise
-    )
+      scaled_noise)
     updated_momentum = tree_scale(
       1 / (1 + parameters.step_size * friction),
-      unscaled_momentum
-    )
+      unscaled_momentum)
 
     # Accumulate the energy
     momentum_sum = tree_add(state.momentum, updated_momentum)
-    if isinstance(cov, covariance):
-      if cov.ndim == 1:
-        scaled_gradient = tree_multiply(covariance.inv_cov, gradient)
-      elif cov.ndim == 2:
-        scaled_gradient = tree_matmul(covariance.inv_cov, gradient)
-      else:
-        raise ValueError(f"Covariance cannot have dimension greater than 2, "
-                         f"dim is {cov.ndim}")
+    if mass_matrix:
+      scaled_gradient = tensor_matmul(mass.inv, gradient)
     else:
-      scaled_gradient = tree_scale(1 / cov, gradient)
+      scaled_gradient = tree_scale(1 / mass, gradient)
     unscaled_energy = tree_dot(momentum_sum, scaled_gradient)
     acc_pot = state.potential + 0.5 * parameters.step_size * unscaled_energy
 
@@ -466,24 +435,23 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       positions=positions,
       momentum=updated_momentum,
       data_state=data_state,
-      model_state=model_state
-    )
+      model_state=model_state,
+      mass_state=state.mass_state)
 
     return new_state, None
 
   def init_fn(init_sample: PyTree,
               key: Array = None,
               batch_kwargs: Dict = None,
-              cov: Union[Array, covariance] = jnp.array(1.0),
               init_model_state: PyTree = None,
-              ):
+              init_cov: Array = jnp.array(1.0)):
     """Initializes the initial state of the integrator.
 
     Args:
       init_sample: Initial latent variables
       key: Initial PRNGKey
-      batch_kwargs: Determine the inital state of the random data chain
-      cov: Initial covariance.
+      batch_kwargs: Determine the initial state of the random data chain
+      init_cov: Initial covariance.
       init_model_state: State of the model.
 
     Returns:
@@ -498,11 +466,24 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
     reference_data_state = init_data(**batch_kwargs)
 
+    if mass_matrix:
+      mass_state = mass_init(init_sample)
+      data_state, mini_batch = get_data(reference_data_state, information=True)
+      gradient, model_state = stochastic_gradient(
+        init_sample,
+        mini_batch,
+        state=init_model_state)
+      mass_state = mass_update(init_sample, gradient, mini_batch)
+      mass = mass_get(init_sample, gradient, mini_batch)
+    else:
+      mass_state = init_cov
+      mass = init_cov
+
     # Sample initial momentum
     if key is None:
       key = random.PRNGKey(0)
     key, split = random.split(key)
-    momentum = _cov_scaled_noise(split, cov, init_sample)
+    momentum = _cov_scaled_noise(split, mass, init_sample)
 
     init_state = leapfrog_state(
       potential=jnp.array(0.0),
@@ -510,27 +491,33 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       positions=init_sample,
       momentum=momentum,
       data_state=reference_data_state,
-      model_state=init_model_state
+      model_state=init_model_state,
+      mass_state=mass_state,
     )
 
     return init_state
 
   @partial(named_call, name='leapfrog_integration')
   def integrate(state: leapfrog_state,
-                parameters: schedule,
-                cov: Union[Array, covariance] = jnp.array(1.0)
+                parameters: schedule
                 ) -> leapfrog_state:
+    # Get the mass matrix for the current step
+    # Todo: Do not provide gradient
+    if mass_matrix:
+      mass = mass_get(state.positions, state.positions, None)
+    else:
+      mass = state.mass_state
 
     # # Resample momentum to make process reversible (otherwise skew-reversible)
     key, split = random.split(state.key)
-    momentum = _cov_scaled_noise(split, cov, state.momentum)
+    momentum = _cov_scaled_noise(split, mass, state.momentum)
 
     # Change direction if last step has been rejected
     #vmomentum = tree_scale(direction, state.momentum)
 
     # Half step for leapfrog integration
     positions = _position_update(
-      0.5 * parameters.step_size, cov, state.positions, momentum)
+      0.5 * parameters.step_size, mass, state.positions, momentum)
 
     # Do the leapfrog steps
     state = leapfrog_state(
@@ -539,17 +526,24 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       key=key,
       potential=jnp.array(0.0),
       model_state=state.model_state,
-      data_state=state.data_state)
+      data_state=state.data_state,
+      mass_state=state.mass_state)
 
     # Leapfrog integration
     state, _ = lax.scan(
-      partial(_body_fun, parameters=parameters, cov=cov),
+      partial(_body_fun, parameters=parameters, mass=mass),
       state,
       onp.arange(steps))
 
     # Final half step
     positions = _position_update(
-      0.5 * parameters.step_size, cov, state.positions, state.momentum)
+      0.5 * parameters.step_size, mass, state.positions, state.momentum)
+
+    # Update mass matrix
+    if mass_matrix:
+      new_mass_state = mass_update(positions, positions, None)
+    else:
+      new_mass_state = state.mass_state
 
     final_state = leapfrog_state(
       positions=positions,
@@ -557,7 +551,8 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       key=state.key,
       potential=state.potential,
       model_state=state.model_state,
-      data_state=state.data_state)
+      data_state=state.data_state,
+      mass_state=new_mass_state)
 
     return final_state
 

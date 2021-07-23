@@ -125,7 +125,12 @@ def adaption(quantity: namedtuple = tuple):
   return functools.partial(_adaption, quantity=quantity)
 
 def _adaption(adaption_fn: Adaption, quantity: namedtuple = tuple):
-  """Decorator to make adaption strategies operate on 1D arrays."""
+  """Decorator to make adaption strategies operate on 1D arrays.
+
+  Positional arguments are flattened while keyword arguments are passed
+  unchanged.
+
+  """
 
   @functools.wraps(adaption_fn)
   def pytree_adaption(*args, **kwargs) -> AdaptionStrategy:
@@ -139,11 +144,12 @@ def _adaption(adaption_fn: Adaption, quantity: namedtuple = tuple):
                  **init_kwargs) -> adaption_state:
       # Calculate the flattened state and the ravel and unravel fun
       ravel_fn = tree_util.Partial(
-        jit(lambda tree: flatten_util.ravel_pytree(tree)[0])
-      )
+        jit(lambda tree: flatten_util.ravel_pytree(tree)[0]))
       unravel_fn = get_unravel_fn(x0)
+
       x0_flat = ravel_fn(x0)
-      state = init(x0_flat, *init_args, **init_kwargs)
+      init_flat = map(ravel_fn, init_args)
+      state = init(x0_flat, *init_flat, **init_kwargs)
 
       # Wrap the potential in a flatten function if potential is provided as
       # kwarg
@@ -163,59 +169,51 @@ def _adaption(adaption_fn: Adaption, quantity: namedtuple = tuple):
 
     @functools.wraps(update)
     def new_update(state: adaption_state,
-                   x: PyTree,
-                   grad_x: PyTree,
-                   mini_batch: PyTree,
                    *update_args,
+                   mini_batch: PyTree = None,
                    **update_kwargs):
       # Flat the params and the gradient
-      x_flat = state.ravel_fn(x)
-      grad_flat = state.ravel_fn(grad_x)
+      flat_args = map(state.ravel_fn, update_args)
 
       # Update with flattened arguments
       if state.flat_potential is None:
         new_state = named_update(
-          state.state, x_flat, grad_flat,
-          *update_args, **update_kwargs
-        )
+          state.state,
+          *flat_args,
+          **update_kwargs)
       else:
+        assert mini_batch, "Adaption strategy requires mini-batch"
         new_state = named_update(
-          state.state, x_flat, grad_flat,
-          mini_batch, state.flat_potential,
-          *update_args, **update_kwargs)
+          state.state,
+          *flat_args,
+          mini_batch,
+          state.flat_potential,
+          **update_kwargs)
 
-      return adaption_state(state=new_state,
-                            ravel_fn=state.ravel_fn,
-                            unravel_fn=state.unravel_fn,
-                            flat_potential=state.flat_potential)
+      updated_state = adaption_state(
+        state=new_state,
+        ravel_fn=state.ravel_fn,
+        unravel_fn=state.unravel_fn,
+        flat_potential=state.flat_potential)
+      return updated_state
 
     @functools.wraps(get)
     def new_get(state: adaption_state,
-                x: PyTree,
-                grad_x: PyTree,
-                mini_batch: PyTree,
                 *get_args,
+                mini_batch: PyTree = None,
                 **get_kwargs
                 ) -> quantity:
       # Flat the params and the gradient
-      x_flat = state.ravel_fn(x)
-      grad_flat = state.ravel_fn(grad_x)
+      flat_args = map(state.ravel_fn, get_args)
 
       # Get with flattened arguments
       if state.flat_potential is None:
-        adapted_quantities = named_get(state.state,
-                                       x_flat,
-                                       grad_flat,
-                                       *get_args,
-                                       **get_kwargs)
+        adapted_quantities = named_get(
+          state.state,*flat_args, **get_kwargs)
       else:
-        adapted_quantities = named_get(state.state,
-                                       x_flat,
-                                       grad_flat,
-                                       mini_batch,
-                                       state.flat_potential,
-                                       *get_args,
-                                       **get_kwargs)
+        adapted_quantities = named_get(
+          state.state, *flat_args, mini_batch, state.flat_potential,
+          *get_args, **get_kwargs)
 
       def unravel_quantities():
         for q in adapted_quantities:
@@ -284,10 +282,10 @@ def rms_prop() -> AdaptionStrategy:
     return (v, alpha, lmbd)
 
   def update(state: Tuple[Array, Array, Array],
-             unused_sample: Array,
+             sample: Array,
              sample_grad: Array,
-             *unused_args: Any,
-             **unused_kwargs: Any):
+             *args: Any,
+             **kwargs: Any):
     """Updates the RMSprop adaption.
 
     Args:
@@ -297,16 +295,17 @@ def rms_prop() -> AdaptionStrategy:
     Returns:
       Returns adapted RMSprop state.
     """
+    del sample, args, kwargs
 
     v, alpha, lmbd = state
     new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
     return new_v, alpha, lmbd
 
   def get(state: Tuple[Array, Array, Array],
-          unused_sample: Array,
-          unused_sample_grad: Array,
-          *unused_args: Any,
-          **unused_kwargs: Any):
+          sample: Array,
+          sample_grad: Array,
+          *args: Any,
+          **kwargs: Any):
     """Calculates the current manifold of the RMSprop adaption.
 
     Args:
@@ -315,6 +314,8 @@ def rms_prop() -> AdaptionStrategy:
     Returns:
       Returns a manifold tuple with ``ndim == 1``.
     """
+    del sample, sample_grad, args, kwargs
+
     v, _, lmbd = state
     g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
     return g, jnp.sqrt(g), jnp.zeros_like(g)
@@ -350,7 +351,7 @@ def mass_matrix(diagonal=True, burn_in=1000):
     host_callback.id_print(inv, what="Covariance")
     return inv, sqrt
 
-  def init(sample: Array):
+  def init(sample: Array, init_cov: Array):
     iteration = 0
     mean = jnp.zeros_like(sample)
     if diagonal:
@@ -358,21 +359,23 @@ def mass_matrix(diagonal=True, burn_in=1000):
     else:
       ssq = jnp.zeros((sample.size, sample.size))
 
+    if init_cov is None:
+      init_cov = jnp.ones_like(sample)
+
     if diagonal:
-      m_inv = jnp.ones_like(sample)
-      m_sqrt = jnp.ones_like(sample)
+      m_inv = init_cov
+      m_sqrt = 1 / jnp.sqrt(init_cov)
     else:
-      m_inv = jnp.eye(sample.size)
-      m_sqrt = jnp.eye(sample.size)
+      m_inv = jnp.diag(init_cov)
+      m_sqrt = jnp.diag(1 / jnp.sqrt(init_cov))
 
     return iteration, mean, ssq, m_inv, m_sqrt
 
   def update(state: Tuple[Array, Array, Array, Array, Array],
              sample: Array,
-             sample_grad: Array,
              *args: Any,
              **kwargs: Any):
-    del sample_grad, args, kwargs
+    del args, kwargs
     iteration, mean, ssq, m_inv, m_sqrt = state
 
     iteration += 1
@@ -391,12 +394,7 @@ def mass_matrix(diagonal=True, burn_in=1000):
 
     return iteration, new_mean, ssq, new_m_inv, new_m_sqrt
 
-  def get(state: Tuple[Array, Array, Array, Array, Array],
-          sample: Array,
-          sample_grad: Array,
-          *args: Any,
-          **kwargs: Any):
-    del sample, sample_grad, args, kwargs
+  def get(state: Tuple[Array, Array, Array, Array, Array]):
     _, _, _, m_inv, m_sqrt = state
 
     return m_inv, m_sqrt

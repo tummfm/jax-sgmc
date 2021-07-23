@@ -53,8 +53,8 @@ class TestDecorator:
 
     init, update, get = init_adaption()
     init_state = init(random_tree, test_arg, kwarg=test_kwarg)
-    update_state = update(init_state, random_tree, random_tree, None, test_arg, kwarg=test_kwarg)
-    manifold = get(init_state, random_tree, random_tree, None, test_arg, kwarg=test_kwarg)
+    update_state = update(init_state, random_tree, random_tree, arg=test_arg, kwarg=test_kwarg)
+    manifold = get(init_state, random_tree, random_tree, arg=test_arg, kwarg=test_kwarg)
 
     # Assert that parameters are passed correctly
 

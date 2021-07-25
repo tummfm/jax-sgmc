@@ -506,7 +506,8 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
     # # Resample momentum to make process reversible (otherwise skew-reversible)
     key, split = random.split(state.key)
-    momentum = _cov_scaled_noise(split, mass, state.momentum)
+    # momentum = _cov_scaled_noise(split, mass, state.momentum)
+    momentum = state.momentum
 
     # Change direction if last step has been rejected (only if momentum is not
     # resampled)

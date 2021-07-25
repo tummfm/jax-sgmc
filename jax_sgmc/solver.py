@@ -385,16 +385,16 @@ def amagold(integrator_fn,
     slice = random.uniform(split)
 
     # If true, the step is accepted
-    mh_integrator_state, new_potential = lax.cond(
+    mh_integrator_state, new_potential, direction = lax.cond(
       jnp.log(slice) < log_alpha,
       lambda new_old: new_old[0],
       lambda new_old: new_old[1],
-      ((proposal, new_potential),
-       (state.integrator_state, state.potential)))
+      ((proposal, new_potential, 1.0),
+       (state.integrator_state, state.potential, -1.0)))
 
     new_integrator_state = integrator.leapfrog_state(
       positions=mh_integrator_state.positions,
-      momentum=mh_integrator_state.momentum,
+      momentum=util.tree_scale(direction, mh_integrator_state.momentum),
       model_state=mh_integrator_state.model_state,
       potential=mh_integrator_state.potential,
       # These parameters must be provided from the updated state, otherwise
@@ -483,7 +483,7 @@ def sggmc(integrator_fn,
       full_data_state=full_data_state,
       key=split,
       mass_state=mass_state,
-      acceptance_ratio=(jnp.array(0.0), jnp.array(0.0)))
+      acceptance_ratio=(jnp.array(0.0), jnp.array(0.0), jnp.array(0.0)))
     return state
 
   @partial(named_call, name='sggmc_mh_step')
@@ -512,7 +512,11 @@ def sggmc(integrator_fn,
     log_alpha = jnp.where(log_alpha <= 0, log_alpha, 0.0)
     host_callback.id_print(jnp.exp(log_alpha), what="Acceptance Ratio")
     host_callback.id_print(schedule.step_size, what="Step size")
-    # host_callback.id_print(proposal.positions, what="Proposal")
+    host_callback.id_print(new_potential, what="New potential")
+    host_callback.id_print(state.potential, what="Old potential")
+    host_callback.id_print(proposal.kinetic_energy_end, what="End energy")
+    host_callback.id_print(proposal.kinetic_energy_start, what="Start energy")
+
 
     slice = random.uniform(split)
 
@@ -548,7 +552,7 @@ def sggmc(integrator_fn,
       potential=new_potential,
       full_data_state=full_data_state,
       mass_state=mass_state,
-      acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size))
+      acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size, proposal.kinetic_energy_end-proposal.kinetic_energy_start))
 
     stats = {'acceptance_ratio': jnp.exp(log_alpha)}
 
@@ -558,6 +562,8 @@ def sggmc(integrator_fn,
     int_dict = get_integrator(state.integrator_state)
     int_dict['acceptance_ratio'] = state.acceptance_ratio[0]
     int_dict['step_size'] = state.acceptance_ratio[1]
+    int_dict['kinetic_energy'] = state.acceptance_ratio[2]
+    int_dict['potential'] = state.potential
     return int_dict
 
   return init, update, get

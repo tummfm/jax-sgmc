@@ -24,16 +24,16 @@ from jax_sgmc.util import host_callback
 
 #%%
 
-mb_size = 10
+mb_size = 20
 
-forces = onp.load('data/forces_SPC.npy')[0:1000, :, :]
-positions = onp.load('data/conf_SPC.npy')[0:1000, :, :]
+forces = onp.load('data/forces_SPC.npy')[0:10000, :, :]
+positions = onp.load('data/conf_SPC.npy')[0:10000, :, :]
 
 print(forces.shape)
 
 data_loader = data.NumpyDataLoader(forces=forces, positions=positions)
 batch_fn = data.random_reference_data(data_loader, 16, mb_size=mb_size)
-data_map = data.full_reference_data(data_loader, 16, mb_size=mb_size)
+data_map = data.full_reference_data(data_loader, 16, mb_size=5 * mb_size)
 
 #%%
 
@@ -41,7 +41,7 @@ data_map = data.full_reference_data(data_loader, 16, mb_size=mb_size)
 
 #%%
 
-x_vals = jnp.linspace(0.26, 0.45, num=15)
+x_vals = jnp.linspace(0.26, 0.45, num=25)
 u_init = jnp.zeros_like(x_vals)
 
 box_size = 3.0
@@ -117,14 +117,14 @@ rms_prop = adaption.rms_prop()
 
 burn_in = scheduler.initial_burn_in(200)
 # step_size = scheduler.polynomial_step_size_first_last(0.00001, 0.000005)
-step_size = scheduler.adaptive_step_size(200, initial_step_size=0.001, speed_constant=0.01, target_acceptance_rate=0.65)
+step_size = scheduler.adaptive_step_size(200, initial_step_size=0.001, speed_constant=0.05, target_acceptance_rate=0.65)
 
 
 # thinning = scheduler.random_thinning(step_size, burn_in, 300)
 sched = scheduler.init_scheduler(step_size=step_size,
                                  burn_in=burn_in)
 
-obabo = integrator.obabo(stochastic_potential, batch_fn, 10, 1500)
+obabo = integrator.obabo(stochastic_potential, batch_fn, 10, 1500, const_mass={'potential': jnp.full_like(u_init, 0.1), 'std': jnp.array(0.005)})
 # leapfrog = integrator.reversible_leapfrog(stochastic_potential, batch_fn, 10, 0.25)
 # sgld = solver.sgmc(obabo)
 sggmc = solver.sggmc(obabo, full_potential)

@@ -93,7 +93,7 @@ w_npy = mcmc.get_samples()["weights"]
 ################################################################################
 
 
-M = 20
+M = 10
 cs = 1000
 
 data_loader = data.NumpyDataLoader(x=x, y=y)
@@ -133,19 +133,18 @@ full_potential_fn = potential.full_potential(prior=prior,
 # == Solver Setup ==============================================================
 
 # Number of iterations
-iterations = 5000
-
-# Adaption strategy
-rms_prop = adaption.rms_prop()
+iterations = 20000
 
 # Integrators
 default_integrator = integrator.reversible_leapfrog(potential_fn,
                                                     batch_fn,
-                                                    steps=10)
+                                                    steps=10,
+                                                    friction=0.5,
+                                                    const_mass={"w": 0.1 * jnp.ones(4), "sigma": jnp.array(0.01)})
 
 # Initial value for starting
 # sample = {"w": jnp.array([0.1, -0.5, -0.15, -0.65]), "sigma": jnp.array(0.7)}
-sample = {"w": jnp.zeros(4), "sigma": jnp.array(2.0)}
+sample = {"w": jnp.zeros(4), "sigma": jnp.array(0.7)}
 
 # Schedulers
 default_step_size = scheduler.adaptive_step_size(burn_in=5000,
@@ -153,13 +152,12 @@ default_step_size = scheduler.adaptive_step_size(burn_in=5000,
                                                  stabilization_constant = 10,
                                                  decay_constant = 0.75,
                                                  speed_constant = 0.05,
-                                                 target_acceptance_rate=0.15)
+                                                 target_acceptance_rate=0.05)
 
 burn_in = scheduler.initial_burn_in(2000)
 default_random_thinning = scheduler.random_thinning(default_step_size, burn_in, 2000)
 
-default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
-                                             burn_in=burn_in)
+default_scheduler = scheduler.init_scheduler(step_size=default_step_size)
 
 
 amagold = solver.amagold(default_integrator, full_potential_fn)

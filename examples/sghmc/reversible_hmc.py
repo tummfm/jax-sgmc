@@ -136,7 +136,9 @@ rms_prop = adaption.rms_prop()
 # Integrators
 default_integrator = integrator.reversible_leapfrog(potential_fn,
                                                     batch_fn,
-                                                    steps=10)
+                                                    steps=10,
+                                                    const_mass = {"w": 0.5 * jnp.ones((N, 1)), "sigma": jnp.array(10.0)}
+)
 
 # Initial value for starting
 sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}

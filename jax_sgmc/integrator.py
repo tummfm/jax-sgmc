@@ -387,8 +387,8 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
   def _body_fun(state: leapfrog_state,
                 step: jnp.array,
-                parameters: schedule = None,
-                mass: Union[Array, PyTree] = jnp.array(1.0)):
+                parameters: schedule,
+                mass: MassMatrix):
     # Full step not required in first iteration because of the half step at the
     # beginning
     positions = lax.cond(step == 0,
@@ -469,6 +469,13 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
     reference_data_state = init_data(**batch_kwargs)
 
+    # Use constant mass if provided
+    if not mass:
+      if const_mass:
+        mass = const_mass
+      else:
+        mass = init_mass(tree_util.tree_map(jnp.ones_like, init_sample))
+
     # Sample initial momentum
     if key is None:
       key = random.PRNGKey(0)
@@ -481,29 +488,30 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       positions=init_sample,
       momentum=momentum,
       data_state=reference_data_state,
-      model_state=init_model_state,
-      mass_state=mass_state,
-    )
+      model_state=init_model_state)
 
     return init_state
 
   @partial(named_call, name='leapfrog_integration')
   def integrate(state: leapfrog_state,
-                parameters: schedule
+                parameters: schedule,
+                mass: PyTree = None
                 ) -> leapfrog_state:
-    # Get the mass matrix for the current step
-    # Todo: Do not provide gradient
-    if mass_matrix:
-      mass = mass_get(state.positions, state.positions, None)
-    else:
-      mass = state.mass_state
+
+    # Use default values if mass matrix not provided
+    if not mass:
+      if const_mass:
+        mass = const_mass
+      else:
+        mass = init_mass(tree_util.tree_map(jnp.ones_like, state.positions))
 
     # # Resample momentum to make process reversible (otherwise skew-reversible)
     key, split = random.split(state.key)
     momentum = _cov_scaled_noise(split, mass, state.momentum)
 
-    # Change direction if last step has been rejected
-    #vmomentum = tree_scale(direction, state.momentum)
+    # Change direction if last step has been rejected (only if momentum is not
+    # resampled)
+    # momentum = tree_scale(direction, state.momentum)
 
     # Half step for leapfrog integration
     positions = _position_update(
@@ -516,8 +524,7 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
       key=key,
       potential=jnp.array(0.0),
       model_state=state.model_state,
-      data_state=state.data_state,
-      mass_state=state.mass_state)
+      data_state=state.data_state)
 
     # Leapfrog integration
     state, _ = lax.scan(
@@ -529,20 +536,13 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
     positions = _position_update(
       0.5 * parameters.step_size, mass, state.positions, state.momentum)
 
-    # Update mass matrix
-    if mass_matrix:
-      new_mass_state = mass_update(positions, positions, None)
-    else:
-      new_mass_state = state.mass_state
-
     final_state = leapfrog_state(
       positions=positions,
       momentum=state.momentum,
       key=state.key,
       potential=state.potential,
       model_state=state.model_state,
-      data_state=state.data_state,
-      mass_state=new_mass_state)
+      data_state=state.data_state)
 
     return final_state
 
@@ -551,7 +551,6 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
     # Todo: This is not truly the likelihood
     return {"variables": state.positions,
             "energy": state.potential}
-
 
   return init_fn, integrate, get_fn
 

@@ -177,13 +177,12 @@ def obabo(potential_fn: StochasticPotential,
   # Add noise to momentum
   def _momentum_resampling(parameters, mass, momentum, split):
     noise = random_tree(split, momentum)
-    noise = tensor_matmul(mass.sqrt, noise)
+    scaled_noise = tensor_matmul(mass.sqrt, noise)
     permanence = jnp.exp(-1.0 * friction * parameters.step_size)
     momentum_noise = tree_scale(
       jnp.sqrt((1 - permanence) * parameters.temperature),
-      noise)
-    decayed_momentum = tree_scale(permanence, momentum)
-
+      scaled_noise)
+    decayed_momentum = tree_scale(jnp.sqrt(permanence), momentum)
     return tree_add(decayed_momentum, momentum_noise)
 
   # A single OBABO-step of the integrator
@@ -213,7 +212,7 @@ def obabo(potential_fn: StochasticPotential,
       state.positions,
       mini_batch,
       state=state.model_state)
-    updated_momentum = _momentum_update(
+    first_updated_momentum = _momentum_update(
       0.5 * parameters.step_size,
       gradient,
       refreshed_momentum)
@@ -223,7 +222,7 @@ def obabo(potential_fn: StochasticPotential,
       parameters.step_size,
       mass,
       state.positions,
-      updated_momentum)
+      first_updated_momentum)
 
     # Momentum update with stochastic gradient
     data_state, mini_batch = get_data(data_state, information=True)
@@ -231,25 +230,25 @@ def obabo(potential_fn: StochasticPotential,
       updated_positions,
       mini_batch,
       state=model_state )
-    updated_momentum = _momentum_update(
+    second_updated_momentum = _momentum_update(
       0.5 * parameters.step_size,
       gradient,
-      refreshed_momentum)
+      first_updated_momentum)
 
-    refreshed_momentum = _momentum_resampling(
+    final_refreshed_momentum = _momentum_resampling(
       parameters,
       mass,
-      updated_momentum,
+      second_updated_momentum,
       split2)
 
     # The kinetic energy of the last step is necessary to
     # calculate the acceptance probability for the MH step.
-    end_energy = _kinetic_energy(mass, updated_momentum)
+    end_energy = _kinetic_energy(mass, second_updated_momentum)
 
     new_state = obabo_state(
       potential=0.5 * (pot_before + pot_after),
       positions=updated_positions,
-      momentum=refreshed_momentum,
+      momentum=final_refreshed_momentum,
       key=key,
       data_state=data_state,
       model_state=model_state,

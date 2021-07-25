@@ -191,7 +191,6 @@ def obabo(potential_fn: StochasticPotential,
                       mass: PyTree,
                       parameters: schedule = None):
     key, split1, split2 = random.split(state.key, num=3)
-    # Need the refreshed momentum only for the acceptance step
 
     refreshed_momentum = _momentum_resampling(
       parameters,
@@ -201,10 +200,11 @@ def obabo(potential_fn: StochasticPotential,
 
     # The kinetic energy from the first step is necessary to calculate the
     # acceptance probability
-    start_energy = lax.select(
-      step == 0,
-      _kinetic_energy(mass, refreshed_momentum),
-      state.kinetic_energy_start)
+    # start_energy = lax.select(
+    #   step == 0,
+    #   _kinetic_energy(mass, refreshed_momentum),
+    #   state.kinetic_energy_start)
+    start_energy = state.kinetic_energy_start + _kinetic_energy(mass, refreshed_momentum)
 
     # Momentum update with stochastic gradient
     data_state, mini_batch = get_data(state.data_state, information=True)
@@ -243,7 +243,7 @@ def obabo(potential_fn: StochasticPotential,
 
     # The kinetic energy of the last step is necessary to
     # calculate the acceptance probability for the MH step.
-    end_energy = _kinetic_energy(mass, second_updated_momentum)
+    end_energy = state.kinetic_energy_end + _kinetic_energy(mass, second_updated_momentum)
 
     new_state = obabo_state(
       potential=0.5 * (pot_before + pot_after),

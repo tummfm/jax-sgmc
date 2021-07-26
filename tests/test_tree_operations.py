@@ -70,6 +70,14 @@ class TestTree:
 
     test_util.check_close(true_result, treemap_result)
 
+  def test_tree_dot(self, random_tree):
+    (tree, flat_tree), (ravel_fn, unravel_fn) = random_tree
+
+    true_result = jnp.dot(flat_tree, flat_tree)
+    treemap_result = util.tree_dot(tree, tree)
+
+    test_util.check_close(true_result, treemap_result)
+
 class TestTreeMap():
 
   def test_vmap(self, random_tree):

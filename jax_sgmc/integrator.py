@@ -92,7 +92,7 @@ PyTree = Any
 
 def init_mass(mass):
   inv_mass = tree_util.tree_map(
-    partial(jnp.power, x2=1.0),
+    partial(jnp.power, x2=-1.0),
     mass)
   sqrt_mass = tree_util.tree_map(
     jnp.sqrt,
@@ -178,7 +178,7 @@ def obabo(potential_fn: StochasticPotential,
   def _momentum_resampling(parameters, mass, momentum, split):
     noise = random_tree(split, momentum)
     scaled_noise = tensor_matmul(mass.sqrt, noise)
-    permanence = jnp.exp(-1.0 * friction * parameters.step_size)
+    permanence = jnp.exp(-friction * parameters.step_size)
     momentum_noise = tree_scale(
       jnp.sqrt((1 - permanence) * parameters.temperature),
       scaled_noise)

@@ -20,6 +20,17 @@ class TestPotential():
   # Helper functions
 
   @pytest.fixture
+  def linear_potential(self):
+
+    def likelihood(sample, reference_data):
+      return jnp.sum(sample * reference_data)
+
+    def prior(sample):
+      return jnp.sum(sample)
+
+    return prior, likelihood
+
+  @pytest.fixture
   def potential(self):
     """Define likelihood with pytree sample and pytree reference data."""
 
@@ -48,6 +59,34 @@ class TestPotential():
     def prior(sample):
       return jnp.exp(-sample["scale"])
     return prior, likelihood
+
+  @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
+  def test_linear_potential(self, linear_potential, obs, dim):
+    prior, likelihood = linear_potential
+    # Setup potential
+
+    scan_pot = minibatch_potential(prior, likelihood, strategy="map")
+    vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap")
+    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
+
+    # Setup reference data
+    key = random.PRNGKey(0)
+
+    split1, split2 = random.split(key, 2)
+    observations = jnp.tile(jnp.arange(4), (dim, 1))
+    reference_data = observations, mini_batch_information(observation_count=obs,
+                                                          batch_size=dim)
+    sample = jnp.ones(4)
+
+    true_result = -jnp.sum(jnp.arange(4)) * obs -4
+
+    scan_result, _ = scan_pot(sample, reference_data)
+    vmap_result, _ = vmap_pot(sample, reference_data)
+    pmap_result, _ = pmap_pot(sample, reference_data)
+
+    test_util.check_close(scan_result, true_result)
+    test_util.check_close(vmap_result, true_result)
+    test_util.check_close(pmap_result, true_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_zero(self, potential, obs, dim):

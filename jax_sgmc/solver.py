@@ -20,7 +20,6 @@ from typing import Callable, Any, Tuple, NamedTuple, Dict, Union
 from jax import lax, jit, random, named_call
 import jax.numpy as jnp
 from jax_sgmc import io, util, data, integrator
-from jax_sgmc.util import host_callback
 
 PyTree = Any
 Array = util.Array
@@ -39,7 +38,7 @@ class AMAGOLDState(NamedTuple):
   """
   full_data_state: data.CacheState
   potential: Array
-  integrator_state: integrator.leapfrog_state
+  integrator_state: integrator.LeapfrogState
   key: Array
   acceptance_ratio: Array
   mass_state: PyTree
@@ -58,7 +57,7 @@ class SGGMCState(NamedTuple):
   """
   full_data_state: data.CacheState
   potential: Array
-  integrator_state: integrator.obabo_state
+  integrator_state: integrator.ObaboState
   key: Array
   acceptance_ratio: Array
   mass_state: PyTree
@@ -255,7 +254,6 @@ def parallel_tempering(integrator,
   init_integrator, update_integrator, get_integrator = integrator
 
   #Todo: Maybe also provide pmap?
-
   vmapped_update = util.list_vmap(lambda args: update_integrator(*args))
 
   def init(normal_sample: PyTree,
@@ -392,7 +390,7 @@ def amagold(integrator_fn,
       ((proposal, new_potential, 1.0),
        (state.integrator_state, state.potential, -1.0)))
 
-    new_integrator_state = integrator.leapfrog_state(
+    new_integrator_state = integrator.LeapfrogState(
       positions=mh_integrator_state.positions,
       momentum=util.tree_scale(direction, mh_integrator_state.momentum),
       model_state=mh_integrator_state.model_state,
@@ -415,12 +413,6 @@ def amagold(integrator_fn,
       full_data_state=full_data_state,
       acceptance_ratio=(jnp.exp(log_alpha), schedule.step_size),
       mass_state=mass_state)
-
-    host_callback.id_print(jnp.exp(log_alpha), what="Acceptance Ratio")
-    host_callback.id_print(log_alpha, what="Log Acceptance Ratio")
-    host_callback.id_print(schedule.step_size, what="Step size")
-    host_callback.id_print(proposal.positions, what="Proposal")
-
 
     stats = {'acceptance_ratio': jnp.exp(log_alpha)}
 
@@ -510,13 +502,6 @@ def sggmc(integrator_fn,
     # Limit the probability to 1.0 to ensure correct calculation of acceptance
     # ratio statistics.
     log_alpha = jnp.where(log_alpha <= 0, log_alpha, 0.0)
-    host_callback.id_print(jnp.exp(log_alpha), what="Acceptance Ratio")
-    host_callback.id_print(schedule.step_size, what="Step size")
-    host_callback.id_print(new_potential, what="New potential")
-    host_callback.id_print(state.potential, what="Old potential")
-    host_callback.id_print(proposal.kinetic_energy_end, what="End energy")
-    host_callback.id_print(proposal.kinetic_energy_start, what="Start energy")
-
 
     slice = random.uniform(split)
 
@@ -528,7 +513,7 @@ def sggmc(integrator_fn,
       ((proposal, new_potential),
        (state.integrator_state, state.potential)))
 
-    new_integrator_state = integrator.obabo_state(
+    new_integrator_state = integrator.ObaboState(
       positions=mh_integrator_state.positions,
       momentum=mh_integrator_state.momentum,
       model_state=mh_integrator_state.model_state,

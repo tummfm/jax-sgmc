@@ -291,20 +291,16 @@ def minibatch_potential(prior: Prior,
     # The mask is only necessary for the full potential evaluation
     if mask is None:
       stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
-      stochastic_variance = jnp.var(batch_likelihoods)
     else:
       stochastic_potential = - N / n * jnp.dot(batch_likelihoods, mask)
-      # Undo scaling when calculating the variance
-      sq = jnp.square(batch_likelihoods + stochastic_potential / N)
-      stochastic_variance = 1 / (n - 1) * jnp.sum(jnp.multiply(mask, sq))
-    return stochastic_potential, stochastic_variance, new_state
+    return stochastic_potential, batch_likelihoods, new_state
 
   @partial(named_call, name='evaluate_stochastic_potential')
   def potential_function(sample: PyTree,
                          reference_data: MiniBatch,
                          state: PyTree = None,
                          mask: Array = None,
-                         variance: bool = False) -> Tuple[Array, PyTree]:
+                         likelihoods: bool = False) -> Tuple[Array, PyTree]:
     # Never differentiate w. r. t. reference data
     reference_data = lax.stop_gradient(reference_data)
 
@@ -313,16 +309,18 @@ def minibatch_potential(prior: Prior,
     # It is also possible to combine the prior and the likelihood into a single
     # callable.
 
-    likelihood_value, stochastic_variance, new_state = batch_potential(
+    batch_likelihood, observation_likelihoods, new_state = batch_potential(
       state, sample, reference_data, mask)
 
     # The prior has to be evaluated only once, therefore the extra call
     prior_value = prior(sample)
 
-    if variance:
-      return jnp.squeeze(likelihood_value - prior_value), (stochastic_variance, new_state)
+    if likelihoods:
+      return (
+        jnp.squeeze(batch_likelihood - prior_value),
+        (observation_likelihoods, new_state))
     else:
-      return jnp.squeeze(likelihood_value - prior_value), new_state
+      return jnp.squeeze(batch_likelihood - prior_value), new_state
 
   return potential_function
 

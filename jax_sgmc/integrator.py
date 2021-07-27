@@ -821,11 +821,12 @@ def langevin_diffusion(
     data_state, mini_batch = batch_get(state.data_state, information=True)
 
     noise = random_tree(split, state.latent_variables)
-    (potential, (variance, new_model_state)), gradient = stochastic_gradient(
+    (potential, (likelihoods, new_model_state)), gradient = stochastic_gradient(
       state.latent_variables,
       mini_batch,
       state=state.model_state,
-      variance=True)
+      likelihoods=True)
+    variance = jnp.var(likelihoods)
 
     scaled_gradient = tree_scale(-parameters.step_size, gradient)
     scaled_noise = tree_scale(

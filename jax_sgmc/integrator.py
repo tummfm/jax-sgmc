@@ -14,7 +14,6 @@
 
 """Defines integrators which form the core of the solvers."""
 
-from collections import namedtuple
 from functools import partial
 from typing import Callable, Any, Tuple, Dict, NamedTuple
 

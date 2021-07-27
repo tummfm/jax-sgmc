@@ -45,10 +45,12 @@ from typing import Any, Callable, Tuple, NamedTuple
 
 from collections import namedtuple
 
-from jax import tree_util, flatten_util, jit, named_call, lax
+from jax import tree_util, flatten_util, jit, named_call, lax, vmap, grad
 import jax.numpy as jnp
 
 from jax_sgmc.util import Array, Tensor, host_callback
+from jax_sgmc.data import MiniBatch
+from jax_sgmc.util import host_callback
 
 # Todo: Correctly specify the return type
 
@@ -106,6 +108,11 @@ class MassMatrix(NamedTuple):
   inv: PyTree
   sqrt: PyTree
 
+class NoiseModel(NamedTuple):
+  """Approximation of the gradient noise. """
+  cb_diff_sqrt: PyTree
+  b_sqrt: PyTree
+
 # Todo: Make tree hashable and add caching
 def get_unravel_fn(tree: PyTree):
   """Calculates the unravel function.
@@ -156,9 +163,9 @@ def _adaption(adaption_fn: Adaption, quantity: namedtuple = tuple):
       minibatch_potential = kwargs.get("minibatch_potential")
       if minibatch_potential is not None:
         @tree_util.Partial
-        def flat_potential(sample, mini_batch):
+        def flat_potential(sample, mini_batch, **kwargs):
           sample_tree = unravel_fn(sample)
-          return minibatch_potential(sample_tree, mini_batch)
+          return minibatch_potential(sample_tree, mini_batch, **kwargs)
       else:
         flat_potential = None
 
@@ -212,8 +219,9 @@ def _adaption(adaption_fn: Adaption, quantity: namedtuple = tuple):
           state.state,*flat_args, **get_kwargs)
       else:
         adapted_quantities = named_get(
-          state.state, *flat_args, mini_batch, state.flat_potential,
-          *get_args, **get_kwargs)
+          state.state, *flat_args,
+          mini_batch=mini_batch, flat_potential=state.flat_potential,
+          **get_kwargs)
 
       def unravel_quantities():
         for q in adapted_quantities:
@@ -347,8 +355,6 @@ def mass_matrix(diagonal=True, burn_in=1000):
       eigw, eigv = jnp.linalg.eigh(ssq / iteration)
       # Todo: More effective computation
       sqrt = jnp.matmul(jnp.transpose(eigv), jnp.matmul(jnp.diag(jnp.sqrt(eigw)), eigv))
-      print(sqrt)
-    host_callback.id_print(inv, what="Covariance")
     return inv, sqrt
 
   def init(sample: Array, init_cov: Array):
@@ -398,5 +404,91 @@ def mass_matrix(diagonal=True, burn_in=1000):
     _, _, _, m_inv, m_sqrt = state
 
     return m_inv, m_sqrt
+
+  return init, update, get
+
+@adaption(quantity=NoiseModel)
+def fisher_information(minibatch_potential: Callable = None,
+                       diagonal = True
+                       ) -> AdaptionStrategy:
+  """Adapt empirical fisher information.
+
+  Use the empirical fisher information as a noise model for SGHMC. The empirical
+  fisher information is approximated according to [1].
+
+  Returns:
+    Returns noise model approximation strategy.
+
+  [1] https://arxiv.org/abs/1206.6380
+  """
+  assert minibatch_potential, "Fisher information requires potential function."
+
+  def init(*args):
+    return None
+
+  def update(*args,
+             **kwargs):
+    del args, kwargs
+    return None
+
+  def get(state,
+          sample: Array,
+          sample_grad: Array,
+          *args: Any,
+          mini_batch: MiniBatch,
+          flat_potential,
+          friction: Array = jnp.array(1.0),
+          step_size: Any = jnp.array(1.0),
+          **kwargs: Any):
+    del state, args, kwargs
+
+    _, mb_information = mini_batch
+    N = mb_information.observation_count
+    n = mb_information.batch_size
+
+    # Unscale the gradient to get mean
+    sample_grad /= N
+
+    def potential_at_obs(smp, obs_idx):
+      _, (likelihoods, _) = flat_potential(smp, mini_batch, likelihoods=True)
+      return likelihoods[obs_idx]
+
+    grad_diff_idx = grad(potential_at_obs, argnums=0)
+
+    @functools.partial(vmap, out_axes=0)
+    def sqd(idx):
+      if diagonal:
+        return jnp.square(grad_diff_idx(sample, idx) - sample_grad)
+      else:
+        diff = grad_diff_idx(sample, idx) - sample_grad
+        return jnp.outer(diff, diff)
+
+    ssq = jnp.sum(sqd(jnp.arange(mb_information.batch_size)), axis=0)
+
+    if diagonal:
+      v = 1 / (n - 1) * ssq
+      b = 0.5 * step_size * v
+
+      # Correct for negative eigenvalues
+      correction = friction - b
+      smallest_positive = jnp.min(jnp.where(correction <= 0, jnp.inf, correction))
+      positive_correction = jnp.where(correction <= 0, smallest_positive, correction)
+
+      # Apply the corrections to b
+      b_corrected = friction - positive_correction
+
+      noise_scale_sqrt = jnp.sqrt(positive_correction)
+      scale_sqrt = jnp.sqrt(b_corrected)
+    else:
+      v = 1 / (n - 1) * ssq
+      b = 0.5 * step_size * v
+      eigw_cb, eigv_cb = jnp.linalg.eigh(friction * jnp.eye(v.shape[0]) - b)
+      noise_scale_sqrt = jnp.matmul(jnp.transpose(eigv_cb), jnp.matmul(jnp.diag(jnp.sqrt(eigw_cb)), eigv_cb))
+
+      eigw_b, eigv_b = jnp.linalg.eigh(b)
+      # Todo: More effective computation
+      scale_sqrt = jnp.matmul(jnp.transpose(eigv_b), jnp.matmul(jnp.diag(jnp.sqrt(eigw_b)), eigv_b))
+
+    return noise_scale_sqrt, scale_sqrt
 
   return init, update, get

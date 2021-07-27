@@ -50,6 +50,7 @@ class LeapfrogState(NamedTuple):
   model_state: PyTree
   data_state: CacheState
   key: Array
+  extra_fields: PyTree = None
 
 
 class ObaboState(NamedTuple):
@@ -562,7 +563,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
                       batch_fn: RandomBatch,
                       steps: int = 10,
                       friction: Array = 0.25,
-                      const_mass: PyTree = None
+                      const_mass: PyTree = None,
+                      noise_model = None
                       ) -> Tuple[Callable, Callable, Callable]:
   """Initializes the original SGHMC leapfrog integrator.
 
@@ -577,6 +579,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
     friction: Decay of momentum to counteract induced noise due to stochastic
      gradients
     const_mass: Mass matrix of the hamiltonian process
+    noise_model: Stateless adaption of the noise (e. g. via the empirical fisher
+      information)
 
   Returns:
     Returns a function running the non conservative leapfrog integrator for T
@@ -586,6 +590,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
 
   init_data, get_data = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, has_aux=True)
+  if noise_model:
+    init_noise_model, update_noise_model, get_noise_model = noise_model
 
   # Calculate the inverse and the square root
   if const_mass:
@@ -614,9 +620,34 @@ def friction_leapfrog(potential_fn: StochasticPotential,
 
     key, split = random.split(state.key)
     noise = random_tree(split, decayed_momentum)
-    scaled_noise = tree_scale(
-      jnp.sqrt(2 * friction * parameters.step_size),
-      noise)
+    if noise_model:
+      noise_state = update_noise_model(
+        state.extra_fields,
+        new_positions,
+        gradient,
+        mini_batch=mini_batch,
+        friction=friction,
+        step_size=parameters.step_size)
+
+      key, split = random.split(state.key)
+      extra_noise = random_tree(split, decayed_momentum)
+
+      noise_correction = get_noise_model(
+        noise_state,
+        new_positions,
+        gradient,
+        mini_batch=mini_batch,
+        friction=friction,
+        step_size=parameters.step_size)
+      reduced_noise = tensor_matmul(noise_correction.cb_diff_sqrt, noise)
+      extra_noise = tensor_matmul(noise_correction.b_sqrt, extra_noise)
+      unscaled_noise = tree_add(reduced_noise, extra_noise)
+      scaled_noise = tree_scale(jnp.sqrt(2 * parameters.step_size), unscaled_noise)
+    else:
+      noise_state = None
+      scaled_noise = tree_scale(
+        jnp.sqrt(2 * friction * parameters.step_size),
+        noise)
 
     new_momentum = tree_add(
       tree_add(decayed_momentum, scaled_gradient),
@@ -628,7 +659,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       positions=new_positions,
       momentum=new_momentum,
       data_state=data_state,
-      model_state=model_state)
+      model_state=model_state,
+      extra_fields=noise_state)
 
     return new_state, None
 
@@ -654,6 +686,11 @@ def friction_leapfrog(potential_fn: StochasticPotential,
     if batch_kwargs is None:
       batch_kwargs = {}
 
+    if noise_model:
+      noise_state = init_noise_model(init_sample)
+    else:
+      noise_state = None
+
     reference_data_state = init_data(**batch_kwargs)
 
     # Only shape of momentum is important, as momentum is resampled in each
@@ -669,7 +706,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       positions=init_sample,
       momentum=momentum,
       data_state=reference_data_state,
-      model_state=init_model_state)
+      model_state=init_model_state,
+      extra_fields=noise_state)
 
     return init_state
 
@@ -698,7 +736,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       key=key,
       potential=jnp.array(0.0),
       model_state=state.model_state,
-      data_state=state.data_state)
+      data_state=state.data_state,
+      extra_fields=state.extra_fields)
     final_state, _ = lax.scan(
       partial(_body_fun, parameters=parameters, mass=mass),
       state,

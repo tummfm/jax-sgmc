@@ -583,7 +583,12 @@ class MemoryCollector(DataCollector):
       new_shape = tuple(int(s) for s in new_shape)
       return new_shape
     sample_cache = [onp.zeros(leaf_shape(leaf), dtype=leaf.dtype) for leaf in leaves]
-    pytree_keys = pytree_dict_keys(init_sample)
+
+    # Only generate the keys for each leaf if necessary
+    if self._dir:
+      pytree_keys = pytree_dict_keys(init_sample)
+    else:
+      pytree_keys = [f"leaf~{idx}" for idx in range(len(leaves))]
 
     self._finished.append(threading.Barrier(2))
     self._samples.append(sample_cache)
@@ -614,7 +619,7 @@ class MemoryCollector(DataCollector):
     """
     # Is called after all host callback calls have been processed
     self._finished[chain_id].wait()
-    if self._dir is not None:
+    if self._dir:
       output_dir = Path(self._dir)
       output_file = output_dir / f"chain_{chain_id}.npz"
       output_dir.mkdir(exist_ok=True)
@@ -755,8 +760,7 @@ def save(data_collector: DataCollector = None,
     initial_state = saving_state(
       chain_id=chain_id,
       saved_samples=0,
-      data=None
-    )
+      data=None)
     return initial_state
 
   @stop_vmap.stop_vmap
@@ -875,8 +879,7 @@ def no_save() -> Saving:
     new_data = tree_util.tree_map(
       partial(_update_data_leaf, state.saved_samples),
       state.data,
-      sample
-    )
+      sample)
     new_state = saving_state(
       chain_id=state.chain_id,
       saved_samples=state.saved_samples + 1,
@@ -901,9 +904,7 @@ def no_save() -> Saving:
     to thinning.
 
     """
-    sample = pytree_to_dict(sample)
     new_state = _save_helper(keep, state, sample)
-
     return new_state, None
 
   def postprocess(state: saving_state, unused_saved):

@@ -186,7 +186,6 @@ import jax.numpy as jnp
 
 from jax_sgmc import util
 from jax_sgmc.data import CacheState, MiniBatch
-from jax_sgmc.util import host_callback
 
 # Here we define special types
 
@@ -208,9 +207,14 @@ class StochasticPotential(Protocol):
                ) -> Union[Tuple[Array, PyTree],
                           Tuple[Array, Tuple[Array, PyTree]]]: ...
 
-FullPotential = Callable[
-  [PyTree, CacheState, Optional[PyTree]],
-  Tuple[Array, Tuple[CacheState, PyTree]]]
+class FullPotential(Protocol):
+  def __call__(self,
+               sample: PyTree,
+               data_state: CacheState,
+               full_data_map_fn: Callable,
+               state: PyTree = None
+               ) -> Tuple[Array, Tuple[CacheState, PyTree]]: ...
+
 
 # Todo: Possibly support soft-vmap (numpyro)
 
@@ -338,7 +342,6 @@ def minibatch_potential(prior: Prior,
 
 def full_potential(prior: Callable[[PyTree], Array],
                    likelihood: Callable[[PyTree, PyTree], Array],
-                   full_data_map: Callable,
                    strategy: AnyStr = "map",
                    has_state = False,
                    is_batched = False
@@ -351,8 +354,6 @@ def full_potential(prior: Callable[[PyTree], Array],
     likelihood: Probability density function. If ``has_state = True``, then the
       first argument is the model state, otherwise the arguments are ``sample,
       reference_data``.
-    full_data_map: Maps the likelihood over the complete reference data.
-      Returned from :func:`jax_sgmc.data.full_reference_data`
     strategy: Determines how to evaluate the model function with respect for
       sample:
 
@@ -394,9 +395,10 @@ def full_potential(prior: Callable[[PyTree], Array],
   @partial(named_call, name='evaluate_true_potential')
   def sum_batched_evaluations(sample: PyTree,
                               data_state: CacheState,
+                              full_data_map_fn: Callable,
                               state: PyTree = None):
     body_fn = partial(batch_evaluation, sample)
-    data_state, (results, new_state) = full_data_map(
+    data_state, (results, new_state) = full_data_map_fn(
       body_fn, data_state, state, masking=True, information=True)
 
     # The prior needs just a single evaluation

@@ -19,7 +19,7 @@ from typing import Callable, Any, Tuple, NamedTuple, Dict, Union
 
 from jax import lax, jit, random, named_call
 import jax.numpy as jnp
-from jax_sgmc import io, util, data, integrator
+from jax_sgmc import io, util, data, integrator, potential
 
 PyTree = Any
 Array = util.Array
@@ -298,7 +298,8 @@ def parallel_tempering(integrator,
   return init, update, get
 
 def amagold(integrator_fn,
-            full_potential_fn,
+            full_potential_fn: potential.FullPotential,
+            full_data_map: data.OrderedBatch,
             mass_adaption: Callable = None
             ) -> Tuple[Callable, Callable, Callable]:
   """Initializes AMAGOLD integration.
@@ -306,6 +307,7 @@ def amagold(integrator_fn,
   Args:
     integrator_fn: Reversible leapfrog integrator.
     full_potential_fn: Function to calculate true potential.
+    full_data_map: Tuple returned by :func:`jax_sgmc.data.full_reference_data``
     mass_adaption: Function to adapt a constant mass during the burn in phase.
 
   Returns:
@@ -315,13 +317,14 @@ def amagold(integrator_fn,
   """
 
   init_integrator, update_integrator, get_integrator = integrator_fn
+  init_full_data, full_data_map_fn = full_data_map
   if mass_adaption:
     init_mass, update_mass, get_mass = mass_adaption
 
   def init(init_sample: PyTree,
-           full_data_state: Any,
            key: Array = random.PRNGKey(0),
            initial_mass: PyTree = None,
+           full_data_kwargs: dict = None,
            **kwargs) -> AMAGOLDState:
     if mass_adaption:
       mass_state = init_mass(init_sample, initial_mass)
@@ -330,8 +333,13 @@ def amagold(integrator_fn,
       mass_state = None
       mass = None
 
+    if not full_data_kwargs:
+      full_data_kwargs = {}
+    full_data_state = init_full_data(**full_data_kwargs)
+
     potential, (full_data_state, _) = full_potential_fn(init_sample,
-                                                        full_data_state)
+                                                        full_data_state,
+                                                        full_data_map_fn)
     key, split = random.split(key)
     # Todo: Init with correct covariance
     integrator_state = init_integrator(init_sample, key=key, mass=mass, **kwargs)
@@ -361,7 +369,8 @@ def amagold(integrator_fn,
     # MH correction step
     new_potential, (full_data_state, _) = full_potential_fn(
       proposal.positions,
-      state.full_data_state)
+      state.full_data_state,
+      full_data_map_fn)
 
     # Limit acceptance ratio to 1.0
     log_alpha = state.potential - new_potential + proposal.potential
@@ -413,7 +422,8 @@ def amagold(integrator_fn,
   return init, update, get
 
 def sggmc(integrator_fn,
-          full_potential_fn,
+          full_potential_fn: potential.FullPotential,
+          full_data_map: data.OrderedBatch,
           mass_adaption: Callable = None
           ) -> Tuple[Callable, Callable, Callable]:
   """Guided Gradient Monte Carlo using Stochastic Gradients.
@@ -435,17 +445,23 @@ def sggmc(integrator_fn,
   """
 
   init_integrator, update_integrator, get_integrator = integrator_fn
+  init_full_data, full_data_map_fn = full_data_map
   if mass_adaption:
     init_mass, update_mass, get_mass = mass_adaption
 
   def init(init_sample: PyTree,
-           full_data_state: Any,
            key: Array = random.PRNGKey(0),
            initial_mass: PyTree = None,
+           full_data_kwargs: dict = None,
            **kwargs) -> SGGMCState:
 
+    if not full_data_kwargs:
+      full_data_kwargs = {}
+    full_data_state = init_full_data(**full_data_kwargs)
+
     full_pot, (full_data_state, _) = full_potential_fn(init_sample,
-                                                        full_data_state)
+                                                        full_data_state,
+                                                       full_data_map_fn)
     key, split = random.split(key)
     integrator_state = init_integrator(init_sample, key=key, **kwargs)
 
@@ -453,7 +469,6 @@ def sggmc(integrator_fn,
       mass_state = init_mass(init_sample, initial_mass)
     else:
       mass_state = None
-
 
     state = SGGMCState(
       integrator_state=integrator_state,
@@ -481,7 +496,8 @@ def sggmc(integrator_fn,
     # MH correction step
     new_potential, (full_data_state, _) = full_potential_fn(
       proposal.positions,
-      state.full_data_state)
+      state.full_data_state,
+      full_data_map_fn)
 
     log_alpha = - 1.0 / schedule.temperature * (
       new_potential - state.potential + proposal.kinetic_energy_end - proposal.kinetic_energy_start)

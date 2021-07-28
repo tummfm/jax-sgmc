@@ -235,10 +235,8 @@ PyTree = Any
 MiniBatch = Union[Tuple[PyTree],
                   Tuple[PyTree, mini_batch_information],
                   Tuple[PyTree, mini_batch_information, Array]]
-RandomBatch = Tuple[Callable[[Optional[Any], Optional[Any]], PyTree],
-                    Callable[[PyTree, Optional[bool]], MiniBatch]]
-OrderedBatch = Tuple[Callable[[Optional[Any], Optional[Any]], PyTree],
-                     Callable[[PyTree, Optional[bool]], MiniBatch]]
+RandomBatch = Tuple[Callable, Callable]
+OrderedBatch = Tuple[Callable, Callable]
 PyTree = Any
 
 # Definition of the data loader class

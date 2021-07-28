@@ -293,7 +293,6 @@ def parallel_tempering(integrator,
 
   # Return only the results of the normally tempered chain
   def get(state):
-    print(state)
     return get_integrator(state[0])
 
   return init, update, get

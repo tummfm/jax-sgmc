@@ -11,6 +11,7 @@ Welcome to jax-sgmc's documentation!
    :caption: Jax SGMC
 
    examples/index
+   quickstart
 
 
 API Documentation

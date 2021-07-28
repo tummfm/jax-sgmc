@@ -96,11 +96,11 @@ case, it is expected that the returned likelihoods are a vectore with shape
   >>> print(potential_eval)
   883.183
   >>>
-  >>> _, (variance, _) = stochastic_potential_fn(test_sample,
-  ...                                            random_batch,
-  ...                                            variance=True)
+  >>> _, (likelihoods, _) = stochastic_potential_fn(test_sample,
+  ...                                               random_batch,
+  ...                                               likelihoods=True)
   >>>
-  >>> print(variance)
+  >>> print(jnp.var(likelihoods))
   7.45549
 
 

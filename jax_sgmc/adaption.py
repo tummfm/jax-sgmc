@@ -529,10 +529,10 @@ def fisher_information(minibatch_potential: Callable = None,
   def get(state,
           sample: Array,
           sample_grad: Array,
+          friction: Array,
           *args: Any,
           mini_batch: MiniBatch,
           flat_potential,
-          friction: Array = jnp.array(1.0),
           step_size: Any = jnp.array(1.0),
           **kwargs: Any):
     del state, args, kwargs
@@ -577,7 +577,7 @@ def fisher_information(minibatch_potential: Callable = None,
     else:
       v = 1 / (n - 1) * ssq
       b = 0.5 * step_size * v
-      eigw_cb, eigv_cb = jnp.linalg.eigh(friction * jnp.eye(v.shape[0]) - b)
+      eigw_cb, eigv_cb = jnp.linalg.eigh(jnp.diag(friction) - b)
       noise_scale_sqrt = jnp.matmul(
         jnp.transpose(eigv_cb),
         jnp.matmul(jnp.diag(jnp.sqrt(eigw_cb)), eigv_cb))

@@ -27,7 +27,7 @@ from jax_sgmc.data import RandomBatch, CacheState
 from jax_sgmc.potential import StochasticPotential
 from jax_sgmc.scheduler import schedule
 from jax_sgmc.util import Array, tree_scale, tree_add, tensor_matmul, \
-  tree_dot, Tensor
+  tree_dot, Tensor, tree_multiply
 
 PyTree = Any
 
@@ -601,6 +601,7 @@ def friction_leapfrog(potential_fn: StochasticPotential,
   def _body_fun(state: LeapfrogState,
                 step: jnp.array,
                 parameters: schedule,
+                friction: PyTree,
                 mass: MassMatrix):
     del step
     scaled_momentum = tensor_matmul(mass.inv, state.momentum)
@@ -613,9 +614,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       mini_batch,
       state=state.model_state)
     scaled_gradient = tree_scale(-parameters.step_size, gradient)
-    decayed_momentum = tree_scale(
-      -parameters.step_size * friction,
-      scaled_momentum)
+    scaled_friction = tree_scale(-parameters.step_size, friction)
+    decayed_momentum = tree_multiply(scaled_friction, scaled_momentum)
 
     key, split = random.split(state.key)
     noise = random_tree(split, decayed_momentum)
@@ -624,8 +624,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
         state.extra_fields,
         new_positions,
         gradient,
+        friction,
         mini_batch=mini_batch,
-        friction=friction,
         step_size=parameters.step_size)
 
       key, split = random.split(state.key)
@@ -635,8 +635,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
         noise_state,
         new_positions,
         gradient,
+        friction,
         mini_batch=mini_batch,
-        friction=friction,
         step_size=parameters.step_size)
       reduced_noise = tensor_matmul(noise_correction.cb_diff_sqrt, noise)
       extra_noise = tensor_matmul(noise_correction.b_sqrt, extra_noise)
@@ -723,6 +723,13 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       else:
         mass = init_mass(tree_util.tree_map(jnp.ones_like, state.positions))
 
+    # If the friction is scalar
+    if tree_util.treedef_is_leaf(tree_util.tree_structure(friction)):
+      multiscalar_friction = tree_util.tree_map(
+        partial(jnp.full_like, fill_value=friction), state.positions)
+    else:
+      multiscalar_friction = friction
+
     # Resample momentum
     key, split = random.split(state.key)
     noise = random_tree(split, state.momentum)
@@ -738,7 +745,10 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       data_state=state.data_state,
       extra_fields=state.extra_fields)
     final_state, _ = lax.scan(
-      partial(_body_fun, parameters=parameters, mass=mass),
+      partial(_body_fun,
+              parameters=parameters,
+              mass=mass,
+              friction=multiscalar_friction),
       state,
       onp.arange(steps))
 

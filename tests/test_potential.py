@@ -347,6 +347,7 @@ class TestPotential():
     likelihoods, _ = lax.map(pot_results, observations)
     true_variance = jnp.var(likelihoods)
 
-    _, (variance, _) = scan_pot(sample, reference_data, variance=True)
+    _, (lkls, _) = scan_pot(sample, reference_data, likelihoods=True)
+    variance = jnp.var(lkls)
 
     test_util.check_close(variance, true_variance)

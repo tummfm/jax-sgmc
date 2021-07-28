@@ -55,15 +55,17 @@ def sgld(potential_fn: potential.minibatch_potential,
     save_to_numpy: Save on host in numpy array instead of in device memory
 
   Returns:
-    Returns the function :func:`init` and :func:`run`.
+    Returns a solver function which can be applied to multiple chains starting
+    at ``init_sample``.
+
     Usage:
 
     .. highlight:: python
 
     ::
 
-      init_states = init(*init_samples*)
-      results = run(*init_states, iterations=1000)
+      run = jax_sgmc.alias.sgld(...)
+      results = run(*init_samples, iterations=1000)
   """
 
   random_data = data.random_reference_data(data_loader, cache_size, batch_size)

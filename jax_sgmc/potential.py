@@ -178,7 +178,7 @@ as first positional argument.
 
 from functools import partial
 
-from typing import Callable, Any, AnyStr, Optional, Tuple, Union
+from typing import Callable, Any, AnyStr, Optional, Tuple, Union, Protocol
 
 from jax import vmap, pmap, lax, tree_util, named_call
 
@@ -193,15 +193,26 @@ from jax_sgmc.util import host_callback
 PyTree = Any
 Array = util.Array
 
-Likelihood = Callable[[Optional[PyTree], PyTree, MiniBatch],
-                      Union[Tuple[Array, PyTree], Array]]
+Likelihood = Union[
+  Callable[[PyTree, PyTree, MiniBatch], Tuple[Array, PyTree]],
+  Callable[[PyTree, MiniBatch], Array]]
 Prior = Callable[[PyTree], Array]
 
-StochasticPotential = Callable[[PyTree, MiniBatch], Tuple[Array, PyTree]]
-FullPotential = Callable[[PyTree, CacheState], Tuple[Array, PyTree]]
+class StochasticPotential(Protocol):
+  def __call__(self,
+               sample: PyTree,
+               reference_data: MiniBatch,
+               state: PyTree = None,
+               mask: Array = None,
+               likelihoods: bool = False
+               ) -> Union[Tuple[Array, PyTree],
+                          Tuple[Array, Tuple[Array, PyTree]]]: ...
+
+FullPotential = Callable[
+  [PyTree, CacheState, Optional[PyTree]],
+  Tuple[Array, Tuple[CacheState, PyTree]]]
 
 # Todo: Possibly support soft-vmap (numpyro)
-# Todo: Implement evaluation via pmap
 
 def minibatch_potential(prior: Prior,
                         likelihood: Callable,
@@ -300,7 +311,7 @@ def minibatch_potential(prior: Prior,
                          reference_data: MiniBatch,
                          state: PyTree = None,
                          mask: Array = None,
-                         likelihoods: bool = False) -> Tuple[Array, PyTree]:
+                         likelihoods: bool = False):
     # Never differentiate w. r. t. reference data
     reference_data = lax.stop_gradient(reference_data)
 
@@ -365,7 +376,7 @@ def full_potential(prior: Callable[[PyTree], Array],
 
   # Can use the potential evaluation strategy for a minibatch of data. The prior
   # must be evaluated independently.
-  batch_potential = minibatch_potential(lambda _: 0.0,
+  batch_potential = minibatch_potential(lambda _: jnp.array(0.0),
                                         likelihood,
                                         strategy=strategy,
                                         has_state=has_state,

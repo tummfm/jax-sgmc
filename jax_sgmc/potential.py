@@ -123,9 +123,10 @@ _____________________
 
 Here, the likelihood written for a single observation can be re-used.
 
-  >>> potential_fn = potential.full_potential(prior, likelihood, fmap_fun, strategy='vmap')
+  >>> potential_fn = potential.full_potential(prior, likelihood, strategy='vmap')
   >>>
-  >>> potential_eval, (data_state, unused_state) = potential_fn(test_sample, data_state)
+  >>> potential_eval, (data_state, unused_state) = potential_fn(
+  ...   test_sample, data_state, fmap_fun)
   >>>
   >>> print(potential_eval)
   707.4376
@@ -137,9 +138,10 @@ The batched likelihood can also be used to calculate the full potential.
 
   >>> prior = lambda unused_sample: 0.0
   >>>
-  >>> potential_fn = potential.full_potential(prior, batched_likelihood, fmap_fun, is_batched=True)
+  >>> potential_fn = potential.full_potential(prior, batched_likelihood, is_batched=True)
   >>>
-  >>> potential_eval, (data_state, unused_state) = potential_fn(test_sample, data_state)
+  >>> potential_eval, (data_state, unused_state) = potential_fn(
+  ...   test_sample, data_state, fmap_fun)
   >>>
   >>> print(potential_eval)
   707.4376

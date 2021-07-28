@@ -8,3 +8,4 @@ Solvers
 
 .. autofunction:: jax_sgmc.alias.sgld
 .. autofunction:: jax_sgmc.alias.re_sgld
+.. autofunction:: jax_sgmc.alias.amagold

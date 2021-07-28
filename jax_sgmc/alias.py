@@ -102,5 +102,5 @@ def sgld(potential_fn: potential.minibatch_potential,
       sgld_solver[0],
       adaption_kwargs={'alpha': alpha, 'lmbd': lmbd})
     states = map(init_with_adaption_kwargs, init_samples)
-    return mcmc(*states, iterations=iterations)['samples']
+    return mcmc(*states, iterations=iterations)
   return run_fn

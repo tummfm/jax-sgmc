@@ -168,7 +168,7 @@ def mcmc(solver,
           init_args = _init(state, iterations, schedulers=schedulers)
           results = _run(*init_args)
           yield postprocess_saving(*results)
-      chains = list(run_single())
+      return list(run_single())
     else:
       # Initialize the states sequentially
       static_info, init_states = zip(
@@ -177,24 +177,11 @@ def mcmc(solver,
       if strategy == "pmap":
         mapped_run = util.list_pmap(partial(_run, static_info[0]))
       elif strategy == "vmap":
-        # Todo: Fix unnecessary vmap calls. This could be another application of
-        #       the stop_vmap primitive
-        # Vmap of cond is transformed to lax.select. Thus, true branch and false
-        # branch is run, such that all samples are saved and for every sample an
-        # index update is performed.
-        # raise NotImplementedError("Very inefficient.")
-        print("Run vmapped")
         mapped_run = jit(util.list_vmap(partial(_run, static_info[0])))
       else:
         raise NotImplementedError(f"Strategy {strategy} is unknown. ")
       saving_states, saved_values = zip(*mapped_run(*init_states))
       return list(map(postprocess_saving, saving_states, saved_values))
-
-    # No need to return a list for a single chain result
-    if len(chains) == 1:
-      return chains.pop()
-    else:
-      return chains
   return run
 
 

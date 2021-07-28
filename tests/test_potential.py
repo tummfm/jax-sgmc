@@ -313,11 +313,11 @@ class TestPotential():
     map_data_state = full_data_map[0]()
     vmap_data_state = full_data_map[0]()
 
-    map_pot = full_potential(prior, likelihood, strategy="map", full_data_map=full_data_map[1])
-    vmap_pot = full_potential(prior, likelihood, strategy="vmap", full_data_map=full_data_map[1])
+    map_pot = full_potential(prior, likelihood, strategy="map")
+    vmap_pot = full_potential(prior, likelihood, strategy="vmap")
 
-    map_sol, _ = map_pot(sample, map_data_state)
-    vmap_sol, _ = vmap_pot(sample, vmap_data_state)
+    map_sol, _ = map_pot(sample, map_data_state, full_data_map[1])
+    vmap_sol, _ = vmap_pot(sample, vmap_data_state, full_data_map[1])
 
     test_util.check_close(reference_sol, map_sol)
     test_util.check_close(reference_sol, vmap_sol)

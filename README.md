@@ -62,7 +62,7 @@ x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
                x[:, 3]]).transpose()
 y = jnp.matmul(x, w) + noise
 
-data_loader = data.NumpyDataLoader(x=x, y=y)                              
+data_loader = data.NumpyDataLoader(x=x, y=y)
 ```
 
 #### Computational Model
@@ -91,7 +91,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
                                              strategy='vmap')
 full_potential_fn = potential.full_potential(prior=prior,
                                              likelihood=likelihood,
-                                             strategy='vmap')             
+                                             strategy='vmap')
 ```
 
 ### SGLD (rms-prop)
@@ -113,7 +113,7 @@ rms_run = alias.sgld(potential_fn,
                      rms_prop=True)
 
 sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}
-results = rms_run(sample, iterations=50000)[0]['samples']['variables']                                                                                                                          
+results = rms_run(sample, iterations=50000)[0]['samples']['variables']
 ````
 
 ### SGHMC
@@ -183,7 +183,7 @@ sggmc_run = alias.sggmc(potential_fn,
 
 sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
 
-results = sggmc_run(sample, iterations=5000)[0]['samples']['variables'] 
+results = sggmc_run(sample, iterations=5000)[0]['samples']['variables']
 ```
 
 ### AMAGOLD

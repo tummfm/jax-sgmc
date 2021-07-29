@@ -3,7 +3,7 @@
 [![CI](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml)
 
 **[Introduction](#introduction) | [Content](#content) | [Features](#features) | 
-[Quickstart](#quickstart-aliaspytest) | [Installation](#installation) |
+[Quickstart](#quickstart-aliaspy) | [Installation](#installation) |
 [Contributing](#contributing)**
 
 ## Introduction
@@ -13,7 +13,7 @@
 - **[Introduction](#introduction)**
 - **[Content](#content)**
 - **[Features](#features)**
-- **[Quickstart](#quickstart-aliaspytest)**
+- **[Quickstart](#quickstart-aliaspy)**
 - **[Installation](#installation)** 
 - **[Contributing](#contributing)**
 

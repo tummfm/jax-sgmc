@@ -386,7 +386,13 @@ from jax import custom_derivatives
 from jax._src import dtypes
 from jax import lax
 from jax.experimental import pjit
-from jax.lib import pytree
+# from jax.lib import pytree
+from jax._src.lib import xla_bridge as xb
+# from jax.lib import xla_bridge as xb
+from jax._src.lib import xla_client
+# from jax.lib import xla_client
+from jax._src.lib import xla_extension
+# from jax.lib import xla_extension
 from jax.lib import xla_bridge as xb
 from jax.lib import xla_client
 from jax.lib import xla_extension

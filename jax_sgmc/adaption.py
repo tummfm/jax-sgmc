@@ -12,99 +12,226 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Adapt conditioning matrix
+"""Adapt quantities to the local or global geometry.
 
-Initialize adaption
+.. highlight:: python
+
+Adaption Strategies
+---------------------
+
+Mass Matrix
+_____________
+
+.. autoclass:: jax_sgmc.adaption.MassMatrix
+
+.. autofunction:: jax_sgmc.adaption.mass_matrix
+
+Manifold
+_________
+
+.. autoclass:: jax_sgmc.adaption.Manifold
+
+.. autofunction:: jax_sgmc.adaption.rms_prop
+
+Noise Model
+____________
+
+.. autoclass:: NoiseModel
+
+.. autofunction:: jax_sgmc.adaption.fisher_information
+
+Developer Information
+----------------------
+
+.. autoclass:: jax_sgmc.adaption.AdaptionState
+
+Extension of Adaption Strategies
+_________________________________
+
+Each adaption strategy is expected to return three functions
 
 ::
 
-  state = adaption_init(init_sample, *args, **kwargs)
+  @adaption(quantity=SomeQuantity)
+  def some_adaption(minibatch_potential: Callable = None):
+    ...
+    return init_adaption, update_adaption, get_adaption
+
+The decorator :func:`adaption` wraps all three functions to flatten pytrees to
+1D-arrays and unflatten the results of :func:`get_adaption`.
+
+The rule is that all arguments which are passed by position are expected
+to have the same shape as the sample pytree and are flattened to 1D-arrays.
+Arguments which should not be raveled should be passed by keyword.
+
+1. :func:`init_adaption`
+
+  This function initializes the state of the adaption and the ravel- and unravel
+  functions. Therefore, it must accept at least one positional argument with
+  the shape of the sample pytree.
+
+  ::
+
+    ...
+    def init_adaption(sample, momentum, parameter = 0.5):
+      ...
+
+  In the above example, the sample and the momentum are 1D-arrays with size
+  equal to the latent variable count. Parameter is a scalar and will not be
+  raveled.
+
+2. :func:`update_adaption`
+
+  This function updates the state of the adaption. It must accept at least one
+  positional argument, the state, even if the adaption is stateless.
+
+  ::
+
+    ...
+    # This is a stateless adaption
+    def update_adaption(state, *args, **kwargs):
+      del state, args, kwargs
+      return None
+
+  If the factory function of the adaption strategy is called with a potential
+  function as keyword argument (`minibatch_potential = some_fun`), then
+  :func:`update_adaption` is additionally called with the keyword arguments
+  `flat_potential` and `mini_batch`. `flat_potential` is a wrapped version of
+  the original potential function and can be called with the raveled sample.
+
+3. :func:`get_adaption`
+
+  This function calculates the desired quantity. Its argument-signature equals
+  :func:`update_adaption`. It should return a 1D tuple of values in the right
+  order, such that the quantity of the type ``NamedTuple`` can be created by
+  providing positional arguments. For example, if the quantity has
+  the fields `q = namedtuple('q', ['a', 'b', 'c'])`, the get function should
+  look like
+
+  ::
+
+    ...
+    def get_adaption(state, *args, **kwargs):
+      ...
+      return a, b, c
+
+  The returned arrays can have dimension 1 or 2.
 
 
-Update the adaption state
+Extension of Quantities
+_________________________
+
+The introduction of quantities simplifies the implementation into an integrator
+or solver.
+
+For example, adapting a manifold :math:`G` for SGLD requires the calulation of
+:math:`G^{-1},\ G^{-\\frac{1}{2}},\ \\text{and}\ \\Gamma`. If
+:func:`get_adaption` returns all three quantites in the order
 
 ::
 
-  state = adaption_update(state, sample, sample_grad, mini_batch; *args, **kwargs)
+  @adaption(quantity=Manifold)
+  def some_adaption():
+    ...
+    def get_adaption(state, ...):
+      ...
+      return g_inv, g_inv_sqrt, gamma
 
-Get the adapted manifold
+the manifold should be defined as following, where the correct order of
+filed names is important:
 
 ::
 
-  manifold = adaption_get(state, sample, sample_grad, mini_batch, *args, **kwargs)
+  class Manifold(NamedTuple):
+    g_inv: PyTree
+    g_inv_sqrt: PyTree
+    gamma: PyTree
 
-Mostly, only the second argument is important, otherwise, argument 1. and 3.
-allow to derive further quantities, such as the stochastic hessian of the
-potential.
+The new :func:`get_adaption` does only return a single value of type
+:class:`Manifold`.
+
+::
+
+  init_adaption, update_adaption, get_adaption = some_adaption()
+  ...
+  G = get_adaption(state, ...)
 
 """
 
 import functools
 
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Tuple, NamedTuple
 
 from collections import namedtuple
 
-from jax import tree_util, flatten_util
+from jax import tree_util, flatten_util, jit, named_call, lax, vmap, grad
 import jax.numpy as jnp
 
-from jax_sgmc.util import Array
-
-# Todo: Correctly specify the return type
+from jax_sgmc.util import Array, Tensor
+from jax_sgmc.data import MiniBatch
 
 PartialFn = Any
 PyTree = Any
 
-Adaption = Callable[[Any, Any],
-  Tuple[Callable[[Array, Any,Any], PyTree],
-                 Callable[[PyTree, Array, Array, PyTree, Any, Any], PyTree],
-                 Callable[[PyTree, Array, Array, PyTree, Any, Any],
-                 Tuple[Array, Array, Array]]]]
-AdaptionState = Tuple[PyTree, PartialFn, PartialFn]
-AdaptionStrategy = [Callable[[PyTree], AdaptionState],
-                    Callable[[AdaptionState, PyTree, PyTree, Any, Any],
-                             AdaptionState],
-                    Callable[[AdaptionState, PyTree, PyTree, Any, Any],
-                             PyTree]]
+AdaptionStrategy = Callable
 
-# Todo: Initializing the adaption shold return an init_function, update_function
-#       and get_function
+class AdaptionState(NamedTuple):
+  """Extended adaption state returned by adaption decorator.
 
-adaption_state = namedtuple(
-  "adaption_state",
-  ["state",
-   "ravel_fn",
-   "unravel_fn",
-   "flat_potential"])
-"""State of the manifold adaption.
+  This tuple stores functions to ravel and unravel the parameter and gradient
+  pytree in addition to the adaption state.
 
-This tuple stores functions to ravel and unravel the parameter and gradient
-pytree in addition to the adaption state.
+  Attributes:
+    state: State of the adaption strategy
+    ravel_fn: Jax-partial function to transform pytree to 1D array
+    unravel_fn: Jax-partial function to undo ravelling of pytree
+    flat_potential: Potential function on the flattened pytree
+  """
+  state: PyTree
+  ravel_fn: Callable
+  unravel_fn: Callable
+  flat_potential: Callable
 
-Attributes:
-  state: State of the adaption strategy
-  ravel_fn: Jax-partial function to transform pytree to 1D array
-  unravel_fn: Jax-partial function to undo ravelling of pytree
-  flat_potential: Potential function on the flattened pytree
-"""
 
-manifold = namedtuple(
-  "manifold",
-  ["ndim",
-   "g_inv",
-   "sqrt_g_inv",
-   "gamma"]
-)
-"""Adapted manifold.
+class Manifold(NamedTuple):
+  """Adapted manifold.
 
-Attributes:
-  ndim: Diagonal or full adaption.
-  g_inv: Adaption matrix for gradient
-  sqrt_g_inv: Adaption matrix for noise
-  gamma: Diffusion due to positional dependence of manifold
-"""
+  Attributes:
+    g_inv: Inverse manifold.
+    sqrt_g_inv: Square root of inverse manifold.
+    gamma: Diffusion to correct for positional dependence of manifold.
 
-# Todo: Make tree hashable and add caching
+  """
+  g_inv: Tensor
+  sqrt_g_inv: Tensor
+  gamma: Tensor
+
+
+class MassMatrix(NamedTuple):
+  """Mass matrix for HMC.
+
+  Attributes:
+    inv: Inverse of the mass matrix
+    sqrt: Square root of the mass matrix
+
+  """
+  inv: PyTree
+  sqrt: PyTree
+
+
+class NoiseModel(NamedTuple):
+  """Approximation of the gradient noise.
+
+  Attributes:
+    cb_diff_sqrt: Square root of the difference between the friction term and
+      the noise model
+    b_sqrt: Square root of the noise model
+
+  """
+  cb_diff_sqrt: PyTree
+  b_sqrt: PyTree
+
+
 def get_unravel_fn(tree: PyTree):
   """Calculates the unravel function.
 
@@ -117,144 +244,120 @@ def get_unravel_fn(tree: PyTree):
 
   """
   _, unravel_fn = flatten_util.ravel_pytree(tree)
-  return tree_util.Partial(unravel_fn)
+  return tree_util.Partial(jit(unravel_fn))
 
-def adaption(adaption_fn: Adaption):
-  """Decorator to make adaption strategies operate on 1D arrays."""
 
+def adaption(quantity: namedtuple = tuple):
+  """Decorator to make adaption strategies operate on 1D arrays.
+
+  Positional arguments are flattened while keyword arguments are passed
+  unchanged.
+
+  Args:
+    quantity: Namedtuple to specify which fields are returned by
+      :func:``get_adaption``.
+
+  """
+  return functools.partial(_adaption, quantity=quantity)
+
+def _adaption(adaption_fn: Callable, quantity: namedtuple = tuple):
   @functools.wraps(adaption_fn)
   def pytree_adaption(*args, **kwargs) -> AdaptionStrategy:
     init, update, get = adaption_fn(*args, **kwargs)
+    # Name call for debugging
+    named_update = named_call(update, name='update_adaption_state')
+    named_get = named_call(get, name='get_adapted_manifold')
     @functools.wraps(init)
     def new_init(x0: PyTree,
                  *init_args,
-                 **init_kwargs) -> adaption_state:
+                 **init_kwargs) -> AdaptionState:
       # Calculate the flattened state and the ravel and unravel fun
       ravel_fn = tree_util.Partial(
-        lambda tree: flatten_util.ravel_pytree(tree)[0]
-      )
+        jit(lambda tree: flatten_util.ravel_pytree(tree)[0]))
       unravel_fn = get_unravel_fn(x0)
+
       x0_flat = ravel_fn(x0)
-      state = init(x0_flat, *init_args, **init_kwargs)
+      init_flat = map(ravel_fn, init_args)
+      state = init(x0_flat, *init_flat, **init_kwargs)
 
       # Wrap the potential in a flatten function if potential is provided as
       # kwarg
       minibatch_potential = kwargs.get("minibatch_potential")
       if minibatch_potential is not None:
         @tree_util.Partial
-        def flat_potential(sample, mini_batch):
+        def flat_potential(sample, mini_batch, **kwargs):
           sample_tree = unravel_fn(sample)
-          return minibatch_potential(sample_tree, mini_batch)
+          return minibatch_potential(sample_tree, mini_batch, **kwargs)
       else:
         flat_potential = None
 
-      return adaption_state(state=state,
+      return AdaptionState(state=state,
                             ravel_fn=ravel_fn,
                             unravel_fn=unravel_fn,
                             flat_potential=flat_potential)
 
     @functools.wraps(update)
-    def new_update(state: adaption_state,
-                   x: PyTree,
-                   grad_x: PyTree,
-                   mini_batch: PyTree,
+    def new_update(state: AdaptionState,
                    *update_args,
+                   mini_batch: PyTree = None,
                    **update_kwargs):
       # Flat the params and the gradient
-      x_flat = state.ravel_fn(x)
-      grad_flat = state.ravel_fn(grad_x)
+      flat_args = map(state.ravel_fn, update_args)
 
       # Update with flattened arguments
       if state.flat_potential is None:
-        new_state = update(
-          state.state, x_flat, grad_flat,
-          *update_args, **update_kwargs
-        )
+        new_state = named_update(
+          state.state,
+          *flat_args,
+          **update_kwargs)
       else:
-        new_state = update(
-          state.state, x_flat, grad_flat,
-          mini_batch, state.flat_potential,
-          *update_args, **update_kwargs)
+        assert mini_batch, "Adaption strategy requires mini-batch"
+        new_state = named_update(
+          state.state,
+          *flat_args,
+          mini_batch,
+          state.flat_potential,
+          **update_kwargs)
 
-      return adaption_state(state=new_state,
-                            ravel_fn=state.ravel_fn,
-                            unravel_fn=state.unravel_fn,
-                            flat_potential=state.flat_potential)
+      updated_state = AdaptionState(
+        state=new_state,
+        ravel_fn=state.ravel_fn,
+        unravel_fn=state.unravel_fn,
+        flat_potential=state.flat_potential)
+      return updated_state
 
     @functools.wraps(get)
-    def new_get(state: adaption_state,
-                x: PyTree,
-                grad_x: PyTree,
-                mini_batch: PyTree,
+    def new_get(state: AdaptionState,
                 *get_args,
-                **get_kwargs):
+                mini_batch: PyTree = None,
+                **get_kwargs
+                ) -> quantity:
       # Flat the params and the gradient
-      x_flat = state.ravel_fn(x)
-      grad_flat = state.ravel_fn(grad_x)
+      flat_args = map(state.ravel_fn, get_args)
 
       # Get with flattened arguments
       if state.flat_potential is None:
-        g_inv, sqrt_g_inv, gamma = get(state.state,
-                                       x_flat,
-                                       grad_flat,
-                                       *get_args,
-                                       **get_kwargs)
+        adapted_quantities = named_get(
+          state.state,*flat_args, **get_kwargs)
       else:
-        g_inv, sqrt_g_inv, gamma = get(state.state,
-                                       x_flat,
-                                       grad_flat,
-                                       mini_batch,
-                                       state.flat_potential,
-                                       *get_args,
-                                       **get_kwargs)
+        adapted_quantities = named_get(
+          state.state, *flat_args,
+          mini_batch=mini_batch, flat_potential=state.flat_potential,
+          **get_kwargs)
 
-      if g_inv.ndim == 1 and sqrt_g_inv.ndim == 1:
-        unraveled_manifold = manifold(
-          ndim=1,
-          g_inv=state.unravel_fn(g_inv),
-          sqrt_g_inv=state.unravel_fn(sqrt_g_inv),
-          gamma=state.unravel_fn(gamma)
-        )
-      else:
-        unraveled_manifold = manifold(
-          ndim=2,
-          g_inv=g_inv,
-          sqrt_g_inv=sqrt_g_inv,
-          gamma=state.unravel_fn(gamma)
-        )
+      def unravel_quantities():
+        for q in adapted_quantities:
+          if q.ndim == 1:
+            yield Tensor(ndim=1, tensor=state.unravel_fn(q))
+          else:
+            yield Tensor(ndim=2, tensor=q)
 
-      # Unravel the results
-      return unraveled_manifold
+      return quantity(*unravel_quantities())
     return new_init, new_update, new_get
   return pytree_adaption
 
-static_conditioning_state = namedtuple(
-  "static_conditioning_state",
-  ["matrix"]
-)
 
-# def static_conditioning(sample, matrix
-#                         ) -> Tuple[Callable[[Any, Any], Tuple[Any, Any, Any]], Any]:
-#   """Condition the model by a static matrix.
-#
-#   This is the default adaption. The simplest form is to choose the matrix to be
-#   the identity.
-#
-#   Arguments:
-#     sample: Defines the shape of the samples.
-#     Gamma: The preconditining matrix. Must allow multiplication of the potential
-#       gradient with itself.
-#
-#   Returns:
-#     Returns a function which adapts its internal states and returns the
-#     preconditioning matrix and the drift vector consisting of Gamme term and
-#     possible additional drifts.
-#
-#   """
-#
-#   # Get a zero pytree
-
-@adaption
+@adaption(quantity=Manifold)
 def rms_prop() -> AdaptionStrategy:
   """RMSprop adaption.
 
@@ -284,10 +387,10 @@ def rms_prop() -> AdaptionStrategy:
     return (v, alpha, lmbd)
 
   def update(state: Tuple[Array, Array, Array],
-             unused_sample: Array,
+             sample: Array,
              sample_grad: Array,
-             *unused_args: Any,
-             **unused_kwargs: Any):
+             *args: Any,
+             **kwargs: Any):
     """Updates the RMSprop adaption.
 
     Args:
@@ -297,16 +400,17 @@ def rms_prop() -> AdaptionStrategy:
     Returns:
       Returns adapted RMSprop state.
     """
+    del sample, args, kwargs
 
     v, alpha, lmbd = state
     new_v = alpha * v + (1 - alpha) * jnp.square(sample_grad)
     return new_v, alpha, lmbd
 
   def get(state: Tuple[Array, Array, Array],
-          unused_sample: Array,
-          unused_sample_grad: Array,
-          *unused_args: Any,
-          **unused_kwargs: Any):
+          sample: Array,
+          sample_grad: Array,
+          *args: Any,
+          **kwargs: Any):
     """Calculates the current manifold of the RMSprop adaption.
 
     Args:
@@ -315,8 +419,175 @@ def rms_prop() -> AdaptionStrategy:
     Returns:
       Returns a manifold tuple with ``ndim == 1``.
     """
+    del sample, sample_grad, args, kwargs
+
     v, _, lmbd = state
     g = jnp.power(lmbd + jnp.sqrt(v), -1.0)
     return g, jnp.sqrt(g), jnp.zeros_like(g)
+
+  return init, update, get
+
+
+@adaption(quantity=MassMatrix)
+def mass_matrix(diagonal=True, burn_in=1000):
+  """Adapt the mass matrix for HMC.
+
+  Args:
+    diagonal: Restrict the adapted matrix to be diagonal
+    burn_in: Number of steps in which the matrix should be updated
+
+  Returns:
+    Returns an adaption strategy for the mass matrix.
+
+  """
+
+  def _update_matrix(args):
+    iteration, ssq, _, _ = args
+    if diagonal:
+      inv = ssq / iteration
+      sqrt = jnp.sqrt(iteration / ssq)
+    else:
+      inv = ssq / iteration
+      eigw, eigv = jnp.linalg.eigh(ssq / iteration)
+      # Todo: More effective computation
+      sqrt = jnp.matmul(jnp.transpose(eigv), jnp.matmul(jnp.diag(jnp.sqrt(eigw)), eigv))
+    return inv, sqrt
+
+  def init(sample: Array, init_cov: Array):
+    iteration = 0
+    mean = jnp.zeros_like(sample)
+    if diagonal:
+      ssq = jnp.zeros_like(sample)
+    else:
+      ssq = jnp.zeros((sample.size, sample.size))
+
+    if init_cov is None:
+      init_cov = jnp.ones_like(sample)
+
+    if diagonal:
+      m_inv = init_cov
+      m_sqrt = 1 / jnp.sqrt(init_cov)
+    else:
+      m_inv = jnp.diag(init_cov)
+      m_sqrt = jnp.diag(1 / jnp.sqrt(init_cov))
+
+    return iteration, mean, ssq, m_inv, m_sqrt
+
+  def update(state: Tuple[Array, Array, Array, Array, Array],
+             sample: Array,
+             *args: Any,
+             **kwargs: Any):
+    del args, kwargs
+    iteration, mean, ssq, m_inv, m_sqrt = state
+
+    iteration += 1
+    new_mean = (iteration - 1) / iteration * mean + 1 / iteration * sample
+    if diagonal:
+      ssq += jnp.multiply(sample - mean, sample - new_mean)
+    else:
+      ssq += jnp.outer(sample - mean, sample - new_mean)
+
+    # Only update once
+    new_m_inv, new_m_sqrt = lax.cond(
+      iteration == burn_in,
+      _update_matrix,
+      lambda arg: (arg[2], arg[3]),
+      (iteration, ssq, m_inv, m_sqrt))
+
+    return iteration, new_mean, ssq, new_m_inv, new_m_sqrt
+
+  def get(state: Tuple[Array, Array, Array, Array, Array]):
+    _, _, _, m_inv, m_sqrt = state
+
+    return m_inv, m_sqrt
+
+  return init, update, get
+
+@adaption(quantity=NoiseModel)
+def fisher_information(minibatch_potential: Callable = None,
+                       diagonal = True
+                       ) -> AdaptionStrategy:
+  """Adapt empirical fisher information.
+
+  Use the empirical fisher information as a noise model for SGHMC. The empirical
+  fisher information is approximated according to [1].
+
+  Returns:
+    Returns noise model approximation strategy.
+
+  [1] https://arxiv.org/abs/1206.6380
+  """
+  assert minibatch_potential, "Fisher information requires potential function."
+
+  def init(*args):
+    del args
+
+  def update(*args,
+             **kwargs):
+    del args, kwargs
+
+  def get(state,
+          sample: Array,
+          sample_grad: Array,
+          friction: Array,
+          *args: Any,
+          mini_batch: MiniBatch,
+          flat_potential,
+          step_size: Any = jnp.array(1.0),
+          **kwargs: Any):
+    del state, args, kwargs
+
+    _, mb_information = mini_batch
+    N = mb_information.observation_count
+    n = mb_information.batch_size
+
+    # Unscale the gradient to get mean
+    sample_grad /= N
+
+    def potential_at_obs(smp, obs_idx):
+      _, (likelihoods, _) = flat_potential(smp, mini_batch, likelihoods=True)
+      return likelihoods[obs_idx]
+
+    grad_diff_idx = grad(potential_at_obs, argnums=0)
+
+    @functools.partial(vmap, out_axes=0)
+    def sqd(idx):
+      if diagonal:
+        return jnp.square(grad_diff_idx(sample, idx) - sample_grad)
+      else:
+        diff = grad_diff_idx(sample, idx) - sample_grad
+        return jnp.outer(diff, diff)
+
+    ssq = jnp.sum(sqd(jnp.arange(mb_information.batch_size)), axis=0)
+
+    if diagonal:
+      v = 1 / (n - 1) * ssq
+      b = 0.5 * step_size * v
+
+      # Correct for negative eigenvalues
+      correction = friction - b
+      smallest_positive = jnp.min(jnp.where(correction <= 0, jnp.inf, correction))
+      positive_correction = jnp.where(correction <= 0, smallest_positive, correction)
+
+      # Apply the corrections to b
+      b_corrected = friction - positive_correction
+
+      noise_scale_sqrt = jnp.sqrt(positive_correction)
+      scale_sqrt = jnp.sqrt(b_corrected)
+    else:
+      v = 1 / (n - 1) * ssq
+      b = 0.5 * step_size * v
+      eigw_cb, eigv_cb = jnp.linalg.eigh(jnp.diag(friction) - b)
+      noise_scale_sqrt = jnp.matmul(
+        jnp.transpose(eigv_cb),
+        jnp.matmul(jnp.diag(jnp.sqrt(eigw_cb)), eigv_cb))
+
+      eigw_b, eigv_b = jnp.linalg.eigh(b)
+      # Todo: More effective computation
+      scale_sqrt = jnp.matmul(
+        jnp.transpose(eigv_b),
+        jnp.matmul(jnp.diag(jnp.sqrt(eigw_b)), eigv_b))
+
+    return noise_scale_sqrt, scale_sqrt
 
   return init, update, get

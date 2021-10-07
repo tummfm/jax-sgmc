@@ -9,7 +9,7 @@ from jax_sgmc import alias
 
 ## Configuration parameters
 
-batch_size = 2
+batch_size = 16
 cached_batches = 1024
 num_classes = 100
 weight_decay = 5.e-4
@@ -29,7 +29,7 @@ train_loader = data.TensorflowDataLoader(train_dataset,
                                          shuffle_cache=1000,
                                          exclude_keys=['id'])
 
-test_loader = data.NumpyDataLoader(batch_size, X=test_images, Y=test_labels)
+test_loader = data.NumpyDataLoader(X=test_images, Y=test_labels)
 
 train_batch_fn = data.random_reference_data(train_loader, cached_batches)
 
@@ -37,7 +37,7 @@ train_batch_fn = data.random_reference_data(train_loader, cached_batches)
 # TODO: Maybe write convenience function for this common usecase?
 batch_init, batch_get = train_batch_fn
 # This method returns a batch with correct shape but all zero values. The batch
-# contains 32 (batch_size) images.
+# contains 16 (batch_size) images.
 init_batch = train_loader.initializer_batch(batch_size)
 
 ## ResNet Model
@@ -58,7 +58,7 @@ init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
 # test prediction
 logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
 
-print(jnp.sum(logits))
+# print(jnp.sum(logits))
 # I don't think this should give plain 0, otherwise gradients will be 0
 
 ## Initialize potential
@@ -92,56 +92,18 @@ potential_fn = potential.minibatch_potential(prior=prior,
 
 ## Setup Integrator
 
-
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
 iterations = 100000
 
 solver_sgld = alias.sgld(potential_fn=potential_fn, data_loader=train_loader, batch_size=batch_size)
 
-# exit()
-
-# Adaption strategy potential
-# rms_prop = adaption.rms_prop()
-
-# Integrators
-# rms_integrator = integrator.langevin_diffusion(potential_fn,
-#                                                train_batch_fn,
-#                                                rms_prop)
-
-# Initial value for starting
 sample = {"w": init_params}
 
-# Schedulers
-# rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
-#                                                           last=0.001)
-# burn_in = scheduler.initial_burn_in(50000)
-# Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
-# rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
-
-# rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
-#                                          burn_in=burn_in,
-#                                          thinning=rms_random_thinning)
-
-# This is the most efficient option, in which case the selected samples are
-# stored and returned as trees of numpy arrays
-data_collector = io.MemoryCollector()
-saving = io.save(data_collector)
-
-# rms_sgld = solver.sgmc(rms_integrator)
-# rms_run = solver.mcmc(rms_sgld,
-#                       rms_scheduler,
-#                       saving=saving)
-
-# The initial state for the likelihood must be passed as a keyword argument just
-# like the initial sample.
 results = solver_sgld(sample, iterations=iterations)[0]['samples']['variables']
-# rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
-#               iterations=iterations)["samples"]
 
 # Simple pickle the results for now
 
 with open("results.pkl", "wb") as file:
     pickle.dump(results, file)
-    # pickle.dump(rms, file)
 
 print("Finished")

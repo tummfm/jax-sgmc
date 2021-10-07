@@ -386,7 +386,17 @@ from jax import custom_derivatives
 from jax._src import dtypes
 from jax import lax
 from jax.experimental import pjit
-from jax.lib import pytree
+try:
+  from jax._src.lib import pytree
+  from jax._src.lib import xla_bridge as xb
+  from jax._src.lib import xla_client
+  from jax._src.lib import xla_extension
+except ModuleNotFoundError:
+  from jax.lib import pytree
+  from jax.lib import xla_bridge as xb
+  from jax.lib import xla_client
+  from jax.lib import xla_extension
+
 from jax.lib import xla_bridge as xb
 from jax.lib import xla_client
 from jax.lib import xla_extension
@@ -396,9 +406,9 @@ from jax._src import pprint_util as ppu
 from jax._src import source_info_util
 from jax._src import util
 
-from jax_sgmc.util import stop_vmap
-
 import numpy as np
+
+from jax_sgmc.util import stop_vmap
 
 
 FLAGS = config.FLAGS

@@ -10,7 +10,12 @@ from jax.interpreters import batching
 from jax._src.util import safe_map, partial, extend_name_stack
 from jax._src import abstract_arrays, ad_util
 from jax import lax
-from jax.lib import xla_bridge as xb
+
+try:
+  from jax._src.lib import xla_bridge as xb
+except ModuleNotFoundError:
+  from jax.lib import xla_bridge as xb
+
 from jax.interpreters import xla
 from jax.lib import xla_client
 

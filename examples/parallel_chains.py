@@ -19,6 +19,7 @@ from jax import random
 from jax.scipy.stats import norm
 
 from jax import test_util
+
 test_util.set_host_platform_device_count(4)
 
 from numpyro import sample as npy_smpl
@@ -38,6 +39,7 @@ from jax_sgmc import integrator
 from jax_sgmc import solver
 
 import time
+
 ################################################################################
 #
 # Reference Data
@@ -46,7 +48,7 @@ import time
 
 N = 4
 samples = 1000  # Total samples
-sigma = 0.5
+sigma = 0.5  # variance?
 
 key = random.PRNGKey(0)
 split1, split2, split3 = random.split(key, 3)
@@ -55,7 +57,7 @@ w = random.uniform(split3, minval=-1, maxval=1, shape=(N, 1))
 noise = jnp.sqrt(sigma) * random.normal(split2, shape=(samples, 1))
 x = random.uniform(split1, minval=-10, maxval=10, shape=(samples, N))
 x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
-               x[:, 3]]).transpose()
+               x[:, 3]]).transpose()  # linear combinations of features in x ??
 y = jnp.matmul(x, w) + noise
 
 
@@ -67,19 +69,19 @@ y = jnp.matmul(x, w) + noise
 
 
 def numpyro_model(y_obs=None):
-  sigma = npy_smpl("sigma", npy_dist.Uniform(low=0.0, high=10.0))
-  weights = npy_smpl("weights",
-                     npy_dist.Uniform(low=-10 * jnp.ones((N, 1)),
-                                      high=10 * jnp.ones((N, 1))))
+    sigma = npy_smpl("sigma", npy_dist.Uniform(low=0.0, high=10.0))
+    weights = npy_smpl("weights",
+                       npy_dist.Uniform(low=-10 * jnp.ones((N, 1)),
+                                        high=10 * jnp.ones((N, 1))))
 
-  y_pred = jnp.matmul(x, weights)
-  npy_smpl("likelihood", npy_dist.Normal(loc=y_pred, scale=sigma), obs=y_obs)
+    y_pred = jnp.matmul(x, weights)
+    npy_smpl("likelihood", npy_dist.Normal(loc=y_pred, scale=sigma), obs=y_obs)
 
 
 # Collect 1000 samples
 
 kernel = npy_inf.HMC(numpyro_model)
-mcmc = npy_inf.MCMC(kernel, 1000, 1000)
+mcmc = npy_inf.MCMC(kernel, num_warmup=1000, num_samples=1000)  # only HMC and NUTS supported as samplers
 mcmc.run(random.PRNGKey(0), y_obs=y)
 mcmc.print_summary()
 
@@ -102,20 +104,20 @@ batch_fn = data.random_reference_data(data_loader, cached_batches_count=cs)
 # == Model definition ==========================================================
 
 def model(sample, observations):
-  weights = sample["w"]
-  predictors = observations["x"]
-  return jnp.dot(predictors, weights)
+    weights = sample["w"]
+    predictors = observations["x"]
+    return jnp.dot(predictors, weights)
 
 
 def likelihood(sample, observations):
-  sigma = sample["sigma"]
-  y = observations["y"]
-  y_pred = model(sample, observations)
-  return norm.logpdf(y - y_pred, scale=sigma)
+    sigma = sample["sigma"]
+    y = observations["y"]
+    y_pred = model(sample, observations)
+    return norm.logpdf(y - y_pred, scale=sigma)
 
 
 def prior(unused_sample):
-  return 0.0
+    return 0.0
 
 
 # If the model is more complex, the strategy can be set to map for sequential
@@ -127,7 +129,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
 # == Solver Setup ==============================================================
 
 # Number of iterations
-iterations = 50000
+iterations = 150000
 
 # Adaption strategy
 rms_prop = adaption.rms_prop()
@@ -139,17 +141,12 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
                                                batch_fn,
                                                rms_prop)
 
-
-
-
-
 # Schedulers
 
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                           last=0.001)
-burn_in = scheduler.initial_burn_in(20000)
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
-
+burn_in = scheduler.initial_burn_in(30000)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 100)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
@@ -161,27 +158,30 @@ rms_sgld = solver.sgmc(rms_integrator)
 data_collector = io.MemoryCollector()
 saving = io.save(data_collector)
 
-rms_run = solver.mcmc(rms_sgld, rms_scheduler, strategy="pmap", saving=saving)
+rms_run = solver.mcmc(rms_sgld, rms_scheduler, strategy="vmap", saving=saving)
 
 # Initial value for starting
 init_sample = lambda seed: {"w": 2 * random.normal(random.PRNGKey(0), (N, 1)),
                             "sigma": jnp.array(10.0)}
-init_states = list(map(rms_integrator[0], (init_sample(seed) for seed in range(4))))
+init_states = list(map(rms_integrator[0], (init_sample(seed) for seed in range(25))))
 
-
+start = time.time()
 rms_results = rms_run(*init_states, iterations=iterations)
+print(f"run in {time.time() - start} seconds")
 
 # Append the results of the chains
 rms_likelihoods = onp.array(jnp.squeeze(jnp.concatenate([rms["samples"]["likelihood"] for rms in rms_results], axis=0)))
 w_rms = onp.array(jnp.squeeze(jnp.concatenate([rms["samples"]["variables"]["w"] for rms in rms_results], axis=0)))
-sigma_rms = onp.array(jnp.squeeze(jnp.concatenate([rms["samples"]["variables"]["sigma"] for rms in rms_results], axis=0)))
+sigma_rms = onp.array(
+    jnp.squeeze(jnp.concatenate([rms["samples"]["variables"]["sigma"] for rms in rms_results], axis=0)))
 
 ################################################################################
 #
 # Results
 #
 ################################################################################
-
+print(rms_results[0]["samples"]["variables"]["sigma"][0:10])
+print(rms_results[1]["samples"]["variables"]["sigma"][0:10])
 
 plt.figure()
 plt.title("Sigma")
@@ -189,7 +189,6 @@ plt.title("Sigma")
 plt.plot(sigma_rms, label="RMSprop")
 
 plt.legend()
-
 
 # Contours of numpyro solution
 
@@ -224,7 +223,6 @@ W3d, W4d = onp.meshgrid(w3d, w4d)
 p34d = onp.vstack([W3d.ravel(), W4d.ravel()])
 Z34d = onp.reshape(w34(p34d).T, W3d.shape)
 Z34d /= Z34d.max()
-
 
 # rm
 

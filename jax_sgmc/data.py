@@ -563,7 +563,7 @@ class NumpyDataLoader(DataLoader):
 
   def __init__(self, mini_batch_size: int = None, **reference_data):
     super().__init__()
-    assert mini_batch_size is not None, "Global mini batch size depreceated. "
+    assert mini_batch_size is None, "Global mini batch size depreceated. "
     assert len(reference_data) > 0, "Observations are required."
 
     first_key = list(reference_data.keys())[0]

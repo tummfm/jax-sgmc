@@ -590,7 +590,8 @@ class MemoryCollector(DataCollector):
     else:
       pytree_keys = [f"leaf~{idx}" for idx in range(len(leaves))]
 
-    self._finished.append(threading.Barrier(2))
+    self._finished.append(threading.Lock())
+    self._finished[chain_id].acquire()
     self._samples.append(sample_cache)
     self._treedefs.append(treedef)
     self._samples_count.append(0)
@@ -618,7 +619,7 @@ class MemoryCollector(DataCollector):
 
     """
     # Is called after all host callback calls have been processed
-    self._finished[chain_id].wait()
+    self._finished[chain_id].release()
     if self._dir:
       output_dir = Path(self._dir)
       output_file = output_dir / f"chain_{chain_id}.npz"
@@ -642,7 +643,8 @@ class MemoryCollector(DataCollector):
       arrays as leaves.
 
     """
-    self._finished[chain_id].wait()
+    self._finished[chain_id].acquire()
+    self._finished[chain_id].release()
     # Restore original tree shape
     return tree_util.tree_unflatten(
       self._treedefs[chain_id],

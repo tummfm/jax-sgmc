@@ -176,9 +176,3 @@ class TestSaving:
     # Check close
 
     test_util.check_close(save_results, reference_solution)
-
-  def test_no_save_transformations(self):
-    """Test saving under transformations. """
-
-  def test_save_transformations(self):
-    pass

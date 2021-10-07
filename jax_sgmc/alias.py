@@ -125,7 +125,7 @@ def sgld(potential_fn: potential.minibatch_potential,
     ...                      rms_prop=True)
     >>>
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}
-    >>> results = rms_run(sample, iterations=50000)[0]['samples']['variables']
+    >>> results = rms_run(sample, init_model_state=None, iterations=50000)[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
     [0.48556787 0.4838285  0.4860216  ... 0.49602574 0.49936494 0.49983683]
@@ -147,7 +147,8 @@ def sgld(potential_fn: potential.minibatch_potential,
 
   Returns:
     Returns a solver function which can be applied to multiple chains starting
-    at ``init_sample``.
+    at ``init_sample``. If the likelihood is stateful, an initial state must be
+    provided.
 
   """
 
@@ -180,10 +181,14 @@ def sgld(potential_fn: potential.minibatch_potential,
   sgld_solver = solver.sgmc(rms_integrator)
   mcmc = solver.mcmc(sgld_solver, schedule, strategy='map', saving=saving)
 
-  def run_fn(*init_samples, iterations = 1000):
+  def run_fn(*init_samples, init_model_state: Pytree = None, iterations = 1000):
     init_with_adaption_kwargs = partial(
       sgld_solver[0],
-      adaption_kwargs={'alpha': alpha, 'lmbd': lmbd})
+      adaption_kwargs={
+        'alpha': alpha,
+        'lmbd': lmbd,
+      },
+      init_model_state=init_model_state)
     states = map(init_with_adaption_kwargs, init_samples)
     return mcmc(*states, iterations=iterations)
   return run_fn

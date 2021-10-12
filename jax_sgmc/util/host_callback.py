@@ -11,6 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# pylint: skip-file
+
 """Primitives for calling Python functions on the host from JAX accelerator code.
 **Experimental: please give feedback, and expect changes.**
 This module introduces the host callback functions :func:`call`,

@@ -39,8 +39,8 @@ __________________
 
 In this example we first have to generate some data. As the data is already in
 the form of jnp-arrays, constructing a :class:`NumpyDataLoader` is the simplest
-option. For many datasets such as mnist, using the `TFDataLoader` is recommended,
-as it accepts datasets from `tensorflow_datasets`.
+option. For many datasets such as mnist, using the `TFDataLoader` is
+recommended, as it accepts datasets from `tensorflow_datasets`.
 
   >>> N = 4
   >>> samples = 1000  # Total samples
@@ -63,28 +63,33 @@ ____________________
 
 The likelihood and prior wrap the model to be investigated. The potential
 modules takes care of combining both into a single potential function, which
-can be applied to a batch of data.
+can be applied to a batch of data. Optionally, an additional model state can be
+passed to the likelihood.
 
   >>> def model(sample, observations):
   ...   weights = sample["w"]
   ...   predictors = observations["x"]
   ...   return jnp.dot(predictors, weights)
   >>>
-  >>> def likelihood(sample, observations):
+  >>> def likelihood(state, sample, observations):
   ...   sigma = sample["sigma"]
   ...   y = observations["y"]
   ...   y_pred = model(sample, observations)
-  ...   return norm.logpdf(y - y_pred, scale=sigma)
+  ...   # Simply count upwards to demonstrate support of state
+  ...   new_state = state + 1
+  ...   return norm.logpdf(y - y_pred, scale=sigma), new_state
   >>>
   >>> def prior(unused_sample):
   ...   return 0.0
   >>>
   >>> potential_fn = potential.minibatch_potential(prior=prior,
   ...                                              likelihood=likelihood,
-  ...                                              strategy='vmap')
+  ...                                              strategy='vmap',
+  ...                                              has_state=True)
   >>> full_potential_fn = potential.full_potential(prior=prior,
   ...                                              likelihood=likelihood,
-  ...                                              strategy='vmap')
+  ...                                              strategy='vmap',
+  ...                                              has_state=True)
 
 """
 
@@ -125,10 +130,10 @@ def sgld(potential_fn: potential.minibatch_potential,
     ...                      rms_prop=True)
     >>>
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}
-    >>> results = rms_run(sample, init_model_state=None, iterations=50000)[0]['samples']['variables']
+    >>> results = rms_run(sample, init_model_state=0, iterations=50000)[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.48556787 0.4838285  0.4860216  ... 0.49602574 0.49936494 0.49983683]
+    [0.4855679  0.48382854 0.48602164 ... 0.49602574 0.49936494 0.49983683]
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -223,7 +228,9 @@ def re_sgld(potential_fn: potential.minibatch_potential,
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
     >>> init_samples = [(sample, sample), (sample, sample), (sample, sample)]
     >>>
-    >>> results = resgld_run(*init_samples, iterations=50000)[0]['samples']['variables']
+    >>> results = resgld_run(
+    ...   *init_samples, init_model_state=0, iterations=50000
+    ...   )[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
     [0.7344817  0.78028935 0.70692766 ... 0.7185406  0.6215274  0.74618036]
@@ -273,8 +280,11 @@ def re_sgld(potential_fn: potential.minibatch_potential,
   resgld_solver = solver.parallel_tempering(resgld_integrator)
   mcmc = solver.mcmc(resgld_solver, schedule, strategy='map', saving=saving)
 
-  def run_fn(*init_samples, iterations = 1000):
-    states = map(resgld_solver[0], *zip(*init_samples))
+  def run_fn(*init_samples, init_model_state: Pytree = None, iterations = 1000):
+    init_resgld_fn = partial(
+      resgld_solver[0],
+      init_model_state=init_model_state)
+    states = map(init_resgld_fn, *zip(*init_samples))
     return mcmc(*states,
                 iterations=iterations,
                 schedulers=[{'temperature': {'tau': temperature}}])
@@ -316,10 +326,12 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
     >>>
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
     >>>
-    >>> results = amagold_run(sample, iterations=5000)[0]['samples']['variables']
+    >>> results = amagold_run(
+    ...   sample, init_model_state=0, iterations=5000
+    ...   )[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.5090904 0.5090904 0.5090904 ... 0.4953096 0.4953096 0.4981754]
+    [0.50908965 0.50908965 0.50908965 ... 0.4953075  0.4953075  0.49817327]
 
   Args:
     stochastic_potential_fn: Stochastic potential over a minibatch of data
@@ -382,8 +394,11 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
 
   mcmc = solver.mcmc(amagold_solver, schedule, strategy='map', saving=saving)
 
-  def run_fn(*init_samples, iterations=1000):
-    states = map(amagold_solver[0], init_samples)
+  def run_fn(*init_samples, init_model_state: Pytree = None, iterations=1000):
+    init_amagold_fn = partial(
+      amagold_solver[0],
+      init_model_state = init_model_state)
+    states = map(init_amagold_fn, init_samples)
     return mcmc(*states, iterations=iterations)
   return run_fn
 
@@ -424,7 +439,9 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
     >>>
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
     >>>
-    >>> results = sggmc_run(sample, iterations=5000)[0]['samples']['variables']
+    >>> results = sggmc_run(
+    ...   sample, init_model_state=0, iterations=5000
+    ...   )[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
     [0.50949144 0.50949144 0.50949144 ... 0.49120873 0.49120873 0.49120873]
@@ -492,8 +509,9 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
 
   mcmc = solver.mcmc(sggmc_solver, schedule, strategy='map', saving=saving)
 
-  def run_fn(*init_samples, iterations=1000):
-    states = map(sggmc_solver[0], init_samples)
+  def run_fn(*init_samples, init_model_state: Pytree = None, iterations=1000):
+    init_sggmc_fn = partial(sggmc_solver[0], init_model_state=init_model_state)
+    states = map(init_sggmc_fn, init_samples)
     return mcmc(*states, iterations=iterations)
   return run_fn
 
@@ -528,10 +546,10 @@ def sghmc(potential_fn: potential.minibatch_potential,
     ...                         diagonal_noise=False)
     >>>
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
-    >>> results = sghmc_run(sample, iterations=5000)[0]['samples']['variables']
+    >>> results = sghmc_run(sample, init_model_state=0, iterations=5000)[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.5026532  0.50142556 0.5028311  ... 0.5089461  0.50838983 0.50870013]
+    [0.50264543 0.50142    0.50283986 ... 0.5089415  0.50838524 0.5086956 ]
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -583,7 +601,8 @@ def sghmc(potential_fn: potential.minibatch_potential,
   sghmc_solver = solver.sgmc(friction_leapfrog)
   mcmc = solver.mcmc(sghmc_solver, schedule, strategy='map', saving=saving)
 
-  def run_fn(*init_samples, iterations = 1000):
-    states = map(sghmc_solver[0], init_samples)
+  def run_fn(*init_samples, init_model_state: Pytree = None, iterations = 1000):
+    init_sghmc_fn = partial(sghmc_solver[0], init_model_state=init_model_state)
+    states = map(init_sghmc_fn, init_samples)
     return mcmc(*states, iterations=iterations)
   return run_fn

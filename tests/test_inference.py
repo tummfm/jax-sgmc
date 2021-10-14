@@ -42,7 +42,7 @@ def problem():
   split1, split2, split3 = random.split(key, 3)
 
   w = random.uniform(split3, minval=-1, maxval=1, shape=(N, 1))
-  noise = jnp.sqrt(sigma) * random.normal(split2, shape=(samples, 1))
+  noise = sigma * random.normal(split2, shape=(samples, 1))
   x = random.uniform(split1, minval=-10, maxval=10, shape=(samples, N))
   x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
                  x[:, 3]]).transpose()
@@ -52,8 +52,10 @@ def problem():
   M = 10
   cs = 1000
 
-  data_loader = data.NumpyDataLoader(M, x=x, y=y)
-  batch_fn = data.random_reference_data(data_loader, cached_batches_count=cs)
+  data_loader = data.NumpyDataLoader(x=x, y=y)
+  batch_fn = data.random_reference_data(data_loader,
+                                        cached_batches_count=cs,
+                                        mb_size=M)
 
   def model(sample, observations):
     weights = sample["w"]
@@ -86,9 +88,11 @@ class TestSGLD:
                                                        batch_fn)
     default_step_size = scheduler.polynomial_step_size_first_last(first=0.001,
                                                                   last=0.000005)
-    burn_in = scheduler.initial_burn_in(20000)
-    default_random_thinning = scheduler.random_thinning(default_step_size,
-                                                        burn_in, 4000)
+    burn_in = scheduler.initial_burn_in(n=20000)
+    default_random_thinning = scheduler.random_thinning(
+      step_size_schedule=default_step_size,
+      burn_in_schedule=burn_in,
+      selections=4000)
     default_scheduler = scheduler.init_scheduler(step_size=default_step_size,
                                                  burn_in=burn_in,
                                                  thinning=default_random_thinning)
@@ -97,7 +101,7 @@ class TestSGLD:
     default = default_run(default_integrator[0](w_init), iterations=50000)
 
     # Check that the standard deviation is close
-    assert jnp.all(jnp.abs(default["samples"]["variables"]["sigma"] - 0.5)  < 0.5)
+    assert jnp.all(jnp.abs(default[0]["samples"]["variables"]["sigma"] - 0.5)  < 0.5)
 
   def test_rms(self, problem):
 
@@ -109,9 +113,11 @@ class TestSGLD:
                                                    rms_prop)
     rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                               last=0.001)
-    burn_in = scheduler.initial_burn_in(20000)
-    rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in,
-                                                    4000)
+    burn_in = scheduler.initial_burn_in(n=20000)
+    rms_random_thinning = scheduler.random_thinning(
+      step_size_schedule=rms_step_size,
+      burn_in_schedule=burn_in,
+      selections=4000)
     rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                              burn_in=burn_in,
                                              thinning=rms_random_thinning)
@@ -120,4 +126,4 @@ class TestSGLD:
     rms = rms_run(rms_integrator[0](w_init), iterations=50000)
 
     # Check that the standard deviation is close
-    assert jnp.all(jnp.abs(rms["samples"]["variables"]["sigma"] - 0.5)  < 0.5)
+    assert jnp.all(jnp.abs(rms[0]["samples"]["variables"]["sigma"] - 0.5)  < 0.5)

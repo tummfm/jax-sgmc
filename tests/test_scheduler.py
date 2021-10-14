@@ -41,9 +41,9 @@ class TestScheduler:
                   {"tau": 0.5})]
 
   @pytest.mark.parametrize(
-    "step_size, temperature, burn_in",
+    "step_size, burn_in, temperature",
     itertools.product(step_size, burn_in, temperature))
-  def test_scheduler(self, step_size, temperature, burn_in):
+  def test_scheduler(self, step_size, burn_in, temperature):
     """Test that the scheduler can initialize all specific schedulers. Moreover,
     the capability to provide default values is tested. """
 
@@ -68,6 +68,7 @@ class TestScheduler:
     state, _ = schedule[0](iterations)
 
     for _ in range(iterations):
+
       sched = schedule[2](state)
       state = schedule[1](state)
 
@@ -91,9 +92,9 @@ class TestStepSize():
     last = jnp.array(last)
     gamma = jnp.array(gamma)
 
-    schedule = scheduler.polynomial_step_size_first_last(first,
-                                                         last,
-                                                         gamma)
+    schedule = scheduler.polynomial_step_size_first_last(first=first,
+                                                         last=last,
+                                                         gamma=gamma)
 
     state = schedule.init(iterations)
 
@@ -106,9 +107,9 @@ class TestBurnIn():
   @pytest.mark.parametrize("n", [123, 243])
   def test_initial_burn_in(self, n):
     """Test, that no off by one error exists."""
-    burn_in = scheduler.initial_burn_in(n)
+    burn_in = scheduler.initial_burn_in(n=n)
 
-    state = burn_in.init(1000)
+    state, _ = burn_in.init(1000)
 
     # Check that samples are not accepted
     for idx in range(n):
@@ -125,7 +126,7 @@ class TestThinning():
   def burn_in(self, request):
     iterations = request.param
     accepted = random.bernoulli(random.PRNGKey(0), p=0.3, shape=(100,))
-    init = lambda *args: None
+    init = lambda *args: (None, onp.sum(accepted))
     update = lambda *args, **kwargs: None
     get = lambda _, iteration, **kwargs: accepted[iteration]
     nonzero, = onp.nonzero(accepted)
@@ -136,10 +137,12 @@ class TestThinning():
     subject to burn in."""
 
     burn_in, non_zero, iterations = burn_in
-    step_size = scheduler.polynomial_step_size(1.0, 1.0, 1.0)
+    step_size = scheduler.polynomial_step_size(a=1.0, b=1.0, gamma=1.0)
 
     thinning = scheduler.random_thinning(
-      step_size, burn_in, int(0.5 * non_zero.size))
+      step_size_schedule=step_size,
+      burn_in_schedule=burn_in,
+      selections=int(0.5 * non_zero.size))
     state, _ = thinning.init(iterations)
 
     accepted = 0

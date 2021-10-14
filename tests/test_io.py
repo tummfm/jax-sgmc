@@ -16,6 +16,7 @@ class TestDictTransformation:
 
 
 
+
 @pytest.mark.hdf5
 class TestHDF5Collector:
   pass
@@ -151,12 +152,15 @@ class TestSaving:
     data_collector = io.MemoryCollector()
     init_save, save, postprocess_save = io.save(data_collector)
 
-    vmap_init_states = [(init_save(init_sample, {}, io.scheduler.static_information(samples_collected=count)),
-                         init_sample) for init_sample in init_states]
+    vmap_init_states = [((init_save(init_sample, {}, io.scheduler.static_information(samples_collected=count)),
+                         init_sample), accepted_list) for init_sample in init_states]
 
-    # We use list_vmap, because we tun the chain over a list of pytrees.
+    # We use list_vmap, because we tun the chain over a list of pytrees. Also,
+    # we currently have to vectorize over the acceptance list because of the
+    # implementation of stop_vmap
     @util.list_vmap
-    def save_run(init_args):
+    def save_run(init_state):
+      init_args, accept = init_state
       saving_state, init_sample = init_args
       def update(state, keep):
         saving_state, simulation_state = state
@@ -164,7 +168,7 @@ class TestSaving:
         saving_state, _ = save(saving_state, keep, simulation_state)
         return (saving_state, simulation_state), None
 
-      (saving_state, _), _ = lax.scan(update, (saving_state, init_sample), accepted_list)
+      (saving_state, _), _ = lax.scan(update, (saving_state, init_sample), accept)
       return saving_state
 
     save_results = [postprocess_save(res, None)["samples"] for res in save_run(*vmap_init_states)]
@@ -172,9 +176,3 @@ class TestSaving:
     # Check close
 
     test_util.check_close(save_results, reference_solution)
-
-  def test_no_save_transformations(self):
-    """Test saving under transformations. """
-
-  def test_save_transformations(self):
-    pass

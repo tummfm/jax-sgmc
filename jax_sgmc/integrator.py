@@ -637,7 +637,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
         gradient,
         friction,
         mini_batch=mini_batch,
-        step_size=parameters.step_size)
+        step_size=parameters.step_size,
+        model_state=state.model_state)
       reduced_noise = tensor_matmul(noise_correction.cb_diff_sqrt, noise)
       extra_noise = tensor_matmul(noise_correction.b_sqrt, extra_noise)
       unscaled_noise = tree_add(reduced_noise, extra_noise)

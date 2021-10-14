@@ -418,7 +418,7 @@ class TensorflowDataLoader(DataLoader):
                exclude_keys: List = None):
     super().__init__()
     # Tensorflow is in general not required to use the library
-    assert mini_batch_size is not None, "Depreceated"
+    assert mini_batch_size is None, "Depreceated"
     assert TFDataSet is not None, "Tensorflow must be installed to use this " \
                                   "feature."
     assert tfds is not None, "Tensorflow datasets must be installed to use " \

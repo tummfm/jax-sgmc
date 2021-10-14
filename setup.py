@@ -18,10 +18,10 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     long_description_content_type='text/markdown',
     description='Stochastic Gradient Monte Carlo using Jax',
-    python_requires='>=3.6',
+    python_requires='>=3.8',
     classifiers=[
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
         'License :: OSI Approved :: Apache Software License',
         'Operating System :: MacOS',
         'Operating System :: POSIX :: Linux',

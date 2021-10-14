@@ -4,8 +4,10 @@ jax_sgmc.potential
 .. automodule:: jax_sgmc.potential
 
 
-.. autosummary::
-  :toctree: _autosummary
+API
+----
 
-    minibatch_potential
-    full_potential
+.. autofunction:: jax_sgmc.potential.minibatch_potential
+
+.. autofunction:: jax_sgmc.potential.full_potential
+

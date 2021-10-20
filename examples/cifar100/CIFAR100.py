@@ -25,7 +25,7 @@ train_dataset, train_info = tensorflow_datasets.load('Cifar100',
                                                      split='train',
                                                      with_info=True)
 train_loader = data.TensorflowDataLoader(train_dataset,
-                                         batch_size,
+                                         # batch_size,
                                          shuffle_cache=1000,
                                          exclude_keys=['id'])
 
@@ -95,15 +95,41 @@ potential_fn = potential.minibatch_potential(prior=prior,
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
 iterations = 100000
 
-solver_sgld = alias.sgld(potential_fn=potential_fn, data_loader=train_loader, batch_size=batch_size)
+# solver_sgld = alias.sgld(potential_fn=potential_fn, data_loader=train_loader, batch_size=batch_size)
+# results = solver_sgld(sample, iterations=iterations)[0]['samples']['variables']
+
+rms_prop = adaption.rms_prop()
+
+rms_integrator = integrator.langevin_diffusion(potential_fn,
+                                                train_batch_fn,
+                                                rms_prop)
+
+# Schedulers
+rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
+                                                          last=0.001)
+burn_in = scheduler.initial_burn_in(50000)
+# Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
+
+rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
+                                         burn_in=burn_in,
+                                         thinning=rms_random_thinning)
 
 sample = {"w": init_params}
+data_collector = io.MemoryCollector()
+saving = io.save(data_collector)
 
-results = solver_sgld(sample, iterations=iterations)[0]['samples']['variables']
+rms_sgld = solver.sgmc(rms_integrator)
+rms_run = solver.mcmc(rms_sgld,
+                      rms_scheduler,
+                      saving=saving)
+
+rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
+              iterations=iterations)["samples"]
 
 # Simple pickle the results for now
 
 with open("results.pkl", "wb") as file:
-    pickle.dump(results, file)
+    pickle.dump(rms, file)
 
 print("Finished")

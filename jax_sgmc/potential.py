@@ -132,7 +132,8 @@ def minibatch_potential(prior: Prior,
       lks = likelihood(sample, reference_data)
       state = None
     # Ensure that a scalar is returned to avoid broadcasting with mask
-    return jnp.squeeze(lks), state
+    # return jnp.squeeze(lks), state
+    return lks, state
 
   # Define the strategies to evaluate the likelihoods sequantially, vectorized
   # or in parallel
@@ -178,7 +179,7 @@ def minibatch_potential(prior: Prior,
 
     # The mask is only necessary for the full potential evaluation
     if mask is None:
-      stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=1)
+      stochastic_potential = - N * jnp.mean(batch_likelihoods, axis=0)
     else:
       stochastic_potential = - N / n * jnp.dot(batch_likelihoods, mask)
     return stochastic_potential, batch_likelihoods, new_state

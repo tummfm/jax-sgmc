@@ -4,8 +4,15 @@ from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, i
 import tensorflow as tf
 import tensorflow_datasets
 import haiku as hk
-from jax_sgmc import alias
 
+import sys
+import os
+
+if len(sys.argv) > 1:
+    visible_device = str(sys.argv[1])
+else:
+    visible_device = 1
+os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)  # controls on which gpu the program runs
 
 ## Configuration parameters
 
@@ -36,13 +43,12 @@ train_batch_fn = data.random_reference_data(train_loader, cached_batches)
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
 batch_init, batch_get = train_batch_fn
+
 # This method returns a batch with correct shape but all zero values. The batch
 # contains 16 (batch_size) images.
 init_batch = train_loader.initializer_batch(batch_size)
 
-## ResNet Model
-
-
+# ResNet Model
 def init_resnet():
     @hk.transform_with_state
     def resnet(batch, is_training=True):
@@ -61,8 +67,7 @@ logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
 # print(jnp.sum(logits))
 # I don't think this should give plain 0, otherwise gradients will be 0
 
-## Initialize potential
-
+# Initialize potential
 def likelihood(resnet_state, sample, observations):
     labels = nn.one_hot(observations["label"], num_classes)
     logits, resnet_state = apply_resnet(sample["w"], resnet_state, None, observations)
@@ -90,16 +95,13 @@ potential_fn = potential.minibatch_potential(prior=prior,
                                              has_state=True,  # likelihood contains model state
                                              is_batched=True)
 
-## Setup Integrator
-
+# Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
 iterations = 100000
-
 # solver_sgld = alias.sgld(potential_fn=potential_fn, data_loader=train_loader, batch_size=batch_size)
 # results = solver_sgld(sample, iterations=iterations)[0]['samples']['variables']
 
 rms_prop = adaption.rms_prop()
-
 rms_integrator = integrator.langevin_diffusion(potential_fn,
                                                 train_batch_fn,
                                                 rms_prop)

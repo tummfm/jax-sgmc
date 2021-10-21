@@ -12,7 +12,7 @@ if len(sys.argv) > 1:
     visible_device = str(sys.argv[1])
 else:
     visible_device = 1
-os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)  # controls on which gpu the program runs
+os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)
 
 ## Configuration parameters
 
@@ -98,8 +98,6 @@ potential_fn = potential.minibatch_potential(prior=prior,
 # Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
 iterations = 100000
-# solver_sgld = alias.sgld(potential_fn=potential_fn, data_loader=train_loader, batch_size=batch_size)
-# results = solver_sgld(sample, iterations=iterations)[0]['samples']['variables']
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
@@ -128,8 +126,6 @@ rms_run = solver.mcmc(rms_sgld,
 
 rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
               iterations=iterations)["samples"]
-
-# Simple pickle the results for now
 
 with open("results.pkl", "wb") as file:
     pickle.dump(rms, file)

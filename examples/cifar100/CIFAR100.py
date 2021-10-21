@@ -1,12 +1,19 @@
 import pickle
 from jax import nn, tree_leaves, random, numpy as jnp
+import sys
+sys.path.append('../../../jax-sgmc')
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io
 import tensorflow as tf
 import tensorflow_datasets
 import haiku as hk
-
+import os
 ## Configuration parameters
 
+if len(sys.argv) > 1:
+    visible_device = str(sys.argv[1])
+else:
+    visible_device = 1
+os.environ["CUDA_VISIBLE_DEVICES"]=str(visible_device)
 
 batch_size = 32
 cached_batches = 1024

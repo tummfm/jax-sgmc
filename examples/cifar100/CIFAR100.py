@@ -1,21 +1,23 @@
 import pickle
 from jax import nn, tree_leaves, random, numpy as jnp
-import sys
-sys.path.append('../../../jax-sgmc')
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io
 import tensorflow as tf
 import tensorflow_datasets
 import haiku as hk
+
+from jax_sgmc.util import host_callback as hcb
+
+import sys
 import os
 ## Configuration parameters
 
 if len(sys.argv) > 1:
     visible_device = str(sys.argv[1])
 else:
-    visible_device = 1
-os.environ["CUDA_VISIBLE_DEVICES"]=str(visible_device)
+    visible_device = 0
+os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)
 
-batch_size = 32
+batch_size = 128
 cached_batches = 1024
 num_classes = 100
 weight_decay = 5.e-4
@@ -31,20 +33,21 @@ train_dataset, train_info = tensorflow_datasets.load('Cifar100',
                                                      split='train',
                                                      with_info=True)
 train_loader = data.TensorflowDataLoader(train_dataset,
-                                         batch_size,
                                          shuffle_cache=1000,
                                          exclude_keys=['id'])
 
-test_loader = data.NumpyDataLoader(batch_size, X=test_images, Y=test_labels)
+test_loader = data.NumpyDataLoader(X=test_images, Y=test_labels)
 
-train_batch_fn = data.random_reference_data(train_loader, cached_batches)
+train_batch_fn = data.random_reference_data(train_loader,
+                                            cached_batches,
+                                            batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
 batch_init, batch_get = train_batch_fn
 # This method returns a batch with correct shape but all zero values. The batch
 # contains 32 (batch_size) images.
-init_batch = train_loader.initializer_batch()
+init_batch = train_loader.initializer_batch(batch_size)
 
 ## ResNet Model
 
@@ -67,22 +70,39 @@ logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
 print(jnp.sum(logits))
 # I don't think this should give plain 0, otherwise gradients will be 0
 
-## Initialize potential
+it = 0
+dec = 0.0
 
+def log_fun(arg, _):
+  global it, dec
+  it += 1
+  dec *= 0.99
+  dec += 0.01 * arg[1]
+
+  pred = dec * 100 / arg[2]
+  print(f"{it} || Identified: {arg[1]} ({pred:.2f}%) || Softmax: {arg[0]}")
+
+# Initialize potential with the log-likelihood and the log-prior
 def likelihood(resnet_state, sample, observations):
     labels = nn.one_hot(observations["label"], num_classes)
     logits, resnet_state = apply_resnet(sample["w"], resnet_state, None, observations)
-    softmax_xent = -jnp.sum(labels * nn.log_softmax(logits))
+    softmax_xent = +jnp.sum(labels * nn.log_softmax(logits), axis=1)
     softmax_xent /= labels.shape[0]
+
+    # Logging the smoothed percentage of correct predictions
+    hcb.id_tap(log_fun,
+               (jnp.sum(softmax_xent),
+                jnp.sum(jnp.argmax(logits, axis=1) == observations["label"]),
+                labels.shape[0]))
     return softmax_xent, resnet_state
 
 def prior(sample):
     # Implement weight decay, corresponds to Gaussian prior over weights
     weights = sample["w"]
-    l2_loss = 0.5 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(weights))
-    return weight_decay * l2_loss
+    l2_loss = 0.5 * sum(jnp.mean(jnp.square(p)) for p in tree_leaves(weights))
+    return -weight_decay * l2_loss
 
-# The likelihood accepts a batch of data, so not batching strategy is required,
+# The likelihood accepts a batch of data, so no batching strategy is required,
 # instead, is_batched must be set to true.
 #
 # The likelihood signature changes from
@@ -113,11 +133,11 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
 sample = {"w": init_params}
 
 # Schedulers
-rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
-                                                          last=0.001)
+rms_step_size = scheduler.polynomial_step_size_first_last(first=0.005,
+                                                          last=0.0001)
 burn_in = scheduler.initial_burn_in(50000)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 100)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
@@ -125,7 +145,7 @@ rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
 
 # This is the most efficient option, in which case the selected samples are
 # stored and returned as trees of numpy arrays
-data_collector = io.MemoryCollector()
+data_collector = io.MemoryCollector(save_dir=".")
 saving = io.save(data_collector)
 
 rms_sgld = solver.sgmc(rms_integrator)
@@ -137,10 +157,3 @@ rms_run = solver.mcmc(rms_sgld,
 # like the initial sample.
 rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
               iterations=iterations)["samples"]
-
-# Simple pickle the results for now
-
-with open("results.pkl", "wb") as file:
-  pickle.dump(rms, file)
-
-print("Finished")

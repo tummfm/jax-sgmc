@@ -19,8 +19,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)
 
 batch_size = 128
 cached_batches = 1024
-num_classes = 100
-weight_decay = 5.e-4
+num_classes = 10
+weight_decay = 5.e-6
 
 ## Load dataset
 
@@ -29,7 +29,7 @@ weight_decay = 5.e-4
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
-train_dataset, train_info = tensorflow_datasets.load('Cifar100',
+train_dataset, train_info = tensorflow_datasets.load('Cifar10',
                                                      split='train',
                                                      with_info=True)
 train_loader = data.TensorflowDataLoader(train_dataset,
@@ -42,8 +42,7 @@ train_batch_fn = data.random_reference_data(train_loader,
                                             cached_batches,
                                             batch_size)
 
-# get first batch to init NN
-# TODO: Maybe write convenience function for this common usecase?
+
 batch_init, batch_get = train_batch_fn
 # This method returns a batch with correct shape but all zero values. The batch
 # contains 32 (batch_size) images.
@@ -80,14 +79,13 @@ def log_fun(arg, _):
   dec += 0.01 * arg[1]
 
   pred = dec * 100 / arg[2]
-  print(f"{it} || Identified: {arg[1]} ({pred:.2f}%) || Softmax: {arg[0]}")
+  print(f"{it} || Identified: {arg[1]} ({pred:.2f}%) || Logl: {arg[0]}")
 
 # Initialize potential with the log-likelihood and the log-prior
 def likelihood(resnet_state, sample, observations):
     labels = nn.one_hot(observations["label"], num_classes)
     logits, resnet_state = apply_resnet(sample["w"], resnet_state, None, observations)
-    softmax_xent = +jnp.sum(labels * nn.log_softmax(logits), axis=1)
-    softmax_xent /= labels.shape[0]
+    softmax_xent = jnp.sum(labels * nn.log_softmax(logits), axis=1)
 
     # Logging the smoothed percentage of correct predictions
     hcb.id_tap(log_fun,
@@ -119,7 +117,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
 
 
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
-iterations = 100000
+iterations = 50000
 
 # Adaption strategy
 rms_prop = adaption.rms_prop()
@@ -135,7 +133,7 @@ sample = {"w": init_params}
 # Schedulers
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.005,
                                                           last=0.0001)
-burn_in = scheduler.initial_burn_in(50000)
+burn_in = scheduler.initial_burn_in(10000)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
 rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 100)
 
@@ -145,7 +143,7 @@ rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
 
 # This is the most efficient option, in which case the selected samples are
 # stored and returned as trees of numpy arrays
-data_collector = io.MemoryCollector(save_dir=".")
+data_collector = io.MemoryCollector(save_dir="results")
 saving = io.save(data_collector)
 
 rms_sgld = solver.sgmc(rms_integrator)
@@ -155,5 +153,8 @@ rms_run = solver.mcmc(rms_sgld,
 
 # The initial state for the likelihood must be passed as a keyword argument just
 # like the initial sample.
-rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
-              iterations=iterations)["samples"]
+rms = rms_run(rms_integrator[0](sample,
+                                init_model_state=init_resnet_state,
+                                adaption_kwargs={"alpha": 0.95,
+                                                 "lmbd": 1e-5}),
+              iterations=iterations)

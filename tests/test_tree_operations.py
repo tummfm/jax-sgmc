@@ -1,7 +1,5 @@
 from functools import partial
 
-from jax_sgmc.util import host_callback
-
 
 import jax
 import jax.numpy as jnp

@@ -338,9 +338,16 @@ def amagold(integrator_fn,
       full_data_kwargs = {}
     full_data_state = init_full_data(**full_data_kwargs)
 
-    potential, (full_data_state, _) = full_potential_fn(init_sample,
-                                                        full_data_state,
-                                                        full_data_map_fn)
+    init_model_state = kwargs.get('init_model_state')
+
+    potential, (full_data_state, model_state) = full_potential_fn(
+      init_sample,
+      full_data_state,
+      full_data_map_fn,
+      state=init_model_state)
+
+    kwargs['init_model_state'] = model_state
+
     key, split = random.split(key)
     # Todo: Init with correct covariance
     integrator_state = init_integrator(init_sample, key=key, mass=mass, **kwargs)
@@ -368,10 +375,11 @@ def amagold(integrator_fn,
       mass=mass)
 
     # MH correction step
-    new_potential, (full_data_state, _) = full_potential_fn(
+    new_potential, (full_data_state, new_model_state) = full_potential_fn(
       proposal.positions,
       state.full_data_state,
-      full_data_map_fn)
+      full_data_map_fn,
+      state=proposal.model_state)
 
     # Limit acceptance ratio to 1.0
     log_alpha = state.potential - new_potential + proposal.potential
@@ -379,17 +387,18 @@ def amagold(integrator_fn,
     slice = random.uniform(split)
 
     # If true, the step is accepted
-    mh_integrator_state, new_potential, direction = lax.cond(
+    mh_integrator_state, new_potential, direction, mh_model_state = lax.cond(
       jnp.log(slice) < log_alpha,
       lambda new_old: new_old[0],
       lambda new_old: new_old[1],
-      ((proposal, new_potential, 1.0),
-       (state.integrator_state, state.potential, -1.0)))
+      ((proposal, new_potential, 1.0, new_model_state),
+       (state.integrator_state, state.potential, -1.0,
+        state.integrator_state.model_state)))
 
     new_integrator_state = integrator.LeapfrogState(
       positions=mh_integrator_state.positions,
       momentum=util.tree_scale(direction, mh_integrator_state.momentum),
-      model_state=mh_integrator_state.model_state,
+      model_state=mh_model_state,
       potential=mh_integrator_state.potential,
       # These parameters must be provided from the updated state, otherwise
       # the noise and the random data is not resampled
@@ -460,9 +469,17 @@ def sggmc(integrator_fn,
       full_data_kwargs = {}
     full_data_state = init_full_data(**full_data_kwargs)
 
-    full_pot, (full_data_state, _) = full_potential_fn(init_sample,
-                                                        full_data_state,
-                                                       full_data_map_fn)
+    init_model_state = kwargs.get('init_model_state')
+
+    full_pot, (full_data_state, new_model_state) = full_potential_fn(
+      init_sample,
+      full_data_state,
+      full_data_map_fn,
+      state=init_model_state)
+
+    # Pass the new model state to the integrator
+    kwargs['init_model_state'] = new_model_state
+
     key, split = random.split(key)
     integrator_state = init_integrator(init_sample, key=key, **kwargs)
 
@@ -495,13 +512,15 @@ def sggmc(integrator_fn,
       mass=mass)
 
     # MH correction step
-    new_potential, (full_data_state, _) = full_potential_fn(
+    new_potential, (full_data_state, new_model_state) = full_potential_fn(
       proposal.positions,
       state.full_data_state,
-      full_data_map_fn)
+      full_data_map_fn,
+      state=proposal.model_state)
 
     log_alpha = - 1.0 / schedule.temperature * (
-      new_potential - state.potential + proposal.kinetic_energy_end - proposal.kinetic_energy_start)
+      new_potential - state.potential
+      + proposal.kinetic_energy_end - proposal.kinetic_energy_start)
     # Limit the probability to 1.0 to ensure correct calculation of acceptance
     # ratio statistics.
     log_alpha = jnp.where(log_alpha <= 0, log_alpha, 0.0)
@@ -509,17 +528,18 @@ def sggmc(integrator_fn,
     slice = random.uniform(split)
 
     # If true, the step is accepted
-    mh_integrator_state, new_potential = lax.cond(
+    mh_integrator_state, new_potential, mh_model_state = lax.cond(
       jnp.log(slice) < log_alpha,
       lambda new_old: new_old[0],
       lambda new_old: new_old[1],
-      ((proposal, new_potential),
-       (state.integrator_state, state.potential)))
+      ((proposal, new_potential, new_model_state),
+       (state.integrator_state, state.potential,
+        state.integrator_state.model_state)))
 
     new_integrator_state = integrator.ObaboState(
       positions=mh_integrator_state.positions,
       momentum=mh_integrator_state.momentum,
-      model_state=mh_integrator_state.model_state,
+      model_state=mh_model_state,
       potential=mh_integrator_state.potential,
       # These parameters must be provided from the updated state, otherwise
       # the noise and the random data is not resampled

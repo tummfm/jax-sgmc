@@ -298,7 +298,7 @@ def minibatch_potential(prior: Prior,
     if is_batched:
       # Batched evaluation returns single state
       new_state = new_states
-    elif state:
+    elif state is not None:
       new_state = tree_util.tree_map(
         lambda ary, org: jnp.reshape(jnp.take(ary, 0, axis=0), org.shape),
         new_states, state)

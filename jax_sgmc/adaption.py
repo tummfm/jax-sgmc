@@ -285,9 +285,17 @@ def _adaption(adaption_fn: Callable, quantity: namedtuple = tuple):
       minibatch_potential = kwargs.get("minibatch_potential")
       if minibatch_potential is not None:
         @tree_util.Partial
-        def flat_potential(sample, mini_batch, **kwargs):
+        def flat_potential(sample,
+                           mini_batch,
+                           model_state: PyTree = None,
+                           **kwargs):
           sample_tree = unravel_fn(sample)
-          return minibatch_potential(sample_tree, mini_batch, **kwargs)
+          if model_state is not None:
+            return minibatch_potential(
+              model_state, sample_tree, mini_batch, **kwargs)
+          else:
+            return minibatch_potential(
+              sample_tree, mini_batch, **kwargs)
       else:
         flat_potential = None
 
@@ -534,6 +542,7 @@ def fisher_information(minibatch_potential: Callable = None,
           mini_batch: MiniBatch,
           flat_potential,
           step_size: Any = jnp.array(1.0),
+          model_state: PyTree = None,
           **kwargs: Any):
     del state, args, kwargs
 
@@ -545,7 +554,8 @@ def fisher_information(minibatch_potential: Callable = None,
     sample_grad /= N
 
     def potential_at_obs(smp, obs_idx):
-      _, (likelihoods, _) = flat_potential(smp, mini_batch, likelihoods=True)
+      _, (likelihoods, _) = flat_potential(
+        smp, mini_batch, likelihoods=True, state=model_state)
       return likelihoods[obs_idx]
 
     grad_diff_idx = grad(potential_at_obs, argnums=0)

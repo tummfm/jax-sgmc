@@ -203,6 +203,7 @@ from typing import Tuple, Any, Callable, List, Optional, Union, NamedTuple, Dict
 import jax
 from jax import tree_util, lax
 import jax.numpy as jnp
+from jax.experimental import host_callback as hcb
 
 import numpy as onp
 
@@ -215,7 +216,7 @@ except ModuleNotFoundError:
   TFDataSet = None
   tfds = None
 
-from jax_sgmc.util import Array, stop_vmap, host_callback as hcb
+from jax_sgmc.util import Array, stop_vmap
 
 class MiniBatchInformation(NamedTuple):
   """Bundles all information about the reference data.

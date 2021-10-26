@@ -4,8 +4,8 @@ import setuptools
 
 INSTALL_REQUIRES = [
     'numpy',
-    'jax>=0.1.73,<0.2.21',
-    'jaxlib>=0.1.52,<0.1.72',
+    'jax>=0.1.73',
+    'jaxlib>=0.1.52',
     'dataclasses'
 ]
 

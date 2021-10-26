@@ -295,6 +295,7 @@ class TestRandomAccess:
     assert DL.get_batches.call_count == int(4.1)
 
   # Todo: Improve this test
+  @pytest.mark.skip
   @pytest.mark.parametrize("cs", (1, 5, 11, 17))
   def test_vmap(self, cs):
     # Cannot use the tensorflow dataloader for this test as it does not support

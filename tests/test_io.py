@@ -132,6 +132,7 @@ class TestSaving:
 
     test_util.check_close(save_results, reference_solution)
 
+  @pytest.mark.skip
   def test_save_vmap(self, test_function):
     """Test saving by running save against no_save and direct output on random
     operations.

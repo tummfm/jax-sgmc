@@ -240,8 +240,10 @@ def parallel_tempering(integrator,
 
   init_integrator, update_integrator, get_integrator = integrator
 
-  #Todo: Maybe also provide pmap?
-  vmapped_update = util.list_vmap(lambda args: update_integrator(*args))
+  # Todo: Maybe also provide pmap?
+
+  # Todo: Currently not supported because of missing stop_vmap implementation
+  # vmapped_update = util.list_vmap(lambda args: update_integrator(*args))
 
   def init(normal_sample: PyTree,
            tempered_sample: PyTree,
@@ -264,10 +266,9 @@ def parallel_tempering(integrator,
 
     step += 1
 
-    # Vectorized evaluation of both chains
-    normal_chain, hot_chain = vmapped_update(
-      [normal_chain, normal_schedule],
-      [hot_chain, hot_schedule])
+    # Todo: Replace with vmapped / pmapped update
+    normal_chain = update_integrator(normal_chain, normal_schedule)
+    hot_chain = update_integrator(hot_chain, hot_schedule)
 
     # Update of std_estimate
     step_size = sa_schedule(step)

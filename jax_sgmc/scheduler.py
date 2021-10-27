@@ -139,7 +139,6 @@ from jax import lax
 from jax import random
 
 from jax_sgmc.util import Array
-from jax_sgmc.util import host_callback
 
 specific_scheduler = namedtuple("specific_scheduler",
                                 ["init",

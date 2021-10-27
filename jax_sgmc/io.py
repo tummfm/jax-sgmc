@@ -59,6 +59,7 @@ import numpy as onp
 
 import jax.numpy as jnp
 from jax import tree_util, lax
+from jax.experimental import host_callback
 
 try:
   import ujson
@@ -80,7 +81,7 @@ except ModuleNotFoundError:
 
 from jax_sgmc import data
 from jax_sgmc import scheduler
-from jax_sgmc.util import stop_vmap, host_callback
+from jax_sgmc.util import stop_vmap
 
 PyTree = Any
 

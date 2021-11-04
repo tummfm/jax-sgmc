@@ -132,8 +132,7 @@ def minibatch_potential(prior: Prior,
       lks = likelihood(sample, reference_data)
       state = None
     # Ensure that a scalar is returned to avoid broadcasting with mask
-    # return jnp.squeeze(lks), state
-    return lks, state
+    return jnp.squeeze(lks), state
 
   # Define the strategies to evaluate the likelihoods sequantially, vectorized
   # or in parallel

@@ -8,11 +8,20 @@ import haiku as hk
 import sys
 import os
 
+# from jax import device_put, devices
+# print(device_put(1, devices()[2]).device_buffer.device())
+# physical_devices = tf.config.experimental.list_physical_devices('GPU')
+# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+# config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
+
 if len(sys.argv) > 1:
     visible_device = str(sys.argv[1])
 else:
     visible_device = 1
 os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)
+
+# physical_devices = tf.config.list_physical_devices('GPU')
+# tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 ## Configuration parameters
 
@@ -32,13 +41,12 @@ train_dataset, train_info = tensorflow_datasets.load('Cifar100',
                                                      split='train',
                                                      with_info=True)
 train_loader = data.TensorflowDataLoader(train_dataset,
-                                         # batch_size,
                                          shuffle_cache=1000,
                                          exclude_keys=['id'])
 
 test_loader = data.NumpyDataLoader(X=test_images, Y=test_labels)
 
-train_batch_fn = data.random_reference_data(train_loader, cached_batches)
+train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
@@ -64,16 +72,17 @@ init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
 # test prediction
 logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
 
-# print(jnp.sum(logits))
+print(jnp.sum(logits))
 # I don't think this should give plain 0, otherwise gradients will be 0
 
-# Initialize potential
+
+# Initialize potential with the log-likelihood and the log-prior
 def likelihood(resnet_state, sample, observations):
     labels = nn.one_hot(observations["label"], num_classes)
     logits, resnet_state = apply_resnet(sample["w"], resnet_state, None, observations)
     softmax_xent = labels * jnp.log(nn.softmax(logits))
-    softmax_xent = -jnp.sum(softmax_xent, axis=-1)  # xent = (categorical) cross entropy
-    softmax_xent /= labels.shape[0]
+    softmax_xent = jnp.mean(softmax_xent, axis=1)  # xent = (categorical) cross entropy
+    # softmax_xent /= labels.shape[0]
     return softmax_xent, resnet_state
 
 def prior(sample):
@@ -97,7 +106,8 @@ potential_fn = potential.minibatch_potential(prior=prior,
 
 # Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
-iterations = 100000
+iterations = 10
+# iterations = 100000
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
@@ -107,7 +117,8 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
 # Schedulers
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                           last=0.001)
-burn_in = scheduler.initial_burn_in(50000)
+# burn_in = scheduler.initial_burn_in(50000)
+burn_in = scheduler.initial_burn_in(5)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
 rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
 
@@ -123,11 +134,13 @@ rms_sgld = solver.sgmc(rms_integrator)
 rms_run = solver.mcmc(rms_sgld,
                       rms_scheduler,
                       saving=saving)
+# Data collector
+data_collector = io.MemoryCollector()
+saving = io.save(data_collector)
 
-rms = rms_run(rms_integrator[0](sample, init_model_state=init_resnet_state),
-              iterations=iterations)["samples"]
+rms = rms_run(rms_integrator[0](sample,
+                                init_model_state=init_resnet_state),
+                iterations=iterations, saving=saving)["samples"]["variables"]
 
-with open("results.pkl", "wb") as file:
-    pickle.dump(rms, file)
 
 print("Finished")

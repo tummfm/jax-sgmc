@@ -92,6 +92,18 @@ class TestTFLoader:
 
     jax.tree_map(test_fn, first_batch)
 
+  def test_random_access(self, dataloader):
+    init_fn, batch_fn = data.random_reference_data(dataloader, 100, 100)
+
+    init_batch = dataloader.initializer_batch(100)
+
+    state = init_fn()
+
+    newstate, _ = batch_fn(state)
+    newstate, batch = batch_fn(newstate)
+
+    test_util.check_eq(jax.tree_map(lambda x: 0 * x, batch), init_batch)
+
 class TestNumpyLoader:
 
   @pytest.fixture(scope='class')
@@ -229,6 +241,7 @@ class TestNumpyLoader:
                          pipeline.get_batches(chain_2)]
 
     test_util.check_eq(no_break_data, after_resume_data)
+
 
 @pytest.mark.tensorflow
 class TestRandomAccess:

@@ -637,6 +637,9 @@ class NumpyDataLoader(DataLoader):
     """
     # The random state of each chain can be defined unambiguously via the
     # PRNGKey
+    assert mb_size <= self._observation_count, \
+      (f"The batch size cannot be bigger than the observation count. Provided "
+       f"{mb_size} and {self._observation_count}")
 
     chain_id = len(self._chains)
 
@@ -669,6 +672,9 @@ class NumpyDataLoader(DataLoader):
       Returns the id of the new chain.
 
     """
+    assert mb_size <= self._observation_count, \
+      (f"The batch size cannot be bigger than the observation count. Provided "
+       f"{mb_size} and {self._observation_count}")
     chain_id = len(self._chains)
 
     new_chain = {'type': 'ordered',

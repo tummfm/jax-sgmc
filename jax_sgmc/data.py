@@ -198,10 +198,10 @@ import abc
 from functools import partial
 import itertools
 
-from typing import Tuple, Any, Callable, List, Optional, Union, NamedTuple, Dict
+from typing import Tuple, Any, Callable, List, Union, NamedTuple, Dict
 
 import jax
-from jax import tree_util, lax
+from jax import tree_util, lax, random
 import jax.numpy as jnp
 from jax.experimental import host_callback as hcb
 
@@ -246,7 +246,167 @@ PyTree = Any
 #       checkpointing
 
 class DataLoader(metaclass=abc.ABCMeta):
-  """Abstract class to define required methods of the DataLoader.
+  """Abstract class to define required methods of a DataLoader.
+
+  This class defines common methods of a DataLoader, such as returning an all-
+  zero batch with correct shape to initialize the model.
+  """
+
+  @property
+  @abc.abstractmethod
+  def static_information(self) -> Dict:
+    """Information about the dataset such as the total observation count. """
+
+  @property
+  @abc.abstractmethod
+  def _format(self):
+    """dtype and shape of a mini-batch. """
+
+  def initializer_batch(self, mb_size: int = None) -> PyTree:
+    """Returns a zero-like mini-batch.
+
+    Args:
+      mb_size: Number of observations in a batch. If ``None``, the returned
+        pytree has the shape of a single observation.
+
+    """
+    obs_format = self._format
+
+    # Append the cache size to the batch_format
+    def append_cache_size(leaf):
+      if mb_size is None:
+        new_shape = tuple(int(s) for s in leaf.shape)
+      else:
+        new_shape = tuple(int(s) for s in
+                          itertools.chain([mb_size], leaf.shape))
+      return jnp.zeros(
+        dtype=leaf.dtype,
+        shape=new_shape
+      )
+
+    batch = tree_util.tree_map(append_cache_size, obs_format)
+    return batch
+
+
+class DeviceDataLoader(DataLoader, metaclass=abc.ABCMeta):
+  """Abstract class to define required methods of a DeviceDataLoader.
+
+  A class implementing the data loader must have the functionality to return the
+  complete dataset as a dictionary of arrays.
+  """
+
+  @abc.abstractmethod
+  def init_random_data(self, *args, **kwargs) -> PyTree:
+    """Initializes the state necessary to randomly draw data. """
+
+  @abc.abstractmethod
+  def get_random_data(self,
+                      state,
+                      batch_size
+                      ) ->Tuple[PyTree, Tuple[PyTree, mini_batch_information]]:
+    """Returns a random batch of the data.
+
+    This function must be jit-able and free of side effects.
+
+    """
+
+  @abc.abstractmethod
+  def get_full_data(self) -> Dict:
+    """Returns the whole dataset as dictionary of arrays."""
+
+
+class DeviceNumpyDataLoader(DeviceDataLoader):
+  """Load complete dataset into memory from multiple numpy arrays.
+
+  This data loader supports checkpointing, starting chains from a well defined
+  state and true random access.
+
+  The pipeline can be constructed directly from numpy arrays:
+
+  .. doctest::
+
+    >>> import numpy as onp
+    >>> from jax_sgmc import data
+    >>>
+    >>> x, y = onp.arange(10), onp.zeros((10, 4, 3))
+    >>>
+    >>> data_loader = data.DeviceNumpyDataLoader(name_for_x=x, name_for_y=y)
+    >>>
+    >>> zero_batch = data_loader.initializer_batch(4)
+    >>> for key, value in zero_batch.items():
+    ...   print(f"{key}: shape={value.shape}, dtype={value.dtype}")
+    name_for_x: shape=(4,), dtype=int32
+    name_for_y: shape=(4, 4, 3), dtype=float32
+
+  Args:
+    reference_data: Each kwarg-pair is an entry in the returned data-dict.
+
+  """
+
+  def __init__(self, **reference_data):
+    super().__init__()
+
+    observation_counts = []
+    self._reference_data = dict()
+    for name, array in reference_data.items():
+      observation_counts.append(len(array))
+      # Transform to jax arrays
+      self._reference_data[name] = jnp.array(array)
+
+    # Check same number of observations
+    if onp.any(onp.array(observation_counts) != observation_counts[0]):
+      raise TypeError("All reference_data arrays must have the same length in"
+                      " the first dimension.")
+
+    self._observation_count = observation_counts[0]
+
+  def init_random_data(self, *args, **kwargs) -> PyTree:
+    del args
+    key = kwargs.get("key", random.PRNGKey(0))
+    return key
+
+  def get_random_data(self,
+                      state,
+                      batch_size
+                      ) ->Tuple[PyTree, Tuple[PyTree, mini_batch_information]]:
+    if self._observation_count < batch_size:
+      raise ValueError(f"The batch size ({batch_size}) cannot be greater than "
+                       f"the observation count ({self._observation_count}).")
+
+    key, split = random.split(state)
+    selection_indices = random.randint(
+      split, shape=(batch_size,), minval=0, maxval=self._observation_count)
+
+    selected_observations = tree_index(self._reference_data, selection_indices)
+    info = mini_batch_information(observation_count=self._observation_count,
+                                  batch_size=batch_size)
+
+    return key, (selected_observations, info)
+
+  def get_full_data(self) -> Dict:
+    return self._reference_data
+
+  @property
+  def static_information(self) -> Dict:
+    information = {
+      "observation_count": self._observation_count
+    }
+    return information
+
+  @property
+  def _format(self):
+    """Returns shape and dtype of a single observation. """
+    mb_format = dict()
+    for name, array in self._reference_data.items():
+      # Get the format and dtype of the data
+      mb_format[name] = jax.ShapeDtypeStruct(
+        dtype=self._reference_data[name].dtype,
+        shape=tuple(int(s) for s in array.shape[1:]))
+    return mb_format
+
+
+class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
+  """Abstract class to define required methods of a HostDataLoader.
 
   A class implementing the data loader must have the functionality to load data
   from storage in an ordered and a random fashion.
@@ -322,22 +482,10 @@ class DataLoader(metaclass=abc.ABCMeta):
 
     """
 
-  @property
-  @abc.abstractmethod
-  def _format(self):
-    """dtype and shape of a mini-batch. """
-
-  @property
-  @abc.abstractmethod
-  def _info(self):
-    """Information about the dataset. """
 
   @abc.abstractmethod
   def get_batches(self, chain_id: int) -> PyTree:
     """Return batches from an ordered or random chain. """
-
-  def mini_batch_format(self):
-    """namedtuple with information about mini-batch."""
 
   def batch_format(self,
                    cache_size: int,
@@ -363,36 +511,13 @@ class DataLoader(metaclass=abc.ABCMeta):
         shape=new_shape
       )
     format = tree_util.tree_map(append_cache_size, obs_format)
-    mb_info = MiniBatchInformation(observation_count=self._info,
-                                   batch_size=mb_size)
+    mb_info = MiniBatchInformation(
+      observation_count=self.static_information["observation_count"],
+      batch_size=mb_size)
     return format, mb_info
 
-  def initializer_batch(self, mb_size: int = None) -> PyTree:
-    """Returns a zero-like mini-batch.
 
-    Args:
-      mb_size: Number of observations in a batch. If ``None``, the returned
-        pytree has the shape of a single observation.
-
-    """
-    obs_format = self._format
-
-    # Append the cache size to the batch_format
-    def append_cache_size(leaf):
-      if mb_size is None:
-        new_shape = tuple(int(s) for s in leaf.shape)
-      else:
-        new_shape = tuple(int(s) for s in
-                          itertools.chain([mb_size], leaf.shape))
-      return jnp.zeros(
-        dtype=leaf.dtype,
-        shape=new_shape
-      )
-    batch = tree_util.tree_map(append_cache_size, obs_format)
-    return batch
-
-
-class TensorflowDataLoader(DataLoader):
+class TensorflowDataLoader(HostDataLoader):
   """Load data from a tensorflow dataset object.
 
   The tensorflow datasets package provides a high number of ready to go
@@ -529,12 +654,15 @@ class TensorflowDataLoader(DataLoader):
     return tree_util.tree_map(leaf_dtype_struct, not_excluded_elements)
 
   @property
-  def _info(self):
+  def static_information(self):
     """Returns information about total samples count and batch size. """
-    return self._observation_count
+    information = {
+      "observation_count" : self._observation_count
+    }
+    return information
 
 
-class NumpyDataLoader(DataLoader):
+class NumpyDataLoader(HostDataLoader):
   """Load complete dataset into memory from multiple numpy arrays.
 
   This data loader supports checkpointing, starting chains from a well defined
@@ -769,9 +897,12 @@ class NumpyDataLoader(DataLoader):
     return mb_format
 
   @property
-  def _info(self):
+  def static_information(self):
     """Returns information about total samples count and batch size. """
-    return self._observation_count
+    information = {
+      "observation_count" : self._observation_count
+    }
+    return information
 
 class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.
@@ -782,23 +913,25 @@ class CacheState(NamedTuple):
     dimension of the cached batches
     current_line: Marks the next batch to be returned.
     chain_id: Identifier of the chain to associate random state
+    key: PRNGKey for random on-device access
 
   """
-  cached_batches: PyTree
-  cached_batches_count: Array
-  current_line: Array
-  chain_id: Array
+  cached_batches: PyTree = None
+  cached_batches_count: Array = None
+  current_line: Array = None
+  chain_id: Array = None
+  state: PyTree = None
 
 random_data_state = CacheState
 
-def random_reference_data(data_loader: DataLoader,
-                          cached_batches_count: int=100,
-                          mb_size: int = 1
-                          ) -> RandomBatch:
-  """Initializes reference data access from jit-compiled functions.
 
-  Utility to sequentially load reference data into a jit-compiled function. The
-  mini_batches are gathered randomly by the data loader.
+def random_reference_data(data_loader: DeviceDataLoader,
+                          cached_batches_count: int,
+                          mb_size: int
+                          ) -> RandomBatch:
+  """Initializes reference data access in jit-compiled functions.
+
+  Randomly draw batches from a given dataset on the host or the device.
 
   Args:
     data_loader: Reads data from storage.
@@ -811,36 +944,23 @@ def random_reference_data(data_loader: DataLoader,
     get a minibatch from the reference data state
 
   """
-
-  batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
-
-  def init_fn(**kwargs) -> CacheState:
-    # Pass the data loader the information about the number of cached
-    # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = data_loader.register_random_pipeline(
-      cached_batches_count,
-      mb_size=mb_size,
-      **kwargs)
-    initial_state = data_loader.get_batches(chain_id)
-    inital_cache_state=CacheState(
-      cached_batches=initial_state,
-      cached_batches_count=jnp.array(cached_batches_count),
-      current_line=jnp.array(0),
-      chain_id=jnp.array(chain_id)
-    )
-    return inital_cache_state
-
-  return init_fn, batch_fn
-
+  if isinstance(data_loader, HostDataLoader):
+    return _random_reference_data_host(
+      data_loader, cached_batches_count, mb_size)
+  elif isinstance(data_loader, DeviceDataLoader):
+    return _random_reference_data_device(
+      data_loader, mb_size)
+  else:
+    raise TypeError("The DataLoader must inherit from HostDataLoader or "
+                    "DeviceDataLoader")
 
 def full_reference_data(data_loader: DataLoader,
                         cached_batches_count: int = 100,
                         mb_size: int = None
                         ) -> OrderedBatch:
-  """Initializes reference data access from jit-compiled functions.
+  """Initializes reference data access in jit-compiled functions.
 
-  Utility to sequentially load reference data into a jit-compiled function. The
-  mini_batches are gathered one after another.
+  Map a function batch-wise over a dataset on the host or the device.
 
   Args:
     data_loader: Reads data from storage.
@@ -853,10 +973,15 @@ def full_reference_data(data_loader: DataLoader,
 
   """
 
-  _batch_fn, mb_information = _hcb_wrapper(
-    data_loader,
-    cached_batches_count,
-    mb_size)
+  if isinstance(data_loader, HostDataLoader):
+    init_fn, (_batch_fn, mb_information) = _full_reference_data_host(
+      data_loader, cached_batches_count, mb_size)
+  elif isinstance(data_loader, DeviceDataLoader):
+    init_fn, (_batch_fn, mb_information) = _full_reference_data_device(
+      data_loader, cached_batches_count)
+  else:
+    raise TypeError("The DataLoader must inherit from HostDataLoader or "
+                    "DeviceDataLoader")
 
   num_iterations = int(onp.ceil(
     mb_information.observation_count / mb_information.batch_size))
@@ -923,22 +1048,6 @@ def full_reference_data(data_loader: DataLoader,
 
     return data_state, (true_results, carry)
 
-  def init_fn(**kwargs) -> CacheState:
-    # Pass the data loader the information about the number of cached
-    # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = data_loader.register_ordered_pipeline(
-      cached_batches_count,
-      mb_size=mb_size,
-      **kwargs)
-    initial_state = data_loader.get_batches(chain_id)
-    inital_cache_state=CacheState(
-      cached_batches=initial_state,
-      cached_batches_count=jnp.array(cached_batches_count),
-      current_line=jnp.array(0),
-      chain_id=jnp.array(chain_id)
-    )
-    return inital_cache_state
-
   return init_fn, batch_scan
 
 
@@ -974,7 +1083,7 @@ def tree_index(pytree: PyTree, index):
 
 
 # Callback is independent of assembling of the batches
-def _hcb_wrapper(data_loader: DataLoader,
+def _hcb_wrapper(data_loader: HostDataLoader,
                  cached_batches_count: int,
                  mb_size: int):
   # These are helper function which keep a reference to the stateful data object
@@ -1055,3 +1164,133 @@ def _hcb_wrapper(data_loader: DataLoader,
       return new_state, mini_batch
 
   return batch_fn, mb_information
+
+
+def _random_reference_data_host(data_loader: HostDataLoader,
+                                cached_batches_count: int = 100,
+                                mb_size: int = 1
+                                ) -> RandomBatch:
+  """Random reference data access via host-callback. """
+  batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
+
+  def init_fn(**kwargs) -> CacheState:
+    # Pass the data loader the information about the number of cached
+    # mini-batches. The data loader returns an unique id for reproducibility
+    chain_id = data_loader.register_random_pipeline(
+      cached_batches_count,
+      mb_size=mb_size,
+      **kwargs)
+    initial_state = data_loader.get_batches(chain_id)
+    inital_cache_state = CacheState(
+      cached_batches=initial_state,
+      cached_batches_count=jnp.array(cached_batches_count),
+      current_line=jnp.array(0),
+      chain_id=jnp.array(chain_id))
+    return inital_cache_state
+
+  return init_fn, batch_fn
+
+
+def _random_reference_data_device(data_loader: DeviceDataLoader,
+                                  mb_size: int
+                                  ) -> RandomBatch:
+  """Random reference data on device. """
+
+  def init_fn(*args, **kwargs) -> CacheState:
+    state = data_loader.init_random_data(*args, **kwargs)
+    return CacheState(state=state)
+
+  def batch_fn(state: CacheState,
+               information: bool = False
+               ) -> Union[Tuple[CacheState, MiniBatch],
+                          Tuple[CacheState,
+                                Tuple[MiniBatch, mini_batch_information]]]:
+
+    state, (batch, mb_info) = data_loader.get_random_data(
+      state.state, batch_size=mb_size)
+    new_state = CacheState(state=state)
+
+    if information:
+      return new_state, (batch, mb_info)
+    else:
+      return new_state, batch
+
+  return init_fn, batch_fn
+
+def _full_reference_data_host(data_loader: HostDataLoader,
+                              cached_batches_count: int = 100,
+                              mb_size: int = None
+                              ) -> Tuple[Callable, Tuple[Callable, mini_batch_information]]:
+  """Sequentially load batches of reference data via host-callback. """
+
+  batch_fn = _hcb_wrapper(
+    data_loader,
+    cached_batches_count,
+    mb_size)
+
+  def init_fn(**kwargs) -> CacheState:
+    # Pass the data loader the information about the number of cached
+    # mini-batches. The data loader returns an unique id for reproducibility
+    chain_id = data_loader.register_ordered_pipeline(
+      cached_batches_count,
+      mb_size=mb_size,
+      **kwargs)
+    initial_state = data_loader.get_batches(chain_id)
+    inital_cache_state=CacheState(
+      cached_batches=initial_state,
+      cached_batches_count=jnp.array(cached_batches_count),
+      current_line=jnp.array(0),
+      chain_id=jnp.array(chain_id)
+    )
+    return inital_cache_state
+
+  return init_fn, batch_fn
+
+
+def _full_reference_data_device(data_loader: DeviceDataLoader,
+                                mb_size: int = None
+                                ) -> Tuple[Callable,
+                                           Tuple[Callable,
+                                                 mini_batch_information]]:
+  """Batches the dataset on the device. """
+
+  reference_data = data_loader.get_full_data()
+  total_observations = data_loader.static_information["observation_count"]
+
+  # Check that the batch size is not greater than the total dataset size
+  if mb_size > total_observations:
+    raise ValueError(f"The batch size cannot be greater than the total "
+                     f"observation count. Given {mb_size} and "
+                     f"{total_observations}.")
+
+  # The information about the batches need to be static.
+  mb_info = mini_batch_information(
+    observation_count=total_observations,
+    batch_size=mb_size)
+
+  def init_fn(offset: jnp.ndarray = 0):
+    if offset >= total_observations:
+      raise ValueError(f"The offset cannot be greater than the total "
+                       f"observation count. Given {offset} and "
+                       f"{total_observations}.")
+
+    init_state = CacheState(current_line=offset)
+    return init_state
+
+  def batch_fn(data_state: CacheState,
+               information: bool = False):
+    indices = jnp.mod(jnp.arange(mb_size) + data_state.current_line,
+                      total_observations)
+
+    # Update the offset, where to start slicing in the next iteration.
+    new_state = CacheState(
+      current_line=jnp.mod(indices[-1] + 1, total_observations))
+
+    selected_data = tree_index(reference_data, indices)
+
+    if information:
+      return new_state, (selected_data, mb_info)
+    else:
+      return new_state, selected_data
+
+  return init_fn, (batch_fn, mb_info)

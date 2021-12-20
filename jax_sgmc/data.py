@@ -195,6 +195,8 @@ memory consumption.
 
 import abc
 
+import warnings
+
 from functools import partial
 import itertools
 
@@ -369,10 +371,6 @@ class DeviceNumpyDataLoader(DeviceDataLoader):
                       state,
                       batch_size
                       ) ->Tuple[PyTree, Tuple[PyTree, mini_batch_information]]:
-    if self._observation_count < batch_size:
-      raise ValueError(f"The batch size ({batch_size}) cannot be greater than "
-                       f"the observation count ({self._observation_count}).")
-
     key, split = random.split(state)
     selection_indices = random.randint(
       split, shape=(batch_size,), minval=0, maxval=self._observation_count)
@@ -944,6 +942,12 @@ def random_reference_data(data_loader: DeviceDataLoader,
     get a minibatch from the reference data state
 
   """
+  # Check batch size is not bigger than total observation count
+  observation_count = data_loader.static_information["observation_count"]
+  if observation_count > mb_size:
+    raise ValueError(f"Batch size cannot be bigger than the number of total "
+                     f"observations. Got {observation_count} and {mb_size}.")
+
   if isinstance(data_loader, HostDataLoader):
     return _random_reference_data_host(
       data_loader, cached_batches_count, mb_size)
@@ -966,12 +970,18 @@ def full_reference_data(data_loader: DataLoader,
     data_loader: Reads data from storage.
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
+        mb_size: Size of the data batch.
 
   Returns:
     Returns a tuple of functions to initialize a new reference data state and
     get a minibatch from the reference data state
 
   """
+  # Check batch size is not bigger than total observation count
+  observation_count = data_loader.static_information["observation_count"]
+  if observation_count > mb_size:
+    raise ValueError(f"Batch size cannot be bigger than the number of total "
+                     f"observations. Got {observation_count} and {mb_size}.")
 
   if isinstance(data_loader, HostDataLoader):
     init_fn, (_batch_fn, mb_information) = _full_reference_data_host(
@@ -1171,6 +1181,12 @@ def _random_reference_data_host(data_loader: HostDataLoader,
                                 mb_size: int = 1
                                 ) -> RandomBatch:
   """Random reference data access via host-callback. """
+  # Warn if cached_batches are bigger than total dataset
+  observation_count = data_loader.static_information["observation_count"]
+  if observation_count < cached_batches_count * mb_size:
+    warnings.warn("Cached batches are bigger than the total dataset. Consider "
+                  "using a DeviceDataLoader.")
+
   batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
 
   def init_fn(**kwargs) -> CacheState:
@@ -1222,6 +1238,11 @@ def _full_reference_data_host(data_loader: HostDataLoader,
                               mb_size: int = None
                               ) -> Tuple[Callable, Tuple[Callable, mini_batch_information]]:
   """Sequentially load batches of reference data via host-callback. """
+  # Warn if cached_batches are bigger than total dataset
+  observation_count = data_loader.static_information["observation_count"]
+  if observation_count < cached_batches_count * mb_size:
+    warnings.warn("Cached batches are bigger than the total dataset. Consider "
+                  "using a DeviceDataLoader.")
 
   batch_fn = _hcb_wrapper(
     data_loader,
@@ -1257,11 +1278,6 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
   reference_data = data_loader.get_full_data()
   total_observations = data_loader.static_information["observation_count"]
 
-  # Check that the batch size is not greater than the total dataset size
-  if mb_size > total_observations:
-    raise ValueError(f"The batch size cannot be greater than the total "
-                     f"observation count. Given {mb_size} and "
-                     f"{total_observations}.")
 
   # The information about the batches need to be static.
   mb_info = mini_batch_information(

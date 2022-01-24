@@ -4,21 +4,27 @@ from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, i
 import tensorflow as tf
 import tensorflow_datasets
 import haiku as hk
-
+# import tensorflow as tf
+# from tensorflow.python.framework.ops import disable_eager_execution
+#
+# disable_eager_execution()
 import sys
 import os
 
 # from jax import device_put, devices
 # print(device_put(1, devices()[2]).device_buffer.device())
-# physical_devices = tf.config.experimental.list_physical_devices('GPU')
-# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-# config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
+physical_devices = tf.config.experimental.list_physical_devices('GPU')
+assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
+config = tf.config.experimental.set_memory_growth(physical_devices[1], True)
+config = tf.config.experimental.set_memory_growth(physical_devices[2], True)
+config = tf.config.experimental.set_memory_growth(physical_devices[3], True)
 
 if len(sys.argv) > 1:
     visible_device = str(sys.argv[1])
 else:
     visible_device = 1
-os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)
+os.environ["CUDA_VISIBLE_DEVICES"] = str(0)
 
 # physical_devices = tf.config.list_physical_devices('GPU')
 # tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -26,7 +32,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)
 ## Configuration parameters
 
 batch_size = 16
-cached_batches = 1024
+cached_batches = 512
 num_classes = 100
 weight_decay = 5.e-4
 
@@ -106,7 +112,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
 
 # Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
-iterations = 10
+iterations = 10000
 # iterations = 100000
 
 rms_prop = adaption.rms_prop()
@@ -140,7 +146,7 @@ saving = io.save(data_collector)
 
 rms = rms_run(rms_integrator[0](sample,
                                 init_model_state=init_resnet_state),
-                iterations=iterations, saving=saving)["samples"]["variables"]
+                                iterations=iterations)["samples"]["variables"]
 
 
 print("Finished")

@@ -200,7 +200,7 @@ import warnings
 from functools import partial
 import itertools
 
-from typing import Tuple, Any, Callable, List, Union, NamedTuple, Dict
+from typing import Tuple, Any, Callable, List, Union, NamedTuple, Dict, Optional
 
 import jax
 from jax import tree_util, lax, random
@@ -225,11 +225,15 @@ class MiniBatchInformation(NamedTuple):
 
   Args:
     observation_count: Total number of observatins
+    effective_observation_count: The number of observations without the
+      discarded samples remaining after e.g. shuffling.
     mini_batch: List of tuples, tuples consist of ``(observations, parameters)``
 
   """
   observation_count: Array
+  mask: Array
   batch_size: Array
+
 
 # Todo: Rework occurences
 mini_batch_information = MiniBatchInformation
@@ -244,8 +248,7 @@ PyTree = Any
 
 # Definition of the data loader class
 
-# Todo: State übergeben bei random batch statt chain id. Damit einfacher
-#       checkpointing
+# Todo: Register DataLoader pipes with (optional) the parent chain JaxUUID.
 
 class DataLoader(metaclass=abc.ABCMeta):
   """Abstract class to define required methods of a DataLoader.
@@ -315,93 +318,6 @@ class DeviceDataLoader(DataLoader, metaclass=abc.ABCMeta):
   @abc.abstractmethod
   def get_full_data(self) -> Dict:
     """Returns the whole dataset as dictionary of arrays."""
-
-
-class DeviceNumpyDataLoader(DeviceDataLoader):
-  """Load complete dataset into memory from multiple numpy arrays.
-
-  This data loader supports checkpointing, starting chains from a well defined
-  state and true random access.
-
-  The pipeline can be constructed directly from numpy arrays:
-
-  .. doctest::
-
-    >>> import numpy as onp
-    >>> from jax_sgmc import data
-    >>>
-    >>> x, y = onp.arange(10), onp.zeros((10, 4, 3))
-    >>>
-    >>> data_loader = data.DeviceNumpyDataLoader(name_for_x=x, name_for_y=y)
-    >>>
-    >>> zero_batch = data_loader.initializer_batch(4)
-    >>> for key, value in zero_batch.items():
-    ...   print(f"{key}: shape={value.shape}, dtype={value.dtype}")
-    name_for_x: shape=(4,), dtype=int32
-    name_for_y: shape=(4, 4, 3), dtype=float32
-
-  Args:
-    reference_data: Each kwarg-pair is an entry in the returned data-dict.
-
-  """
-
-  def __init__(self, **reference_data):
-    super().__init__()
-
-    observation_counts = []
-    self._reference_data = dict()
-    for name, array in reference_data.items():
-      observation_counts.append(len(array))
-      # Transform to jax arrays
-      self._reference_data[name] = jnp.array(array)
-
-    # Check same number of observations
-    if onp.any(onp.array(observation_counts) != observation_counts[0]):
-      raise TypeError("All reference_data arrays must have the same length in"
-                      " the first dimension.")
-
-    self._observation_count = observation_counts[0]
-
-  def init_random_data(self, *args, **kwargs) -> PyTree:
-    del args
-    key = kwargs.get("key", random.PRNGKey(0))
-    return key
-
-  def get_random_data(self,
-                      state,
-                      batch_size
-                      ) ->Tuple[PyTree, Tuple[PyTree, mini_batch_information]]:
-    key, split = random.split(state)
-    selection_indices = random.randint(
-      split, shape=(batch_size,), minval=0, maxval=self._observation_count)
-
-    selected_observations = tree_index(self._reference_data, selection_indices)
-    info = mini_batch_information(observation_count=self._observation_count,
-                                  batch_size=batch_size)
-
-    return key, (selected_observations, info)
-
-  def get_full_data(self) -> Dict:
-    return self._reference_data
-
-  @property
-  def static_information(self) -> Dict:
-    information = {
-      "observation_count": self._observation_count
-    }
-    return information
-
-  @property
-  def _format(self):
-    """Returns shape and dtype of a single observation. """
-    mb_format = dict()
-    for name, array in self._reference_data.items():
-      # Get the format and dtype of the data
-      mb_format[name] = jax.ShapeDtypeStruct(
-        dtype=self._reference_data[name].dtype,
-        shape=tuple(int(s) for s in array.shape[1:]))
-    return mb_format
-
 
 class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
   """Abstract class to define required methods of a HostDataLoader.
@@ -482,7 +398,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
 
 
   @abc.abstractmethod
-  def get_batches(self, chain_id: int) -> PyTree:
+  def get_batches(self, chain_id: int) -> Tuple[PyTree, Optional[Array]]:
     """Return batches from an ordered or random chain. """
 
   def batch_format(self,
@@ -514,393 +430,8 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
       batch_size=mb_size)
     return format, mb_info
 
-
-class TensorflowDataLoader(HostDataLoader):
-  """Load data from a tensorflow dataset object.
-
-  The tensorflow datasets package provides a high number of ready to go
-  datasets, which can be provided directly to the Tensorflow Data Loader.
-
-  .. doctest::
-
-    >>> import tensorflow_datasets as tdf
-    >>> from jax_sgmc import data
-    >>>
-    >>> pipeline = tfds.load("cifar10", split="train")
-    >>> data_loader = data.TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
-
-  Args:
-    pipeline: A tensorflow data pipeline, which can be obtained from the
-      tensorflow dataset package
-
-  """
-
-  def __init__(self,
-               pipeline: TFDataSet,
-               mini_batch_size: int = None,
-               shuffle_cache: int = 100,
-               exclude_keys: List = None):
-    super().__init__()
-    # Tensorflow is in general not required to use the library
-    assert mini_batch_size is None, "Depreceated"
-    assert TFDataSet is not None, "Tensorflow must be installed to use this " \
-                                  "feature."
-    assert tfds is not None, "Tensorflow datasets must be installed to use " \
-                             "this feature."
-
-    self._observation_count = jnp.int32(pipeline.cardinality().numpy())
-    # Basic pipeline, from which all other pipelines are constructed
-    self._pipeline = pipeline
-    self._exclude_keys = [] if exclude_keys is None else exclude_keys
-    self._shuffle_cache = shuffle_cache
-
-    self._pipelines: List[TFDataSet] = []
-
-  def register_random_pipeline(self,
-                               cache_size: int = 1,
-                               mb_size: int = None,
-                               **kwargs) -> int:
-    """Register a new chain which draw samples randomly.
-
-    Args:
-      cache_size: The number of drawn batches.
-      mb_size: The number of observations per batch.
-
-    Returns:
-      Returns the id of the new chain.
-
-    """
-
-    # Assert that not kwargs are passed with the intention to control the
-    # initial state of the tensorflow data loader
-    assert kwargs == {}, "Tensorflow data loader does not accept additional "\
-                         "kwargs"
-    new_chain_id = len(self._pipelines)
-
-    # Randomly draw a number of cache_size mini_batches, where each mini_batch
-    # contains self.mini_batch_size elements.
-    random_data = self._pipeline.repeat()
-    random_data = random_data.shuffle(self._shuffle_cache)
-    random_data = random_data.batch(mb_size)
-    random_data = random_data.batch(cache_size)
-
-    # The data must be transformed to numpy arrays, as most numpy arrays can
-    # be transformed to the duck-typed jax array form
-    random_data = tfds.as_numpy(random_data)
-    random_data = iter(random_data)
-
-    self._pipelines.append(random_data)
-
-    return new_chain_id
-
-  def register_ordered_pipeline(self,
-                                cache_size: int = 1,
-                                mb_size: int = None,
-                                **kwargs
-                                ) -> int:
-    """Register a chain which assembles batches in an ordered manner.
-
-    Args:
-      cache_size: The number of drawn batches.
-      mb_size: The number of observations per batch.
-
-    Returns:
-      Returns the id of the new chain.
-
-    """
-    raise NotImplementedError
-
-  def get_batches(self, chain_id: int) -> PyTree:
-    """Draws a batch from a chain.
-
-    Args:
-      chain_id: ID of the chain, which holds the information about the form of
-        the batch and the process of assembling.
-
-    Returns:
-      Returns a superbatch as registered by :func:`register_random_pipeline` or
-      :func:`register_ordered_pipeline` with `cache_size` batches holding
-      `mb_size` observations.
-
-    """
-
-    # Not supported data types, such as strings, must be excluded before
-    # transformation to jax types.
-    numpy_batch = next(self._pipelines[chain_id])
-    if self._exclude_keys is not None:
-      for key in self._exclude_keys:
-        del numpy_batch[key]
-
-    return tree_util.tree_map(jnp.array, numpy_batch)
-
-  @property
-  def _format(self):
-    data_spec = self._pipeline.element_spec
-    if self._exclude_keys is not None:
-      not_excluded_elements = {id: elem for id, elem in data_spec.items()
-                               if id not in self._exclude_keys}
-    else:
-      not_excluded_elements = data_spec
-
-    def leaf_dtype_struct(leaf):
-      shape = tuple(int(s) for s in leaf.shape if s is not None)
-      dtype = leaf.dtype.as_numpy_dtype
-      return jax.ShapeDtypeStruct(
-        dtype=dtype,
-        shape=shape)
-
-    return tree_util.tree_map(leaf_dtype_struct, not_excluded_elements)
-
-  @property
-  def static_information(self):
-    """Returns information about total samples count and batch size. """
-    information = {
-      "observation_count" : self._observation_count
-    }
-    return information
-
-
-class NumpyDataLoader(HostDataLoader):
-  """Load complete dataset into memory from multiple numpy arrays.
-
-  This data loader supports checkpointing, starting chains from a well defined
-  state and true random access.
-
-  The pipeline can be constructed directly from numpy arrays:
-
-  .. doctest::
-
-    >>> import numpy as onp
-    >>> from jax_sgmc import data
-    >>>
-    >>> x, y = onp.arange(10), onp.zeros((10, 4, 3))
-    >>>
-    >>> data_loader = data.NumpyDataLoader(name_for_x=x, name_for_y=y)
-    >>>
-    >>> zero_batch = data_loader.initializer_batch(4)
-    >>> for key, value in zero_batch.items():
-    ...   print(f"{key}: shape={value.shape}, dtype={value.dtype}")
-    name_for_x: shape=(4,), dtype=int32
-    name_for_y: shape=(4, 4, 3), dtype=float32
-
-  Args:
-    reference_data: Each kwarg-pair is an entry in the returned data-dict.
-
-  """
-
-  def __init__(self, mini_batch_size: int = None, **reference_data):
-    super().__init__()
-    assert mini_batch_size is None, "Global mini batch size depreceated. "
-    assert len(reference_data) > 0, "Observations are required."
-
-    first_key = list(reference_data.keys())[0]
-    observation_count = reference_data[first_key].shape[0]
-
-    self._reference_data = dict()
-    for name, array in reference_data.items():
-      assert array.shape[0] == observation_count, "Number of observations is" \
-                                                  "ambiguous."
-      # Transform if jax arrays are passed by mistake
-      self._reference_data[name] = onp.array(array)
-
-    self._chains: List[Dict[str, Any]] = []
-    self._observation_count = observation_count
-
-  def save_state(self, chain_id: int) -> PyTree:
-    """Returns all necessary information to restore the dataloader state.
-
-    Args:
-      chain_id: Each chain can be checkpointed independently.
-
-    Returns:
-      Returns necessary information to restore the state of the chain via
-      :func:`load_state`.
-
-    """
-    # Get the state of all random data generators. All other information will be
-    # set by initializing the generator on the same way as before
-
-    chain_data = self._chains[chain_id]
-    if chain_data['type'] == 'random':
-      return {'random': chain_data['rng'].bit_generator.state}
-    elif chain_data['type'] == 'ordered':
-      return {'ordered': chain_data['idx_offset']}
-    else:
-      raise ValueError(f"Chain type {chain_data['type']} is unknown.")
-
-  def load_state(self, chain_id: int, data) -> None:
-    """Restores dataloader state from previously computed checkpoint.
-
-    Args:
-      chain_id: The chain to restore the state.
-      data: Data from :func:`save_state` to restore state of the chain.
-
-    """
-    # Restore the state by setting the random number generators to the
-    # checkpointed state
-    type, value = data.popitem()
-    if type == 'random':
-      self._chains[chain_id]['rng'].bit_generator.state = value
-    elif type == 'ordered':
-      self._chains[chain_id]['idx_offset'] = value
-    else:
-      raise ValueError(f"Chain type {type} is unknown.")
-
-  def register_random_pipeline(self,
-                               cache_size: int = 1,
-                               mb_size: int = None,
-                               **kwargs: Any) -> int:
-    """Register a new chain which draw samples randomly.
-
-    Args:
-      cache_size: The number of drawn batches.
-      mb_size: The number of observations per batch.
-      seed: Set the random seed to start the chain at a well defined state.
-
-    Returns:
-      Returns the id of the new chain.
-
-    """
-    # The random state of each chain can be defined unambiguously via the
-    # PRNGKey
-    assert mb_size <= self._observation_count, \
-      (f"The batch size cannot be bigger than the observation count. Provided "
-       f"{mb_size} and {self._observation_count}")
-
-    chain_id = len(self._chains)
-
-    seed = kwargs.get("seed", chain_id)
-    rng = onp.random.default_rng(
-      onp.random.SeedSequence(seed).spawn(1)[0])
-
-    new_chain = {'type': 'random',
-                 'rng': rng,
-                 'idx_offset': None,
-                 'mb_size': mb_size,
-                 'cache_size': cache_size}
-
-    self._chains.append(new_chain)
-    return chain_id
-
-  def register_ordered_pipeline(self,
-                                cache_size: int = 1,
-                                mb_size: int = None,
-                                **kwargs
-                                ) -> int:
-    """Register a chain which assembles batches in an ordered manner.
-
-    Args:
-      cache_size: The number of drawn batches.
-      mb_size: The number of observations per batch.
-      seed: Set the random seed to start the chain at a well defined state.
-
-    Returns:
-      Returns the id of the new chain.
-
-    """
-    assert mb_size <= self._observation_count, \
-      (f"The batch size cannot be bigger than the observation count. Provided "
-       f"{mb_size} and {self._observation_count}")
-    chain_id = len(self._chains)
-
-    new_chain = {'type': 'ordered',
-                 'rng': None,
-                 'idx_offset': 0,
-                 'mb_size': mb_size,
-                 'cache_size': cache_size}
-
-    self._chains.append(new_chain)
-    return chain_id
-
-  def get_batches(self, chain_id: int) -> PyTree:
-    """Draws a batch from a chain.
-
-    Args:
-      chain_id: ID of the chain, which holds the information about the form of
-        the batch and the process of assembling.
-
-    Returns:
-      Returns a superbatch as registered by :func:`register_random_pipeline` or
-      :func:`register_ordered_pipeline` with `cache_size` batches holding
-      `mb_size` observations.
-
-    """
-    if self._chains[chain_id]['type'] == 'random':
-      return self._random_batches(chain_id)
-    elif self._chains[chain_id]['type'] == 'ordered':
-      return self._ordered_batches(chain_id)
-    else:
-      return None
-
-  def _random_batches(self, chain_id: int) -> PyTree:
-    # Get the random state of the chain, do some random operations and then save
-    # the random state of the chain.
-    def generate_selections():
-      for _ in range(self._chains[chain_id]['cache_size']):
-        mb_idx = self._chains[chain_id]['rng'].choice(
-          onp.arange(0, self._observation_count),
-          size=self._chains[chain_id]['mb_size'],
-          replace=False
-        )
-        yield mb_idx
-    selected_observations_index = onp.array(list(generate_selections()))
-    selected_observations = dict()
-    for key, data in self._reference_data.items():
-      if data.ndim == 1:
-        selection = data[selected_observations_index,]
-      else:
-        selection = data[selected_observations_index,::]
-      selected_observations[key] = selection
-    mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
-    return mini_batch_pytree
-
-  def _ordered_batches(self, chain_id: int) -> PyTree:
-    cache_size = self._chains[chain_id]['cache_size']
-    mini_batch_size = self._chains[chain_id]['mb_size']
-    sample_count = self._observation_count
-
-    def select_mini_batch():
-      for _ in range(cache_size):
-        idcs = onp.arange(mini_batch_size) + self._chains[chain_id]['idx_offset']
-        # Start again at the first sample if all samples have been returned
-        if self._chains[chain_id]['idx_offset'] + mini_batch_size > sample_count:
-          self._chains[chain_id]['idx_offset'] = 0
-        else:
-          self._chains[chain_id]['idx_offset'] += mini_batch_size
-        # Simply return the first samples again if less samples remain than
-        # necessary to fill the cache
-        yield onp.mod(idcs, sample_count)
-
-    selected_observations_index = onp.array(list(select_mini_batch()))
-    selected_observations = dict()
-    for key, data in self._reference_data.items():
-      if data.ndim == 1:
-        selection = data[selected_observations_index,]
-      else:
-        selection = data[selected_observations_index, ::]
-      selected_observations[key] = selection
-
-    mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
-    return mini_batch_pytree
-
-  @property
-  def _format(self):
-    """Returns shape and dtype of a single observation. """
-    mb_format = dict()
-    for name, array in self._reference_data.items():
-      # Get the format and dtype of the data
-      mb_format[name] = jax.ShapeDtypeStruct(
-        dtype=self._reference_data[name].dtype,
-        shape=tuple(int(s) for s in array.shape[1:]))
-    return mb_format
-
-  @property
-  def static_information(self):
-    """Returns information about total samples count and batch size. """
-    information = {
-      "observation_count" : self._observation_count
-    }
-    return information
+# Todo: Add variable to keept track of already returned batches to implement
+#       masking
 
 class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.
@@ -908,24 +439,26 @@ class CacheState(NamedTuple):
   Args:
     cached_batches: An array of mini-batches
     cached_batches_count: Number of cached mini-batches. Equals the first
-    dimension of the cached batches
+      dimension of the cached batches
     current_line: Marks the next batch to be returned.
     chain_id: Identifier of the chain to associate random state
-    key: PRNGKey for random on-device access
-
+    state: Additional information
+    valid: Array containing information about the validity of individual samples
   """
   cached_batches: PyTree = None
   cached_batches_count: Array = None
   current_line: Array = None
   chain_id: Array = None
   state: PyTree = None
+  valid: Array = None
 
 random_data_state = CacheState
 
 
 def random_reference_data(data_loader: DeviceDataLoader,
                           cached_batches_count: int,
-                          mb_size: int
+                          mb_size: int,
+                          drop_remainder: bool = True
                           ) -> RandomBatch:
   """Initializes reference data access in jit-compiled functions.
 
@@ -936,6 +469,9 @@ def random_reference_data(data_loader: DeviceDataLoader,
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
     mb_size: Size of the data batch.
+    drop_remainder: When shuffling, i.e. drawing each sample once before drawing
+      a sample twice, the last samples after every shuffle are discarded. If
+      false, a mask is returned to mark invalid samples.
 
   Returns:
     Returns a tuple of functions to initialize a new reference data state and
@@ -950,8 +486,10 @@ def random_reference_data(data_loader: DeviceDataLoader,
 
   if isinstance(data_loader, HostDataLoader):
     return _random_reference_data_host(
-      data_loader, cached_batches_count, mb_size)
+      data_loader, cached_batches_count, mb_size, drop_remainder)
   elif isinstance(data_loader, DeviceDataLoader):
+    if not cached_batches_count == 1:
+      raise ValueError(f"No caching on device.")
     return _random_reference_data_device(
       data_loader, mb_size)
   else:
@@ -1102,25 +640,35 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 
   hcb_format, mb_information = data_loader.batch_format(
     cached_batches_count, mb_size=mb_size)
+  mask_shape = (cached_batches_count, mb_size)
 
   # The definition requires passing an argument to the host function. The shape
   # of the returned data must be known before the first call. The chain id
   # determines whether the data is collected randomly or sequentially.
 
   def get_data(chain_id):
-    data = hcb.call(lambda id: data_loader.get_batches(id),
-                    chain_id,
-                    result_shape=hcb_format)
-    return data
+    new_data, *opt_args = data_loader.get_batches(chain_id)
+    if len(opt_args) == 0:
+      # Assume all samples to be valid
+      mask = jnp.ones(mask_shape, dtype=jnp.bool_)
+    elif len(opt_args) == 1 and opt_args.shape == mask_shape:
+      mask = opt_args[0]
+    else:
+      raise TypeError(f"Expecting only on optional return value (mask).")
+    return new_data, mask
 
   def _new_cache_fn(state: CacheState) -> CacheState:
     """This function is called if the cache must be refreshed."""
-    new_data = get_data(state.chain_id)
+    new_data, masks = hcb.call(
+      get_data,
+      state.chain_id,
+      result_shape=(hcb_format, mask_shape))
     new_state = CacheState(
       cached_batches_count=state.cached_batches_count,
       cached_batches=new_data,
       current_line=jnp.array(0),
-      chain_id=state.chain_id)
+      chain_id=state.chain_id,
+      valid=masks)
     return new_state
 
   def _old_cache_fn(state: CacheState) -> CacheState:
@@ -1153,20 +701,26 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 
     """
 
+    # Todo: Implement mask in mb_information.
+
     # Refresh the cache if necessary, after all cached batches have been used.
     data_state = _data_state_helper(data_state)
     current_line = jnp.mod(data_state.current_line,
                            data_state.cached_batches_count)
 
-    # Read the current line from the cache and
+    # Read the current line from the cache and add the mask containing
+    # information about the validity of the individual samples
     mini_batch = tree_index(data_state.cached_batches, current_line)
+    mask = data_state.valid[current_line, :]
+
     current_line = current_line + 1
 
     new_state = CacheState(
       cached_batches=data_state.cached_batches,
       cached_batches_count=data_state.cached_batches_count,
       current_line=current_line,
-      chain_id=data_state.chain_id)
+      chain_id=data_state.chain_id,
+      valid=mask)
 
     if information:
       return new_state, (mini_batch, mb_information)
@@ -1178,7 +732,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 
 def _random_reference_data_host(data_loader: HostDataLoader,
                                 cached_batches_count: int = 100,
-                                mb_size: int = 1
+                                mb_size: int = 1,
+                                drop_remainder: bool = True
                                 ) -> RandomBatch:
   """Random reference data access via host-callback. """
   # Warn if cached_batches are bigger than total dataset
@@ -1192,6 +747,8 @@ def _random_reference_data_host(data_loader: HostDataLoader,
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
+    # Todo: Pass drop_remainder here -> how to deal with that is task of the
+    #   data loader. It might have no effect, e.g in case of random drawing.
     chain_id = data_loader.register_random_pipeline(
       cached_batches_count,
       mb_size=mb_size,

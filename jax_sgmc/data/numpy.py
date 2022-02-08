@@ -20,12 +20,36 @@ import jax
 from jax import random
 from jax import tree_util
 
-from jax_sgmc.data.core import DeviceDataLoader, HostDataLoader, mini_batch_information
+from jax_sgmc.data.core import DeviceDataLoader, HostDataLoader, DataLoader
+from jax_sgmc.data.core import mini_batch_information
 from jax_sgmc.data.core import tree_index
 
 PyTree = Any
 
-class DeviceNumpyDataLoader(DeviceDataLoader):
+class NumpyBase(DataLoader):
+
+  def __init__(self, on_device: bool = True, **reference_data):
+    super().__init__()
+
+    observation_counts = []
+    self._reference_data = dict()
+    for name, array in reference_data.items():
+      observation_counts.append(len(array))
+      # Transform to jax arrays if on device
+      if on_device:
+        self._reference_data[name] = jnp.array(array)
+      else:
+        self._reference_data[name] = onp.array(array)
+
+    # Check same number of observations
+    if onp.any(onp.array(observation_counts) != observation_counts[0]):
+      raise TypeError("All reference_data arrays must have the same length in"
+                      " the first dimension.")
+
+    self._observation_count = observation_counts[0]
+
+
+class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
   """Load complete dataset into memory from multiple numpy arrays.
 
   This data loader supports checkpointing, starting chains from a well defined
@@ -54,21 +78,7 @@ class DeviceNumpyDataLoader(DeviceDataLoader):
   """
 
   def __init__(self, **reference_data):
-    super().__init__()
-
-    observation_counts = []
-    self._reference_data = dict()
-    for name, array in reference_data.items():
-      observation_counts.append(len(array))
-      # Transform to jax arrays
-      self._reference_data[name] = jnp.array(array)
-
-    # Check same number of observations
-    if onp.any(onp.array(observation_counts) != observation_counts[0]):
-      raise TypeError("All reference_data arrays must have the same length in"
-                      " the first dimension.")
-
-    self._observation_count = observation_counts[0]
+    super().__init__(on_device=True, **reference_data)
 
   def init_random_data(self, *args, **kwargs) -> PyTree:
     del args

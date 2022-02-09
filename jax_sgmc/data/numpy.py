@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+""""""
+import math
+import itertools
 from typing import Tuple, Any, Dict, List
 
 import numpy as onp
@@ -47,6 +50,25 @@ class NumpyBase(DataLoader):
                       " the first dimension.")
 
     self._observation_count = observation_counts[0]
+
+  @property
+  def _format(self):
+    """Returns shape and dtype of a single observation. """
+    mb_format = dict()
+    for name, array in self._reference_data.items():
+      # Get the format and dtype of the data
+      mb_format[name] = jax.ShapeDtypeStruct(
+        dtype=self._reference_data[name].dtype,
+        shape=tuple(int(s) for s in array.shape[1:]))
+    return mb_format
+
+  @property
+  def static_information(self):
+    """Returns information about total samples count and batch size. """
+    information = {
+      "observation_count": self._observation_count
+    }
+    return information
 
 
 class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
@@ -102,28 +124,8 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
   def get_full_data(self) -> Dict:
     return self._reference_data
 
-  @property
-  def static_information(self) -> Dict:
-    information = {
-      "observation_count": self._observation_count
-    }
-    return information
 
-  @property
-  def _format(self):
-    """Returns shape and dtype of a single observation. """
-    mb_format = dict()
-    for name, array in self._reference_data.items():
-      # Get the format and dtype of the data
-      mb_format[name] = jax.ShapeDtypeStruct(
-        dtype=self._reference_data[name].dtype,
-        shape=tuple(int(s) for s in array.shape[1:]))
-    return mb_format
-
-
-
-
-class NumpyDataLoader(HostDataLoader):
+class NumpyDataLoader(NumpyBase, HostDataLoader):
   """Load complete dataset into memory from multiple numpy arrays.
 
   This data loader supports checkpointing, starting chains from a well defined
@@ -155,25 +157,11 @@ class NumpyDataLoader(HostDataLoader):
 
   def __init__(self,
                mini_batch_size: int = None,
-               shuffle: bool = False,
                **reference_data):
-    super().__init__()
-    assert mini_batch_size is None, "Global mini batch size depreceated. "
-    assert len(reference_data) > 0, "Observations are required."
-
-    first_key = list(reference_data.keys())[0]
-    observation_count = reference_data[first_key].shape[0]
-
-    self._reference_data = dict()
-    for name, array in reference_data.items():
-      assert array.shape[0] == observation_count, "Number of observations is" \
-                                                  "ambiguous."
-      # Transform if jax arrays are passed by mistake
-      self._reference_data[name] = onp.array(array)
-
-    self._chains: List[Dict[str, Any]] = []
-    self._observation_count = observation_count
-    self._shuffle = shuffle
+    super().__init__(
+      on_device=False,
+      **reference_data)
+    self._chains: List = []
 
   def save_state(self, chain_id: int) -> PyTree:
     """Returns all necessary information to restore the dataloader state.
@@ -218,12 +206,18 @@ class NumpyDataLoader(HostDataLoader):
   def register_random_pipeline(self,
                                cache_size: int = 1,
                                mb_size: int = None,
+                               in_epochs: bool = False,
+                               shuffle: bool = False,
                                **kwargs: Any) -> int:
     """Register a new chain which draw samples randomly.
 
     Args:
       cache_size: The number of drawn batches.
       mb_size: The number of observations per batch.
+      shuffle: Shuffle dataset instead of drawing randomly from the
+        observations.
+      in_epochs: Samples returned twice per epoch are marked via mask = 0 (only
+        if ``shuffle = True``.
       seed: Set the random seed to start the chain at a well defined state.
 
     Returns:
@@ -232,9 +226,12 @@ class NumpyDataLoader(HostDataLoader):
     """
     # The random state of each chain can be defined unambiguously via the
     # PRNGKey
-    assert mb_size <= self._observation_count, \
-      (f"The batch size cannot be bigger than the observation count. Provided "
-       f"{mb_size} and {self._observation_count}")
+    if mb_size > self._observation_count:
+      raise ValueError(f"The batch size cannot be bigger than the observation "
+                       f"count. Provided {mb_size} and "
+                       f"{self._observation_count}")
+    if not shuffle and in_epochs:
+      raise ValueError(f"in_epochs = True can only be used for shuffle = True.")
 
     chain_id = len(self._chains)
 
@@ -242,9 +239,17 @@ class NumpyDataLoader(HostDataLoader):
     rng = onp.random.default_rng(
       onp.random.SeedSequence(seed).spawn(1)[0])
 
+    # The indices list must have at least the length equal to the number of
+    # observations but should also be a multiple of the mb_size to simplify
+    # getting new indices.
     new_chain = {'type': 'random',
                  'rng': rng,
                  'idx_offset': None,
+                 'in_epochs': in_epochs,
+                 'shuffle': shuffle,
+                 'remaining_samples': 0,
+                 'draws': math.ceil(self._observation_count / mb_size),
+                 'random_indices': None,
                  'mb_size': mb_size,
                  'cache_size': cache_size}
 
@@ -294,6 +299,8 @@ class NumpyDataLoader(HostDataLoader):
       `mb_size` observations.
 
     """
+    # Todo: Slicing is the same, only specify different function for generating
+    #   the index and the mask.
     if self._chains[chain_id]['type'] == 'random':
       return self._random_batches(chain_id)
     elif self._chains[chain_id]['type'] == 'ordered':
@@ -304,15 +311,12 @@ class NumpyDataLoader(HostDataLoader):
   def _random_batches(self, chain_id: int) -> PyTree:
     # Get the random state of the chain, do some random operations and then save
     # the random state of the chain.
-    def generate_selections():
-      for _ in range(self._chains[chain_id]['cache_size']):
-        mb_idx = self._chains[chain_id]['rng'].choice(
-          onp.arange(0, self._observation_count),
-          size=self._chains[chain_id]['mb_size'],
-          replace=False
-        )
-        yield mb_idx
-    selected_observations_index = onp.array(list(generate_selections()))
+    # Todo: Something is wrong here!
+    indices, masks = list(zip(*map(
+      self._random_indices,
+      itertools.repeat(chain_id, self._chains[chain_id]['cache_size']))))
+    selected_observations_index = onp.array(indices)
+    selections_masks = onp.array(masks, dtype=onp.bool_)
     selected_observations = dict()
     for key, data in self._reference_data.items():
       if data.ndim == 1:
@@ -321,7 +325,8 @@ class NumpyDataLoader(HostDataLoader):
         selection = data[selected_observations_index,::]
       selected_observations[key] = selection
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
-    return mini_batch_pytree
+
+    return mini_batch_pytree, selections_masks
 
   def _ordered_batches(self, chain_id: int) -> PyTree:
     cache_size = self._chains[chain_id]['cache_size']
@@ -350,23 +355,107 @@ class NumpyDataLoader(HostDataLoader):
       selected_observations[key] = selection
 
     mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
-    return mini_batch_pytree
+    return mini_batch_pytree, None
 
-  @property
-  def _format(self):
-    """Returns shape and dtype of a single observation. """
-    mb_format = dict()
-    for name, array in self._reference_data.items():
-      # Get the format and dtype of the data
-      mb_format[name] = jax.ShapeDtypeStruct(
-        dtype=self._reference_data[name].dtype,
-        shape=tuple(int(s) for s in array.shape[1:]))
-    return mb_format
+  def _random_indices(self, chain_id: int) -> Tuple[List, Any]:
+    """Returns indices and mask to access random data. """
+    chain = self._chains[chain_id]
+    if chain['in_epochs']:
+      return self._shuffle_in_epochs(chain)
+    elif chain['shuffle']:
+      return self._shuffle_indices(chain)
+    else:
+      return self._draw_indices(chain)
 
-  @property
-  def static_information(self):
-    """Returns information about total samples count and batch size. """
-    information = {
-      "observation_count" : self._observation_count
-    }
-    return information
+  def _draw_indices(self, chain):
+    # Randomly choose batches
+    selections = chain['rng'].choice(
+      onp.arange(0, self._observation_count),
+      size=self._observation_count,
+      replace=True)
+    mask = onp.ones(chain['mb_size'], dtype=onp.bool_)
+    return selections, mask
+
+  def _shuffle_indices(self, chain):
+    floor_draws = math.floor(self._observation_count / chain['mb_size'])
+    ceil_draws = floor_draws + 1
+
+    if chain['remaining_samples'] < chain['mb_size']:
+      # The indices have to be refreshed. Shuffling is equivalent to drawing
+      # without replacement.
+      new_indices = chain['rng'].choice(
+        onp.arange(0, self._observation_count),
+        size=self._observation_count,
+        replace=False)
+
+      if chain['random_indices'] is None:
+        # Special options for first run
+        chain['draws'] = 0
+        chain['random_indices'] = onp.zeros(
+          ceil_draws * chain['mb_size'], dtype=onp.int_)
+
+      # Update only invalid samples (do not overwrite still valid samples)
+      update_idxs = onp.mod(
+        onp.arange(self._observation_count)
+        + chain['draws'] * chain['mb_size']
+        + chain['remaining_samples'],
+        ceil_draws * chain['mb_size'])
+      chain['random_indices'][update_idxs] = new_indices
+      chain['remaining_samples'] += self._observation_count
+
+    # print(f"current indices: {chain['random_indices']}")
+    # print(f"  ------------>: {onp.array(onp.arange(ceil_draws * chain['mb_size']) == chain['draws'] * chain['mb_size'], dtype=int)}")
+
+    mask = onp.ones(chain['mb_size'], dtype=onp.bool_)
+
+    # Take the new indices
+    selections_idxs = onp.mod(
+      onp.arange(chain['mb_size']) + chain['draws'] * chain['mb_size'],
+      chain['mb_size'] * ceil_draws)
+    selections = onp.copy(chain['random_indices'][selections_idxs])
+    chain['draws'] = (chain['draws'] + 1) % ceil_draws
+    chain['remaining_samples'] -= chain['mb_size']
+
+    return selections, mask
+
+  def _shuffle_in_epochs(self, chain):
+    ceil_draws = math.ceil(self._observation_count / chain['mb_size'])
+
+    if chain['draws'] == ceil_draws:
+      # The indices have to be refreshed. Shuffling is equivalent to drawing
+      # without replacement.
+      new_indices = chain['rng'].choice(
+        onp.arange(0, self._observation_count),
+        size=self._observation_count,
+        replace=False)
+
+      if chain['random_indices'] is None:
+        # Special options for first run
+        chain['draws'] = 0
+        chain['random_indices'] = onp.zeros(
+          ceil_draws * chain['mb_size'], dtype=onp.int_)
+
+      chain['random_indices'][0:self._observation_count] = new_indices
+      chain['draws'] = 0
+
+    start_idx = chain['mb_size'] * chain['draws']
+    end_idx = chain['mb_size'] * (chain['draws'] + 1)
+
+    mask = onp.arange(start_idx, end_idx) < self._observation_count
+
+    # print(f"current indices: {chain['random_indices']}")
+    # print(f"  ------------>: {onp.array(onp.arange(ceil_draws * chain['mb_size']) == chain['draws'] * chain['mb_size'], dtype=int)}")
+    # print(f"  ------------>: {mask}")
+
+    selections = onp.copy(chain['random_indices'][start_idx:end_idx])
+    chain['draws'] += 1
+
+    return selections, mask
+
+from jax_sgmc.data.core import random_reference_data
+x = onp.arange(10)
+dl = NumpyDataLoader(x=x)
+init_fn, batch_fn = random_reference_data(dl, 20, 3)
+
+# chain_a = init_fn(shuffle=True)
+chain_b = init_fn(shuffle=True, in_epochs=True)

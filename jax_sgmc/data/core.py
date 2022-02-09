@@ -326,13 +326,6 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
   from storage in an ordered and a random fashion.
   """
 
-  def __init__(self, mb_size: int = None, data_collector: Any = None):
-    if mb_size is not None:
-      assert False, "Set the batch size when registering chain. "
-    if data_collector is not None:
-      # Allows the data collector to save and restore the dataloader state
-      data_collector.register_data_loader(self)
-
   # Todo: Add a checkpoint function returning the current state
   #       def checkpoint(self, ...):
 
@@ -427,7 +420,8 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
     format = tree_util.tree_map(append_cache_size, obs_format)
     mb_info = MiniBatchInformation(
       observation_count=self.static_information["observation_count"],
-      batch_size=mb_size)
+      batch_size=mb_size,
+      mask=onp.ones(mb_size, dtype=onp.bool_))
     return format, mb_info
 
 # Todo: Add variable to keept track of already returned batches to implement
@@ -480,7 +474,7 @@ def random_reference_data(data_loader: DeviceDataLoader,
   """
   # Check batch size is not bigger than total observation count
   observation_count = data_loader.static_information["observation_count"]
-  if observation_count > mb_size:
+  if observation_count < mb_size:
     raise ValueError(f"Batch size cannot be bigger than the number of total "
                      f"observations. Got {observation_count} and {mb_size}.")
 
@@ -647,14 +641,12 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # determines whether the data is collected randomly or sequentially.
 
   def get_data(chain_id):
-    new_data, *opt_args = data_loader.get_batches(chain_id)
-    if len(opt_args) == 0:
+    new_data, mask = data_loader.get_batches(chain_id)
+    print(mask)
+    if mask is None:
       # Assume all samples to be valid
       mask = jnp.ones(mask_shape, dtype=jnp.bool_)
-    elif len(opt_args) == 1 and opt_args.shape == mask_shape:
-      mask = opt_args[0]
-    else:
-      raise TypeError(f"Expecting only on optional return value (mask).")
+    print(f"Mask: {mask}")
     return new_data, mask
 
   def _new_cache_fn(state: CacheState) -> CacheState:
@@ -662,7 +654,9 @@ def _hcb_wrapper(data_loader: HostDataLoader,
     new_data, masks = hcb.call(
       get_data,
       state.chain_id,
-      result_shape=(hcb_format, mask_shape))
+      result_shape=(
+        hcb_format,
+        jax.ShapeDtypeStruct(shape=mask_shape, dtype=jnp.bool_)))
     new_state = CacheState(
       cached_batches_count=state.cached_batches_count,
       cached_batches=new_data,
@@ -720,10 +714,15 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       cached_batches_count=data_state.cached_batches_count,
       current_line=current_line,
       chain_id=data_state.chain_id,
-      valid=mask)
+      valid=data_state.valid)
+
+    info = mini_batch_information(
+      observation_count = mb_information.observation_count,
+      batch_size = mb_information.batch_size,
+      mask = mask)
 
     if information:
-      return new_state, (mini_batch, mb_information)
+      return new_state, (mini_batch, info)
     else:
       return new_state, mini_batch
 
@@ -747,18 +746,20 @@ def _random_reference_data_host(data_loader: HostDataLoader,
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
-    # Todo: Pass drop_remainder here -> how to deal with that is task of the
-    #   data loader. It might have no effect, e.g in case of random drawing.
     chain_id = data_loader.register_random_pipeline(
       cached_batches_count,
       mb_size=mb_size,
+      drop_remainder=drop_remainder,
       **kwargs)
-    initial_state = data_loader.get_batches(chain_id)
+    initial_state, initial_mask = data_loader.get_batches(chain_id)
+    if initial_mask is None:
+      initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state = CacheState(
       cached_batches=initial_state,
       cached_batches_count=jnp.array(cached_batches_count),
       current_line=jnp.array(0),
-      chain_id=jnp.array(chain_id))
+      chain_id=jnp.array(chain_id),
+      valid=initial_mask)
     return inital_cache_state
 
   return init_fn, batch_fn
@@ -813,12 +814,15 @@ def _full_reference_data_host(data_loader: HostDataLoader,
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state = data_loader.get_batches(chain_id)
+    initial_state, initial_mask = data_loader.get_batches(chain_id)
+    if initial_mask is None:
+      initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state=CacheState(
       cached_batches=initial_state,
       cached_batches_count=jnp.array(cached_batches_count),
       current_line=jnp.array(0),
-      chain_id=jnp.array(chain_id)
+      chain_id=jnp.array(chain_id),
+      valid=initial_mask
     )
     return inital_cache_state
 

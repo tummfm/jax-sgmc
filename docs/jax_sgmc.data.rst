@@ -1,11 +1,13 @@
 jax_sgmc.data
 ==============
 
-.. automodule:: jax_sgmc.data
+.. automodule:: jax_sgmc.data.numpy_loader
 
 
 API
 ----
+
+.. automodule:: jax_sgmc.data.core
 
 States
 ________
@@ -20,7 +22,7 @@ ______________
 .. autoclass:: jax_sgmc.data.DataLoader
     :members:
 
-.. autoclass:: jax_sgmc.data.TensorflowDataLoader
+.. autoclass:: jax_sgmc.data.tensorflow_loader.TensorflowDataLoader
     :members:
 
 .. autoclass:: jax_sgmc.data.NumpyDataLoader

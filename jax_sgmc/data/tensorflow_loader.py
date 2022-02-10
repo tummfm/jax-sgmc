@@ -12,6 +12,64 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Load Tensorflow-Datasets in jit-compiled functions.
+
+Random Access
+_______________________
+
+The tensorflow data loader is a great choice for many standard datasets
+available on tensorflow_datasets.
+
+.. doctest::
+
+  >>> import tensorflow_datasets as tfds
+  >>> from jax import tree_util
+  >>> from jax_sgmc import data
+  >>>
+  >>> # Helper function to look at the data provided
+  >>> def show_data(data):
+  ...   for key, item in data.items():
+  ...     print(f"{key} with shape {item.shape} and dtype {item.dtype}")
+
+The pipeline returned by tfds load can be directly passet to the data loader.
+However, not all tensorflow data types can be transformed to jax data types, for
+eample the feature 'id', which is a string. Those keys can be simply excluded
+by passing the keyword argument `exclude_keys`.
+
+  >>> # The data pipeline can be used directly
+  >>> pipeline, info = tfds.load("cifar10", split="train", with_info=True)
+  >>> print(info.features)
+  FeaturesDict({
+      'id': Text(shape=(), dtype=tf.string),
+      'image': Image(shape=(32, 32, 3), dtype=tf.uint8),
+      'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
+  })
+  >>>
+  >>> data_loader = data.TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])
+  >>>
+  >>> # If the model needs data for initialization, an all zero batch can be
+  >>> # drawn with the correct shapes and dtypes
+  >>> show_data(data_loader.initializer_batch(mb_size=1000))
+  image with shape (1000, 32, 32, 3) and dtype uint8
+  label with shape (1000,) and dtype int32
+
+The host callback wrappers cache some data in the device memory to reduce the
+number of calls to the host. The cache size equals the number of batches stored
+on the device. A bigger cache size is more effective in computation time, but
+has an increased device memory consumption.
+
+  >>> data_init, data_batch = data.random_reference_data(data_loader, 100, 1000)
+  >>>
+  >>> init_state = data_init()
+  >>> new_state, batch = data_batch(init_state)
+  >>> show_data(batch)
+  image with shape (1000, 32, 32, 3) and dtype uint8
+  label with shape (1000,) and dtype int32
+
+
+
+"""
+
 from typing import List, Any
 
 import jax.numpy as jnp

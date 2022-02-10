@@ -12,7 +12,171 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""""""
+"""Load numpy arrays in jit-compiled functions.
+
+
+The numpy data loader is easy to use if the whole dataset fits into RAM and is
+already present as numpy-arrays.
+
+.. doctest::
+
+  >>> import numpy as onp
+  >>> from jax_sgmc import data
+  >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
+
+First we set up the dataset. This is very simply, as each array can be asigned
+as a keyword argument to the dataloader. The keywords of the single arrays form
+the keys of the pytree-dict, bundling all observations.
+
+  >>> # The arrays must have the same length along the first dimension,
+  >>> # corresponding to the total observation count
+  >>> x = onp.arange(10)
+  >>> y = onp.zeros((10, 2))
+  >>>
+  >>> data_loader = NumpyDataLoader(x_r=x, y_r=y)
+
+Some models needs to now the shape and dtype of the reference data. Therefore,
+a all-zero batch can be drawn from the dataloader.
+
+  >>> print(data_loader.initializer_batch(3))
+  {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
+               [0., 0.],
+               [0., 0.]], dtype=float32)}
+
+The host callback wrappers cache some data in the device memory to reduce the
+number of calls to the host. The cache size equals the number of batches stored
+on the device. A bigger cache size is more effective in computation time, but
+has an increased device memory consumption.
+
+  >>> rd_init, rd_batch = data.random_reference_data(data_loader, 100, 2)
+
+The Numpy Data Loader accepts keyword arguments in
+the init function to determnine the starting points of the chains.
+
+  >>> rd_state = rd_init(seed=0)
+  >>> new_state, (rd_batch, info) = rd_batch(rd_state, information=True)
+  >>> print(rd_batch)
+  {'x_r': DeviceArray([8, 9], dtype=int32), 'y_r': DeviceArray([[0., 0.],
+               [0., 0.]], dtype=float32)}
+  >>> # If necessary, information about the total sample count can be passed
+  >>> print(info)
+  MiniBatchInformation(observation_count=10, mask=DeviceArray([ True,  True], dtype=bool), batch_size=2)
+
+
+Random Data Access
+___________________
+
+The NumpyDataLoader provides three different methods to randomly select
+oservations:
+
+- Independent draw (default): Draw from all samples with replacement.
+- Shuffling: Draw from all samples without replacement and immediately reshuffle
+  if all samples have been drawn.
+- Shuffling in epochs: Draw from all samples without replacement and return mask
+  to mark invalid samples at the end of the epoch.
+
+This is illustrated at a small toy-dataset, which observation count is not a
+multiplicity of the batch size:
+
+.. doctest::
+
+  >>> import numpy as onp
+  >>> from jax_sgmc import data
+  >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
+
+  >>> x = onp.arange(10)
+  >>> data_loader = NumpyDataLoader(x=x)
+  >>> init_fn, batch_fn = data.random_reference_data(data_loader, 2, 3)
+
+The prefered method has to be passed when initializing the different chains:
+
+  >>> random_chain = init_fn()
+  >>> shuffle_chain = init_fn(shuffle=True)
+  >>> epoch_chain = init_fn(shuffle=True, in_epochs=True)
+
+In the fourth draw, the epoch chain should return a mask with invalid samples:
+
+  >>> def eval_fn(chain):
+  ...   for _ in range(4):
+  ...     chain, batch = batch_fn(chain, information=True)
+  ...   print(batch)
+  >>>
+  >>> eval_fn(random_chain)
+  ({'x': DeviceArray([4, 6, 6], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True,  True,  True], dtype=bool), batch_size=3))
+  >>> eval_fn(shuffle_chain)
+  ({'x': DeviceArray([0, 4, 7], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True,  True,  True], dtype=bool), batch_size=3))
+  >>> eval_fn(epoch_chain)
+  ({'x': DeviceArray([5, 0, 0], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True, False, False], dtype=bool), batch_size=3))
+
+"""
+
+# Todo: Rework
+"""
+
+Mapping over Full Dataset
+--------------------------
+
+It is also possible to map a function over the complete dataset provided by a
+data loader. In each iteration, the function is mapped over a batch of data to
+speed up the calculation but limit the memory consumption.
+
+In this toy example, the dataset consits of the potential bases
+:math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \\right\}`. In a scan loop,
+the sum of the potentials with given exponents is calculated:
+
+.. math::
+
+  f_e = \sum_{i=0}^{9}d_i^e \mid d_i \in \mathcal{D}, k = 0,\ldots, 2.
+
+.. doctest::
+
+  >>> from functools import partial
+  >>> import jax.numpy as jnp
+  >>> from jax.lax import scan
+  >>> from jax_sgmc import data
+  >>> from jax_sgmc.data.numpy import NumpyDataLoader
+
+First, the data loader must be set up. The mini batch size is not required to
+truly divide the total observation count. This is realized by filling up the
+last batch with some values, which are sorted out either automatically or
+directly by the user with a provided mask.
+
+  >>> base = jnp.arange(10)
+  >>>
+  >>> data_loader = NumpyDataLoader(base=base)
+
+The mask is an boolean array with `True` if the value is valid and `False` if it
+is just a filler. If set to `maksing=False` (default), no positional argument
+mask is expected in the function signature.
+
+  >>> def sum_potentials(exp, data, mask, unused_state):
+  ...   # Mask out the invalid samples (filler values, already mapped over)
+  ...   sum = jnp.sum(mask * jnp.power(data['base'], exp))
+  ...   return sum, unused_state
+  >>>
+  >>> init_fun, map_fun = data.full_reference_data(data_loader,
+  ...                                              cached_batches_count=3,
+  ...                                              mb_size=4)
+
+The results per batch must be post-processed. If `masking=False`, a result for
+each observation is returned. Therefore, using the masking option improves the
+memory consumption.
+
+  >>> # Calculate for multiple exponents:
+  >>> def body_fun(data_state, exp):
+  ...   map_results = map_fun(partial(sum_potentials, exp), data_state, None, masking=True)
+  ...   # Currently, we only summed over each mini-batch but not the whole
+  ...   # dataset.
+  ...   data_state, (batch_sums, unused_state) = map_results
+  ...   return data_state, (jnp.sum(batch_sums), unused_state)
+  >>>
+  >>> init_data_state = init_fun()
+  >>> _, (result, _) = scan(body_fun, init_data_state, jnp.arange(3))
+  >>> print(result)
+  [ 10  45 285]
+
+"""
+
 import math
 import itertools
 from typing import Tuple, Any, Dict, List
@@ -21,11 +185,11 @@ import numpy as onp
 import jax.numpy as jnp
 import jax
 from jax import random
-from jax import tree_util
 
 from jax_sgmc.data.core import DeviceDataLoader, HostDataLoader, DataLoader
 from jax_sgmc.data.core import mini_batch_information
 from jax_sgmc.data.core import tree_index
+from jax_sgmc.util import Array
 
 PyTree = Any
 
@@ -107,6 +271,7 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
     key = kwargs.get("key", random.PRNGKey(0))
     return key
 
+  # Todo: Provide shuffling and in_epoch_shuffling too
   def get_random_data(self,
                       state,
                       batch_size
@@ -156,7 +321,6 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
   """
 
   def __init__(self,
-               mini_batch_size: int = None,
                **reference_data):
     super().__init__(
       on_device=False,
@@ -231,7 +395,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
                        f"count. Provided {mb_size} and "
                        f"{self._observation_count}")
     if not shuffle and in_epochs:
-      raise ValueError(f"in_epochs = True can only be used for shuffle = True.")
+      raise ValueError("in_epochs = True can only be used for shuffle = True.")
 
     chain_id = len(self._chains)
 
@@ -299,63 +463,49 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
       `mb_size` observations.
 
     """
-    # Todo: Slicing is the same, only specify different function for generating
-    #   the index and the mask.
-    if self._chains[chain_id]['type'] == 'random':
-      return self._random_batches(chain_id)
-    elif self._chains[chain_id]['type'] == 'ordered':
-      return self._ordered_batches(chain_id)
+    # Data slicing is the same for all methods of random and ordered access,
+    # only the indices for slicing differ. The method _get_indices find the
+    # correct method for the chain.
+    selections_idx, selections_mask = self._get_indices(chain_id)
+
+    # Slice the data and transform into device array.
+    selected_observations: Dict[str, Array] = dict()
+    for key, data in self._reference_data.items():
+      if data.ndim == 1:
+        selection = jnp.array(data[selections_idx,])
+      else:
+        selection = jnp.array(data[selections_idx,::])
+      selected_observations[key] = selection
+    return selected_observations, jnp.array(selections_mask, dtype=jnp.bool_)
+
+  def _get_indices(self, chain_id: int):
+    chain = self._chains[chain_id]
+    if chain['type'] == 'ordered':
+      index_fn = self._ordered_indices
+    elif chain['in_epochs']:
+      index_fn = self._shuffle_in_epochs
+    elif chain['shuffle']:
+      index_fn = self._shuffle_indices
     else:
-      return None
-
-  def _random_batches(self, chain_id: int) -> PyTree:
-    # Get the random state of the chain, do some random operations and then save
-    # the random state of the chain.
-    # Todo: Something is wrong here!
+      index_fn = self._draw_indices
     indices, masks = list(zip(*map(
-      self._random_indices,
+      lambda _: index_fn(chain),
       itertools.repeat(chain_id, self._chains[chain_id]['cache_size']))))
-    selected_observations_index = onp.array(indices)
-    selections_masks = onp.array(masks, dtype=onp.bool_)
-    selected_observations = dict()
-    for key, data in self._reference_data.items():
-      if data.ndim == 1:
-        selection = data[selected_observations_index,]
-      else:
-        selection = data[selected_observations_index,::]
-      selected_observations[key] = selection
-    mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
+    return onp.array(indices), onp.array(masks, dtype=onp.bool_)
 
-    return mini_batch_pytree, selections_masks
+  def _ordered_indices(self, chain):
+    idcs = onp.arange(chain['mb_size']) + chain['idx_offset']
+    # Start again at the first sample if all samples have been returned
+    if chain['idx_offset'] + chain['mb_size'] > self._observation_count:
+      chain['idx_offset'] = 0
+    else:
+      chain['idx_offset'] += chain['mb_size']
+    # Simply return the first samples again if less samples remain than
+    # necessary to fill the cache. For consistency also return a mask to mark
+    # the samples returned double.
+    mask = onp.arange(chain['mb_size']) + chain['index_offset'] < self._observation_count
 
-  def _ordered_batches(self, chain_id: int) -> PyTree:
-    cache_size = self._chains[chain_id]['cache_size']
-    mini_batch_size = self._chains[chain_id]['mb_size']
-    sample_count = self._observation_count
-
-    def select_mini_batch():
-      for _ in range(cache_size):
-        idcs = onp.arange(mini_batch_size) + self._chains[chain_id]['idx_offset']
-        # Start again at the first sample if all samples have been returned
-        if self._chains[chain_id]['idx_offset'] + mini_batch_size > sample_count:
-          self._chains[chain_id]['idx_offset'] = 0
-        else:
-          self._chains[chain_id]['idx_offset'] += mini_batch_size
-        # Simply return the first samples again if less samples remain than
-        # necessary to fill the cache
-        yield onp.mod(idcs, sample_count)
-
-    selected_observations_index = onp.array(list(select_mini_batch()))
-    selected_observations = dict()
-    for key, data in self._reference_data.items():
-      if data.ndim == 1:
-        selection = data[selected_observations_index,]
-      else:
-        selection = data[selected_observations_index, ::]
-      selected_observations[key] = selection
-
-    mini_batch_pytree = tree_util.tree_map(jnp.array, selected_observations)
-    return mini_batch_pytree, None
+    yield onp.mod(idcs, self._observation_count), mask
 
   def _random_indices(self, chain_id: int) -> Tuple[List, Any]:
     """Returns indices and mask to access random data. """
@@ -371,7 +521,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     # Randomly choose batches
     selections = chain['rng'].choice(
       onp.arange(0, self._observation_count),
-      size=self._observation_count,
+      size=chain['mb_size'],
       replace=True)
     mask = onp.ones(chain['mb_size'], dtype=onp.bool_)
     return selections, mask
@@ -403,9 +553,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
       chain['random_indices'][update_idxs] = new_indices
       chain['remaining_samples'] += self._observation_count
 
-    # print(f"current indices: {chain['random_indices']}")
-    # print(f"  ------------>: {onp.array(onp.arange(ceil_draws * chain['mb_size']) == chain['draws'] * chain['mb_size'], dtype=int)}")
-
+    # All samples are valid
     mask = onp.ones(chain['mb_size'], dtype=onp.bool_)
 
     # Take the new indices
@@ -443,19 +591,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
 
     mask = onp.arange(start_idx, end_idx) < self._observation_count
 
-    # print(f"current indices: {chain['random_indices']}")
-    # print(f"  ------------>: {onp.array(onp.arange(ceil_draws * chain['mb_size']) == chain['draws'] * chain['mb_size'], dtype=int)}")
-    # print(f"  ------------>: {mask}")
-
     selections = onp.copy(chain['random_indices'][start_idx:end_idx])
     chain['draws'] += 1
 
     return selections, mask
-
-from jax_sgmc.data.core import random_reference_data
-x = onp.arange(10)
-dl = NumpyDataLoader(x=x)
-init_fn, batch_fn = random_reference_data(dl, 20, 3)
-
-# chain_a = init_fn(shuffle=True)
-chain_b = init_fn(shuffle=True, in_epochs=True)

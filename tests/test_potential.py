@@ -12,7 +12,8 @@ import pytest
 
 # from jax_sgmc.data import mini_batch
 from jax_sgmc.potential import minibatch_potential, full_potential
-from jax_sgmc.data import mini_batch_information, NumpyDataLoader, full_reference_data
+from jax_sgmc.data import mini_batch_information, full_reference_data
+from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 # Todo: Test the potential evaluation function on arbitrary pytrees.
 
@@ -75,7 +76,8 @@ class TestPotential():
     split1, split2 = random.split(key, 2)
     observations = jnp.tile(jnp.arange(4), (dim, 1))
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=dim)
+                                                          batch_size=dim,
+                                                          mask=jnp.ones(dim))
     sample = jnp.ones(4)
 
     true_result = -jnp.sum(jnp.arange(4)) * obs -4
@@ -105,7 +107,8 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
     zero_array = jnp.array(-0.0)
@@ -135,7 +138,8 @@ class TestPotential():
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
     zero_array = jnp.array(-0.0)
@@ -164,7 +168,8 @@ class TestPotential():
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": random.uniform(split3, (dim, ))}
 
     scan_result, _ = scan_pot(sample, reference_data)
@@ -200,7 +205,8 @@ class TestPotential():
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": random.uniform(split3, (dim,))}
 
     scan_result, _ = scan_grad(sample, reference_data)
@@ -238,7 +244,8 @@ class TestPotential():
                     "power": random.exponential(split1, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": random.uniform(split2, (dim,))}
 
     zero_gradient = jax.tree_map(jnp.zeros_like, sample)
@@ -271,7 +278,8 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(dim))
     sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
     init_state = {"scale": jnp.array([0.0]), "base": jnp.zeros(dim)}
 
@@ -300,7 +308,8 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(mbsize))
     sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
     init_state = {"scale": jnp.array([0.0]), "base": jnp.zeros(dim)}
 
@@ -336,13 +345,17 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(mbsize))
 
     sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
     pot_results = lambda obs: scan_pot(
       sample,
       (jax.tree_map(partial(jnp.expand_dims, axis=0), obs),
-       mini_batch_information(observation_count=1, batch_size=1)))
+       mini_batch_information(
+         observation_count=1,
+         batch_size=1,
+         mask=jnp.ones(1))))
 
     likelihoods, _ = lax.map(pot_results, observations)
     true_variance = jnp.var(likelihoods)

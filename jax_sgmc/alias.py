@@ -33,6 +33,7 @@ dataset. It contains all necessary steps to use a solver from ``alias.py``.
   >>> from jax.scipy.stats import norm
   >>>
   >>> from jax_sgmc import data, alias, potential
+  >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 Setup Data Loader
 __________________
@@ -56,7 +57,7 @@ recommended, as it accepts datasets from `tensorflow_datasets`.
   ...                x[:, 3]]).transpose()
   >>> y = jnp.matmul(x, w) + noise
   >>>
-  >>> data_loader = data.NumpyDataLoader(x=x, y=y)
+  >>> data_loader = NumpyDataLoader(x=x, y=y)
 
 Likelihood and Prior
 ____________________
@@ -133,7 +134,8 @@ def sgld(potential_fn: potential.minibatch_potential,
     >>> results = rms_run(sample, init_model_state=0, iterations=50000)[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.4855679  0.48382854 0.48602164 ... 0.49602574 0.49936494 0.49983683]
+    [0.49542138 0.49505237 0.49536645 ... 0.4964479  0.49590334 0.5061566 ]
+
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -233,7 +235,7 @@ def re_sgld(potential_fn: potential.minibatch_potential,
     ...   )[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.7344817  0.78028935 0.70692766 ... 0.7185406  0.6215274  0.74618036]
+    [0.72147006 0.9120528  0.791851   ... 0.7465575  0.75224274 0.5621891 ]
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -331,7 +333,7 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
     ...   )[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.50908965 0.50908965 0.50908965 ... 0.4953075  0.4953075  0.49817327]
+    [0.51793915 0.51793915 0.51793915 ... 0.5100617  0.5100617  0.5100617 ]
 
   Args:
     stochastic_potential_fn: Stochastic potential over a minibatch of data
@@ -444,7 +446,7 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
     ...   )[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.50949144 0.50949144 0.50949144 ... 0.49120873 0.49120873 0.49120873]
+    [0.49512342 0.49512342 0.49512342 ... 0.51112556 0.51112556 0.50658566]
 
   Args:
     stochastic_potential_fn: Stochastic potential over a minibatch of data
@@ -538,18 +540,18 @@ def sghmc(potential_fn: potential.minibatch_potential,
     ...                         data_loader,
     ...                         cache_size=512,
     ...                         batch_size=10,
-    ...                         friction=10.0,
-    ...                         first_step_size=0.01,
-    ...                         last_step_size=0.0005,
+    ...                         friction=100.0,
+    ...                         first_step_size=0.005,
+    ...                         last_step_size=0.00005,
     ...                         burn_in=2000,
     ...                         adapt_noise_model=True,
-    ...                         diagonal_noise=False)
+    ...                         diagonal_noise=True)
     >>>
     >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
     >>> results = sghmc_run(sample, init_model_state=0, iterations=5000)[0]['samples']['variables']
     >>>
     >>> print(results['sigma'])
-    [0.50264543 0.50142    0.50283986 ... 0.5089415  0.50838524 0.5086956 ]
+    [1.9410038 1.9409101 1.9409207 ... 1.905135  1.9051287 1.9051673]
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data

@@ -27,9 +27,10 @@ making use of jaxs tools ``map``, ``vmap`` and ``pmap``.
   >>> import jax.scipy as jscp
   >>> from jax import random, vmap
   >>> from jax_sgmc import data, potential
+  >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
   >>> mean = random.normal(random.PRNGKey(0), shape=(100, 5))
-  >>> data_loader = data.NumpyDataLoader(mean=mean)
+  >>> data_loader = NumpyDataLoader(mean=mean)
   >>>
   >>> test_sample = {'mean': jnp.zeros(5), 'std': jnp.ones(1)}
 
@@ -66,7 +67,7 @@ reference data sequentially via ``map`` or parallel via ``vmap`` or ``pmap``.
   >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
   >>>
   >>> print(potential_eval)
-  883.183
+  837.9893
 
 Batched Likelihood
 ___________________
@@ -94,14 +95,14 @@ case, it is expected that the returned likelihoods are a vectore with shape
   >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
   >>>
   >>> print(potential_eval)
-  883.183
+  837.9893
   >>>
   >>> _, (likelihoods, _) = stochastic_potential_fn(test_sample,
   ...                                               random_batch,
   ...                                               likelihoods=True)
   >>>
   >>> print(jnp.var(likelihoods))
-  7.45549
+  7.289153
 
 
 Full Potential
@@ -172,9 +173,9 @@ as first positional argument.
   ...                                          state=(jnp.array(2), jnp.ones(5)))
   >>>
   >>> print(potential_eval)
-  883.183
+  837.9893
   >>> print(new_state)
-  (DeviceArray(3, dtype=int32), DeviceArray([0.79154414, 0.9063752 , 0.52024883, 0.3007263 , 0.10383289],            dtype=float32))
+  (DeviceArray(3, dtype=int32), DeviceArray([0.8914191 , 0.1184448 , 0.7666685 , 0.55906993, 1.1051651 ],            dtype=float32))
 
 """
 

@@ -1,7 +1,13 @@
 jax_sgmc.data
 ==============
 
+Numpy Data Loader
+------------------
 .. automodule:: jax_sgmc.data.numpy_loader
+
+Tensorflow Data Loader
+-----------------------
+.. automodule:: jax_sgmc.data.tensorflow_loader
 
 
 API
@@ -22,11 +28,9 @@ ______________
 .. autoclass:: jax_sgmc.data.DataLoader
     :members:
 
-.. autoclass:: jax_sgmc.data.tensorflow_loader.TensorflowDataLoader
-    :members:
+.. autoclass:: jax_sgmc.data.DeviceDataLoader
 
-.. autoclass:: jax_sgmc.data.NumpyDataLoader
-    :members:
+.. autoclass:: jax_sgmc.data.HostDataLoader
 
 Host Callback Wrappers
 ________________________

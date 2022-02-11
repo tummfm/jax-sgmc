@@ -215,7 +215,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
 
 
   @abc.abstractmethod
-  def get_batches(self, chain_id: int) -> Tuple[PyTree, Optional[Array]]:
+  def get_batches(self, chain_id: int) -> Tuple[PyTree, Union[Array, None]]:
     """Return batches from an ordered or random chain. """
 
   def batch_format(self,
@@ -276,7 +276,6 @@ random_data_state = CacheState
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int,
                           mb_size: int,
-                          drop_remainder: bool = True
                           ) -> RandomBatch:
   """Initializes reference data access in jit-compiled functions.
 
@@ -287,9 +286,6 @@ def random_reference_data(data_loader: DataLoader,
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
     mb_size: Size of the data batch.
-    drop_remainder: When shuffling, i.e. drawing each sample once before drawing
-      a sample twice, the last samples after every shuffle are discarded. If
-      false, a mask is returned to mark invalid samples.
 
   Returns:
     Returns a tuple of functions to initialize a new reference data state and
@@ -304,7 +300,7 @@ def random_reference_data(data_loader: DataLoader,
 
   if isinstance(data_loader, HostDataLoader):
     return _random_reference_data_host(
-      data_loader, cached_batches_count, mb_size, drop_remainder)
+      data_loader, cached_batches_count, mb_size)
   elif isinstance(data_loader, DeviceDataLoader):
     if not cached_batches_count == 1:
       raise ValueError(f"No caching on device.")
@@ -335,7 +331,7 @@ def full_reference_data(data_loader: DataLoader,
   """
   # Check batch size is not bigger than total observation count
   observation_count = data_loader.static_information["observation_count"]
-  if observation_count > mb_size:
+  if observation_count < mb_size:
     raise ValueError(f"Batch size cannot be bigger than the number of total "
                      f"observations. Got {observation_count} and {mb_size}.")
 
@@ -554,7 +550,6 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 def _random_reference_data_host(data_loader: HostDataLoader,
                                 cached_batches_count: int = 100,
                                 mb_size: int = 1,
-                                drop_remainder: bool = True
                                 ) -> RandomBatch:
   """Random reference data access via host-callback. """
   # Warn if cached_batches are bigger than total dataset
@@ -571,7 +566,6 @@ def _random_reference_data_host(data_loader: HostDataLoader,
     chain_id = data_loader.register_random_pipeline(
       cached_batches_count,
       mb_size=mb_size,
-      drop_remainder=drop_remainder,
       **kwargs)
     initial_state, initial_mask = data_loader.get_batches(chain_id)
     if initial_mask is None:

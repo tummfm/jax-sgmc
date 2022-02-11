@@ -108,13 +108,9 @@ In the fourth draw, the epoch chain should return a mask with invalid samples:
   >>> eval_fn(epoch_chain)
   ({'x': DeviceArray([5, 0, 0], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True, False, False], dtype=bool), batch_size=3))
 
-"""
-
-# Todo: Rework
-"""
 
 Mapping over Full Dataset
---------------------------
+__________________________
 
 It is also possible to map a function over the complete dataset provided by a
 data loader. In each iteration, the function is mapped over a batch of data to
@@ -134,7 +130,7 @@ the sum of the potentials with given exponents is calculated:
   >>> import jax.numpy as jnp
   >>> from jax.lax import scan
   >>> from jax_sgmc import data
-  >>> from jax_sgmc.data.numpy import NumpyDataLoader
+  >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 First, the data loader must be set up. The mini batch size is not required to
 truly divide the total observation count. This is realized by filling up the
@@ -503,9 +499,9 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     # Simply return the first samples again if less samples remain than
     # necessary to fill the cache. For consistency also return a mask to mark
     # the samples returned double.
-    mask = onp.arange(chain['mb_size']) + chain['index_offset'] < self._observation_count
+    mask = onp.arange(chain['mb_size']) + chain['idx_offset'] < self._observation_count
 
-    yield onp.mod(idcs, self._observation_count), mask
+    return onp.mod(idcs, self._observation_count), mask
 
   def _random_indices(self, chain_id: int) -> Tuple[List, Any]:
     """Returns indices and mask to access random data. """

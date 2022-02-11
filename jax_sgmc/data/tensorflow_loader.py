@@ -25,6 +25,7 @@ available on tensorflow_datasets.
   >>> import tensorflow_datasets as tfds
   >>> from jax import tree_util
   >>> from jax_sgmc import data
+  >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
   >>>
   >>> # Helper function to look at the data provided
   >>> def show_data(data):
@@ -45,7 +46,7 @@ by passing the keyword argument `exclude_keys`.
       'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
   })
   >>>
-  >>> data_loader = data.TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])
+  >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])
   >>>
   >>> # If the model needs data for initialization, an all zero batch can be
   >>> # drawn with the correct shapes and dtypes
@@ -66,20 +67,21 @@ has an increased device memory consumption.
   image with shape (1000, 32, 32, 3) and dtype uint8
   label with shape (1000,) and dtype int32
 
-
-
 """
 
 from typing import List, Any
 
+import jax
 import jax.numpy as jnp
 from jax import tree_util
 
+from tensorflow import data as tfd
 import tensorflow_datasets as tfds
 
 from jax_sgmc.data.core import HostDataLoader
 
 PyTree = Any
+TFDataSet = tfd.Dataset
 
 class TensorflowDataLoader(HostDataLoader):
   """Load data from a tensorflow dataset object.
@@ -91,9 +93,10 @@ class TensorflowDataLoader(HostDataLoader):
 
     >>> import tensorflow_datasets as tdf
     >>> from jax_sgmc import data
+    >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
     >>>
     >>> pipeline = tfds.load("cifar10", split="train")
-    >>> data_loader = data.TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
+    >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
 
   Args:
     pipeline: A tensorflow data pipeline, which can be obtained from the
@@ -102,14 +105,14 @@ class TensorflowDataLoader(HostDataLoader):
   """
 
   def __init__(self,
-               pipeline: tfds.TFDataSet,
+               pipeline: TFDataSet,
                mini_batch_size: int = None,
                shuffle_cache: int = 100,
                exclude_keys: List = None):
     super().__init__()
     # Tensorflow is in general not required to use the library
     assert mini_batch_size is None, "Depreceated"
-    assert tfds.TFDataSet is not None, "Tensorflow must be installed to use this " \
+    assert TFDataSet is not None, "Tensorflow must be installed to use this " \
                                   "feature."
     assert tfds is not None, "Tensorflow datasets must be installed to use " \
                              "this feature."
@@ -120,7 +123,7 @@ class TensorflowDataLoader(HostDataLoader):
     self._exclude_keys = [] if exclude_keys is None else exclude_keys
     self._shuffle_cache = shuffle_cache
 
-    self._pipelines: List[tfds.TFDataSet] = []
+    self._pipelines: List[TFDataSet] = []
 
   def register_random_pipeline(self,
                                cache_size: int = 1,
@@ -197,7 +200,7 @@ class TensorflowDataLoader(HostDataLoader):
       for key in self._exclude_keys:
         del numpy_batch[key]
 
-    return tree_util.tree_map(jnp.array, numpy_batch)
+    return tree_util.tree_map(jnp.array, numpy_batch), None
 
   @property
   def _format(self):

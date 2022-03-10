@@ -1,9 +1,15 @@
 import pickle
+
+import jax
 from jax import nn, tree_leaves, random, numpy as jnp
-from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io
+from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
 import tensorflow as tf
 import tensorflow_datasets
 import haiku as hk
+import numpy as onp
+from jax.scipy import stats as stats
+from jax import lax, tree_map, tree_leaves, numpy as jnp
+from jax import scipy as jscipy
 # import tensorflow as tf
 # from tensorflow.python.framework.ops import disable_eager_execution
 #
@@ -20,18 +26,18 @@ config = tf.config.experimental.set_memory_growth(physical_devices[1], True)
 config = tf.config.experimental.set_memory_growth(physical_devices[2], True)
 config = tf.config.experimental.set_memory_growth(physical_devices[3], True)
 
-if len(sys.argv) > 1:
-    visible_device = str(sys.argv[1])
-else:
-    visible_device = 1
-os.environ["CUDA_VISIBLE_DEVICES"] = str(0)
+# if len(sys.argv) > 1:
+#     visible_device = str(sys.argv[1])
+# else:
+#     visible_device = 1
+# os.environ["CUDA_VISIBLE_DEVICES"] = str(0)
 
 # physical_devices = tf.config.list_physical_devices('GPU')
 # tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 ## Configuration parameters
 
-batch_size = 16
+batch_size = 64
 cached_batches = 512
 num_classes = 100
 weight_decay = 5.e-4
@@ -50,9 +56,11 @@ train_loader = data.TensorflowDataLoader(train_dataset,
                                          shuffle_cache=1000,
                                          exclude_keys=['id'])
 
-test_loader = data.NumpyDataLoader(X=test_images, Y=test_labels)
+test_loader = data.NumpyDataLoader(image=test_images, label=test_labels)
 
 train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
+
+test_batch_init, test_batch_get = data.random_reference_data(test_loader, cached_batches, batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
@@ -60,7 +68,11 @@ batch_init, batch_get = train_batch_fn
 
 # This method returns a batch with correct shape but all zero values. The batch
 # contains 16 (batch_size) images.
-init_batch = train_loader.initializer_batch(batch_size)
+zeros_init_batch = train_loader.initializer_batch(batch_size)  # ana: it doesn't help if I change this to ones
+_, batch_data = batch_get(batch_init(), information=True)
+init_batch, info_batch = batch_data
+_, test_init_batch = test_batch_get(test_batch_init(), information=True)
+
 
 # ResNet Model
 def init_resnet():
@@ -73,7 +85,7 @@ def init_resnet():
     return resnet.init, resnet.apply
 
 init, apply_resnet = init_resnet()
-init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
+init_params, init_resnet_state = init(random.PRNGKey(1), init_batch)
 
 # test prediction
 logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
@@ -82,20 +94,36 @@ print(jnp.sum(logits))
 # I don't think this should give plain 0, otherwise gradients will be 0
 
 
-# Initialize potential with the log-likelihood and the log-prior
-def likelihood(resnet_state, sample, observations):
+# def likelihood(resnet_state, sample, observations):
+#     labels = nn.one_hot(observations["label"], num_classes)
+#     logits, resnet_state = apply_resnet(sample["w"], resnet_state, None, observations)
+#     softmax_xent = labels * jnp.log(nn.softmax(logits))
+#     softmax_xent = jnp.mean(softmax_xent, axis=1)
+#     # softmax_xent /= labels.shape[0]
+#     return softmax_xent, resnet_state
+
+# Initialize potential with log-likelihood
+def likelihood(model_state, sample, observations):
     labels = nn.one_hot(observations["label"], num_classes)
-    logits, resnet_state = apply_resnet(sample["w"], resnet_state, None, observations)
+    logits, new_state = apply_resnet(sample["w"], model_state, None, observations)
     softmax_xent = labels * jnp.log(nn.softmax(logits))
-    softmax_xent = jnp.mean(softmax_xent, axis=1)  # xent = (categorical) cross entropy
-    # softmax_xent /= labels.shape[0]
-    return softmax_xent, resnet_state
+    softmax_xent = jnp.mean(softmax_xent, axis=1)
+    softmax_xent /= labels.shape[0]
+    likelihood = jnp.zeros(64)
+    if 'image' in observations.keys():
+        likelihood += jscipy.stats.norm.logpdf(observations['label']-softmax_xent, scale=sample['std'])
+    # return softmax_xent, model_state
+    return likelihood, new_state
+
+# def prior(sample):
+#     # Implement weight decay, corresponds to Gaussian prior over weights
+#     weights = sample["w"]
+#     l2_loss = 0.5 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(weights))
+#     return weight_decay * l2_loss
 
 def prior(sample):
-    # Implement weight decay, corresponds to Gaussian prior over weights
-    weights = sample["w"]
-    l2_loss = 0.5 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(weights))
-    return weight_decay * l2_loss
+    del sample
+    return jnp.squeeze(jnp.array([0.0]))
 
 # The likelihood accepts a batch of data, so no batching strategy is required,
 # instead, is_batched must be set to true.
@@ -105,34 +133,39 @@ def prior(sample):
 # to
 #   (State, Sample, Data) -> Likelihood, NewState
 # if has_state is set to true.
+# retu = batch_get(init_resnet_state)
+
 potential_fn = potential.minibatch_potential(prior=prior,
                                              likelihood=likelihood,
                                              has_state=True,  # likelihood contains model state
                                              is_batched=True)
 
+sample = {"w": init_params, "std": jnp.ones(64)}
+
+a = potential_fn(sample, batch_data, likelihoods=False)
+
 # Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
-iterations = 10000
-# iterations = 100000
+# iterations = 10000
+iterations = 100000
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
-                                                train_batch_fn,
-                                                rms_prop)
+                                               train_batch_fn,
+                                               rms_prop)
 
 # Schedulers
 rms_step_size = scheduler.polynomial_step_size_first_last(first=0.05,
                                                           last=0.001)
-# burn_in = scheduler.initial_burn_in(50000)
-burn_in = scheduler.initial_burn_in(5)
+burn_in = scheduler.initial_burn_in(5000)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 1000)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
                                          thinning=rms_random_thinning)
 
-sample = {"w": init_params}
+# sample = {"w": init_params}
 data_collector = io.MemoryCollector()
 saving = io.save(data_collector)
 
@@ -144,9 +177,10 @@ rms_run = solver.mcmc(rms_sgld,
 data_collector = io.MemoryCollector()
 saving = io.save(data_collector)
 
-rms = rms_run(rms_integrator[0](sample,
-                                init_model_state=init_resnet_state),
-                                iterations=iterations)["samples"]["variables"]
-
+# rms = rms_run(rms_integrator[0](sample,
+rms_integ = rms_integrator[0](sample,
+                              init_model_state=init_resnet_state)
+rms_results = rms_run(rms_integ,
+                      iterations=iterations)  # ["samples"]["variables"]
 
 print("Finished")

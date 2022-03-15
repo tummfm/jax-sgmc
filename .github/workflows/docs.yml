@@ -40,3 +40,9 @@ jobs:
         run: |
           cd docs
           make singlehtml
+          
+      - name: Upload documentation
+        uses: actions/upload-artifact@v3.0.0
+        with:
+          name: documentation
+          path: build/singlehtml/*

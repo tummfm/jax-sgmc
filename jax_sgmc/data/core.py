@@ -89,7 +89,7 @@ class DataLoader(metaclass=abc.ABCMeta):
   @property
   @abc.abstractmethod
   def _format(self):
-    """dtype and shape of a mini-batch. """
+    """dtype and shape of a single sample."""
 
   def initializer_batch(self, mb_size: int = None) -> PyTree:
     """Returns a zero-like mini-batch.
@@ -297,6 +297,9 @@ def random_reference_data(data_loader: DataLoader,
   if observation_count < mb_size:
     raise ValueError(f"Batch size cannot be bigger than the number of total "
                      f"observations. Got {observation_count} and {mb_size}.")
+  if cached_batches_count <= 0 or mb_size <= 0:
+    raise ValueError(f"Cache size and batch size must be positive, got"
+                     f"{cached_batches_count} and {mb_size}.")
 
   if isinstance(data_loader, HostDataLoader):
     return _random_reference_data_host(
@@ -512,9 +515,6 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       struct containing information about the batch can be returned.
 
     """
-
-    # Todo: Implement mask in mb_information.
-
     # Refresh the cache if necessary, after all cached batches have been used.
     data_state = _data_state_helper(data_state)
     current_line = jnp.mod(data_state.current_line,

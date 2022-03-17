@@ -212,7 +212,7 @@ class TensorflowDataLoader(HostDataLoader):
       not_excluded_elements = data_spec
 
     def leaf_dtype_struct(leaf):
-      shape = tuple(int(s) for s in leaf.shape if s is not None)
+      shape = tuple(int(s) for s in leaf.shape[1:] if s is not None)
       dtype = leaf.dtype.as_numpy_dtype
       return jax.ShapeDtypeStruct(
         dtype=dtype,

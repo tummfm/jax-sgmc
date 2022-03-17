@@ -172,6 +172,7 @@ memory consumption.
   [ 10  45 285]
 
 """
+from copy import deepcopy
 
 import math
 import itertools
@@ -206,8 +207,8 @@ class NumpyBase(DataLoader):
 
     # Check same number of observations
     if onp.any(onp.array(observation_counts) != observation_counts[0]):
-      raise TypeError("All reference_data arrays must have the same length in"
-                      " the first dimension.")
+      raise ValueError("All reference_data arrays must have the same length "
+                       "in the first dimension.")
 
     self._observation_count = observation_counts[0]
 
@@ -339,7 +340,9 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
 
     chain_data = self._chains[chain_id]
     if chain_data['type'] == 'random':
-      return {'random': chain_data['rng'].bit_generator.state}
+      data = {key: deepcopy(value)
+              for key, value in chain_data.items() if key is not 'rng'}
+      return {'random': (chain_data['rng'].bit_generator.state, data)}
     elif chain_data['type'] == 'ordered':
       return {'ordered': chain_data['idx_offset']}
     else:
@@ -357,7 +360,10 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     # checkpointed state
     type, value = data.popitem()
     if type == 'random':
-      self._chains[chain_id]['rng'].bit_generator.state = value
+      rng_state, chain_data = value
+      self._chains[chain_id]['rng'].bit_generator.state = rng_state
+      for key, value in chain_data.items():
+        self._chains[chain_id][key] = value
     elif type == 'ordered':
       self._chains[chain_id]['idx_offset'] = value
     else:
@@ -491,16 +497,17 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
 
   def _ordered_indices(self, chain):
     idcs = onp.arange(chain['mb_size']) + chain['idx_offset']
+    # For consistency also return a mask to mark
+    #  the samples returned double.
+    mask = onp.arange(chain['mb_size']) + chain['idx_offset'] < self._observation_count
+
     # Start again at the first sample if all samples have been returned
     if chain['idx_offset'] + chain['mb_size'] > self._observation_count:
       chain['idx_offset'] = 0
     else:
       chain['idx_offset'] += chain['mb_size']
     # Simply return the first samples again if less samples remain than
-    # necessary to fill the cache. For consistency also return a mask to mark
-    # the samples returned double.
-    mask = onp.arange(chain['mb_size']) + chain['idx_offset'] < self._observation_count
-
+    # necessary to fill the cache.
     return onp.mod(idcs, self._observation_count), mask
 
   def _random_indices(self, chain_id: int) -> Tuple[List, Any]:

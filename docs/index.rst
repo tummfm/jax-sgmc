@@ -12,6 +12,7 @@ Welcome to jax-sgmc's documentation!
 
    examples/index
    quickstart
+   usage/index
 
 
 API Documentation
@@ -21,14 +22,8 @@ API Documentation
     :maxdepth: 2
     :caption: API
 
-    jax_sgmc.adaption
-    jax_sgmc.data
-    jax_sgmc.integrator
-    jax_sgmc.io
-    jax_sgmc.potential
-    jax_sgmc.scheduler
-    jax_sgmc.solver
-    jax_sgmc.util
+    public_api
+    developer_api
 
 
 

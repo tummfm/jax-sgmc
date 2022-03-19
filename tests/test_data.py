@@ -30,7 +30,12 @@ from jax import lax
 
 from jax_sgmc.data.core import random_reference_data, full_reference_data
 from jax_sgmc.data.numpy_loader import NumpyDataLoader, DeviceNumpyDataLoader
-from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
+
+try:
+  from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
+except ModuleNotFoundError:
+  TensorflowDataLoader = None
+
 from jax_sgmc.util import list_vmap, list_pmap
 
 import pytest

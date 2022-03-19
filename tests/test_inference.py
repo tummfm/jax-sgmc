@@ -28,6 +28,7 @@ from jax_sgmc import potential
 from jax_sgmc import scheduler
 from jax_sgmc import solver
 from jax_sgmc import integrator
+from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 @pytest.fixture
 def problem():
@@ -52,7 +53,7 @@ def problem():
   M = 10
   cs = 1000
 
-  data_loader = data.NumpyDataLoader(x=x, y=y)
+  data_loader = NumpyDataLoader(x=x, y=y)
   batch_fn = data.random_reference_data(data_loader,
                                         cached_batches_count=cs,
                                         mb_size=M)

@@ -227,6 +227,29 @@ class TestNumpyDeviceDataLoader:
     assert batch_a1["ordered_indices"] == batch_a2["ordered_indices"]
     assert batch_b["ordered_indices"] != batch_a2["ordered_indices"]
 
+
+  @pytest.mark.parametrize("shuffle, in_epochs",
+                           [(False, False),
+                            (True, False),
+                            (True, True)])
+  def test_cache_size_order(self, data_loader, shuffle, in_epochs):
+    """Check that changing the cache size does not influence the order. """
+
+    cs_small = 3
+    cs_big = 5
+    mb_size = 2
+
+    small_chain = data_loader.register_random_pipeline(
+      cs_small, mb_size, seed=0, shuffle=shuffle, in_epochs=in_epochs)
+    big_chain = data_loader.register_random_pipeline(
+      cs_big, mb_size, seed=0, shuffle=shuffle, in_epochs=in_epochs)
+    small_batch, _ = data_loader.get_batches(small_chain)
+    big_batch, _ = data_loader.get_batches(big_chain)
+
+    for key in small_batch.keys():
+      for idx in range(cs_small):
+        test_util.check_eq(small_batch[key][idx], big_batch[key][idx])
+
   @pytest.mark.parametrize("shuffle, in_epochs", [(False, False),
                                                   (True, False),
                                                   (True, True)])

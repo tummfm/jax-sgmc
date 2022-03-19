@@ -14,8 +14,12 @@
 
 import numpy as onp
 
-import tensorflow as tf
-import tensorflow_datasets as tfds
+try:
+  import tensorflow as tf
+  import tensorflow_datasets as tfds
+except ModuleNotFoundError:
+  tf = None
+  tfds = None
 
 import jax
 import jax.numpy as jnp

@@ -17,14 +17,17 @@ import numpy as onp
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+import jax
 import jax.numpy as jnp
 from jax import ShapeDtypeStruct
 from jax import test_util
 from jax import random
+from jax import lax
 
 from jax_sgmc.data.core import random_reference_data, full_reference_data
 from jax_sgmc.data.numpy_loader import NumpyDataLoader, DeviceNumpyDataLoader
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
+from jax_sgmc.util import list_vmap, list_pmap
 
 import pytest
 
@@ -531,9 +534,6 @@ class TestTensorflowDataLoader:
       assert required_shape == batch[key].shape
       assert required_dtype == batch[key].dtype
 
-class TestHostCallback:
-  pass
-
 
 class TestRandomDataAccess:
 
@@ -541,6 +541,37 @@ class TestRandomDataAccess:
   def data_loader(self, dataset):
     data, _, _ = dataset
     return NumpyDataLoader(**data)
+
+  @pytest.fixture
+  def example_problem(self):
+    # This problem should check that each sample
+
+    def init_test_fn(obs_count, batch_size, data_fn):
+      init_data_fn, batch_fn = data_fn
+      num_its = int(onp.ceil(obs_count / batch_size))
+
+      def init_fn():
+        # An array to count the number of observations returned
+        sample_counts = jnp.zeros(obs_count)
+        data_state = init_data_fn(shuffle=True, in_epochs=True)
+        return data_state, sample_counts, 0.0
+
+      def _test_update_fn(state, _):
+        data_state, sample_counts, valid_obs_count = state
+        data_state, (batch, mb_info) = batch_fn(
+          data_state,
+          information=True
+        )
+        sample_counts = sample_counts.at[batch["ordered_indices"]].add(mb_info.mask)
+        valid_obs_count += jnp.sum(mb_info.mask)
+        return (data_state, sample_counts, valid_obs_count), None
+
+      def test_fn(init_state):
+        return lax.scan(_test_update_fn, init_state, onp.arange(num_its))
+
+      return init_fn, test_fn
+
+    return init_test_fn
 
   def test_cache_size_invalid_arguments(self, data_loader, dataset):
     _, _, obs_count = dataset
@@ -570,5 +601,221 @@ class TestRandomDataAccess:
                             mb_size=obs_count + 1)
 
 
+  def test_random_data_acces_with_in_epoch_shuffeling(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    (_, test_sample_count, test_obs_size), _ = test_fn(init_fn())
+
+    assert onp.all(test_sample_count == 1)
+    assert test_obs_size == obs_count
+
+  def test_jit_random_data(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    test_fn_jit = jax.jit(test_fn)
+    test_fn_jit(init_fn())
+
+    (_, test_sample_count, test_obs_size), _ = test_fn_jit(init_fn())
+
+    assert onp.all(test_sample_count == 1)
+    assert test_obs_size == obs_count
+
+  @pytest.mark.skip("Custom Batching not implemented")
+  def test_vmap_random_data(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    vmap_size = 2
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    test_fn_vmap = list_vmap(test_fn)
+    init_states = [init_fn() for _ in range(vmap_size)]
+
+    results = test_fn_vmap(*init_states)
+
+    for res in results:
+      (_, test_sample_count, test_obs_size), _ = res
+      assert onp.all(test_sample_count == 1)
+      assert test_obs_size == obs_count
+
+  @pytest.mark.skip("Pmap requires more devices")
+  def test_pmap_random_data(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    pmap_size = 2
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    test_fn_pmap = list_pmap(test_fn)
+    init_states = [init_fn() for _ in range(pmap_size)]
+
+    results = test_fn_pmap(*init_states)
+
+    for res in results:
+      (_, test_sample_count, test_obs_size), _ = res
+      assert onp.all(test_sample_count == 1)
+      assert test_obs_size == obs_count
+
+
 class TestFullDataAccess:
-  pass
+
+  @pytest.fixture
+  def data_loader(self, dataset):
+    data, _, _ = dataset
+    return NumpyDataLoader(**data)
+
+  @pytest.fixture
+  def example_problem_mask(self):
+
+    def init_test_fn(data_fn):
+      init_data_fn, map_fn = data_fn
+
+      def init_fn():
+        # An array to count the number of observations returned
+        return init_data_fn()
+
+      def _test_update_fn(batch, mask, _):
+        return (jnp.sum(mask), batch["ordered_indices"], mask), None
+
+
+      def test_fn(data_state):
+        return map_fn(_test_update_fn, data_state, None, masking=True)
+
+      return init_fn, test_fn
+    return init_test_fn
+
+  @pytest.fixture
+  def example_problem_no_mask(self):
+    def init_test_fn(data_fn):
+      init_data_fn, map_fn = data_fn
+
+      def init_fn():
+        # An array to count the number of observations returned
+        return init_data_fn()
+
+      def _test_update_fn(batch, _):
+        return batch["ordered_indices"], None
+
+
+      def test_fn(data_state):
+        return map_fn(_test_update_fn, data_state, None, masking=False)
+
+      return init_fn, test_fn
+    return init_test_fn
+
+  def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                  cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_mask(data_map)
+
+    _, (results, _) = test_fn(init_fn())
+    sum_mask, samples, masks = results
+
+    samples = onp.ravel(samples)
+    masks = onp.ravel(masks)
+    sum_mask = onp.sum(sum_mask)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples[masks], return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+    assert sum_mask == obs_count
+
+  def test_jit_full_data_map_mask(self, dataset, data_loader,
+                              example_problem_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                   cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_mask(data_map)
+    test_fn_jit = jax.jit(test_fn)
+    test_fn_jit(init_fn())
+
+    _, (results, _) = test_fn_jit(init_fn())
+    sum_mask, samples, masks = results
+
+    samples = onp.ravel(samples)
+    masks = onp.ravel(masks)
+    sum_mask = onp.sum(sum_mask)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples[masks], return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+    assert sum_mask == obs_count
+
+  def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                  cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_no_mask(data_map)
+
+    _, (samples, _) = test_fn(init_fn())
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                  cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_no_mask(data_map)
+    test_fn_jit = jax.jit(test_fn)
+    test_fn_jit(init_fn())
+
+    _, (samples, _) = test_fn_jit(init_fn())
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  @pytest.mark.skip("Custom Batching not implemented")
+  def test_vmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass
+
+  @pytest.mark.skip("Pmap requires more devices")
+  def test_pmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass
+
+  @pytest.mark.skip("Custom Batching not implemented")
+  def test_vmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass
+
+  @pytest.mark.skip("Pmap requires more devices")
+  def test_pmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass

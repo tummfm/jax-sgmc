@@ -342,7 +342,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     chain_data = self._chains[chain_id]
     if chain_data['type'] == 'random':
       data = {key: deepcopy(value)
-              for key, value in chain_data.items() if key is not 'rng'}
+              for key, value in chain_data.items() if key != 'rng'}
       return {'random': (chain_data['rng'].bit_generator.state, data)}
     elif chain_data['type'] == 'ordered':
       return {'ordered': chain_data['idx_offset']}

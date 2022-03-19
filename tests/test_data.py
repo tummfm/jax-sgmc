@@ -15,6 +15,7 @@
 import numpy as onp
 
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 import jax.numpy as jnp
 from jax import ShapeDtypeStruct
@@ -364,7 +365,7 @@ class TestNumpyHostDataLoader:
       assert required_shape == init_batch[key].shape
       assert data_format[key].dtype == init_batch[key].dtype
 
-
+@pytest.mark.tensorflow
 class TestTensorflowDataLoader:
 
   @pytest.fixture
@@ -373,10 +374,10 @@ class TestTensorflowDataLoader:
 
     def gen():
       for idx in range(obs_count):
-        yield {key: value[idx] for key, value in data.items()}
+        yield {key: onp.array(value[idx]) for key, value in data.items()}
 
     output_signature = {
-      key: tf.TensorSpec(shape=format.shape, dtype=format.dtype)
+      key: tf.TensorSpec(shape=format.shape[1:], dtype=format.dtype)
       for key, format in data_format.items()
     }
 
@@ -397,6 +398,75 @@ class TestTensorflowDataLoader:
       assert required_shape == init_batch[key].shape
       assert data_format[key].dtype == init_batch[key].dtype
 
+  def test_get_batches_random_shape(self, tf_dataset, dataset):
+    _, data_format, _ = dataset
+    batch_size = 7
+    cache_size = 5
+
+    data_loader = TensorflowDataLoader(tf_dataset,
+                                       shuffle_cache=10)
+
+    chain_id = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
+
+    batch, _ = data_loader.get_batches(chain_id)
+    print(batch)
+
+    for key in data_format.keys():
+      required_shape = (cache_size, batch_size) + data_format[key].shape[1:]
+      assert required_shape == batch[key].shape
+      assert data_format[key].dtype == batch[key].dtype
+
+
+  @pytest.mark.skip("Not Implemented")
+  def test_get_batches_ordered_shape(self):
+    assert False
+
+  @pytest.mark.parametrize("num_exclude", [1, 2, 3])
+  def test_exclude_keys(self, tf_dataset, dataset, num_exclude):
+    _, data_format, _ = dataset
+
+    all_keys = list(data_format.keys())
+    excluded_keys = all_keys[0:num_exclude]
+    contained_keys = all_keys[num_exclude:]
+
+    data_loader = TensorflowDataLoader(tf_dataset,
+                                       exclude_keys=excluded_keys)
+
+    chain_id = data_loader.register_random_pipeline(cache_size=2,
+                                                    mb_size=3)
+    batch, _ = data_loader.get_batches(chain_id)
+
+    for key in excluded_keys:
+      assert key not in batch.keys()
+
+    for key in contained_keys:
+      assert key in batch.keys()
+
+  @pytest.mark.parametrize("name, exclude_keys",
+                           [("MNIST", []),
+                            ("Cifar10", ["id"])])
+  def test_tensorflow_datasets(self, name, exclude_keys):
+    cache_size = 2
+    batch_size = 3
+
+    tf_dataset, info = tfds.load(name, split="train", with_info=True)
+    data_loader = TensorflowDataLoader(tf_dataset,
+                                       exclude_keys=exclude_keys)
+
+    chain_id = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
+    batch, _ = data_loader.get_batches(chain_id)
+    init_batch = data_loader.initializer_batch()
+
+    # Check that format and shape is correct
+    for key in info.features:
+      if key in exclude_keys:
+        continue
+      required_shape = (cache_size, batch_size) + info.features[key].shape
+      required_dtype = init_batch[key].dtype
+      assert required_shape == batch[key].shape
+      assert required_dtype == batch[key].dtype
 
 class TestHostCallback:
   pass

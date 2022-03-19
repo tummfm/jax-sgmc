@@ -279,7 +279,8 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
 
     selected_observations = tree_index(self._reference_data, selection_indices)
     info = mini_batch_information(observation_count=self._observation_count,
-                                  batch_size=batch_size)
+                                  batch_size=batch_size,
+                                  mask=jnp.ones(batch_size, dtype=jnp.bool_))
 
     return key, (selected_observations, info)
 

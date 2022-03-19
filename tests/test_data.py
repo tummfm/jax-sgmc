@@ -20,6 +20,7 @@ import tensorflow_datasets as tfds
 import jax.numpy as jnp
 from jax import ShapeDtypeStruct
 from jax import test_util
+from jax import random
 
 from jax_sgmc.data.core import random_reference_data, full_reference_data
 from jax_sgmc.data.numpy_loader import NumpyDataLoader, DeviceNumpyDataLoader
@@ -136,7 +137,8 @@ class TestNumpyDeviceDataLoader:
                                                    shuffle=True)
 
     samples_a = data_loader.get_batches(chain_a)[0]["ordered_indices"]
-    samples_b = onp.array([data_loader.get_batches(chain_b)[0]["ordered_indices"] for _ in range(ceil_samples)])
+    samples_b = onp.array([data_loader.get_batches(chain_b)[0]["ordered_indices"]
+                           for _ in range(ceil_samples)])
 
     # There must be exactly two duplicates
     _, count_a = onp.unique(samples_a, return_counts=True)
@@ -387,6 +389,44 @@ class TestNumpyHostDataLoader:
       required_shape = (batch_size,) + data_format[key].shape[1:]
       assert required_shape == init_batch[key].shape
       assert data_format[key].dtype == init_batch[key].dtype
+
+  @pytest.mark.parametrize("data",
+                           [{"x": [0, 1, 2], "y": [[0, 1], [0, 2], [0, 3]]},
+                            {"x": onp.arange(3), "y": onp.zeros((3, 3))},
+                            {"x": jnp.arange(3), "y": jnp.zeros((3, 3))}],
+                           ids=["python list", "numpy array", "device array"])
+  def test_input_data_type(self, data):
+    # The data returned must always be a jax device array
+    data_loader = DeviceNumpyDataLoader(**data)
+
+    chain_a = data_loader.init_random_data()
+    _, (batch, _) = data_loader.get_random_data(chain_a, batch_size=3)
+
+    assert type(batch["x"]) == type(jnp.array(1))
+    assert type(batch["y"]) == type(jnp.array(1))
+
+  def test_input_data_wrong_shape(self):
+    # The first axis determines the total number of observations
+    x = jnp.arange(5)
+    y = jnp.zeros((3, 7))
+
+    with pytest.raises(ValueError):
+      NumpyDataLoader(x=x, y=y)
+
+  def test_seeding(self, data_loader):
+    batch_size = 3
+
+    # Check that chains with the same seed return the same batches
+    chain_a1 = data_loader.init_random_data(key=random.PRNGKey(1))
+    chain_a2 = data_loader.init_random_data(key=random.PRNGKey(1))
+    chain_b = data_loader.init_random_data(key=random.PRNGKey(2))
+
+    _, (batch_a1, _) = data_loader.get_random_data(chain_a1, batch_size)
+    _, (batch_a2, _) = data_loader.get_random_data(chain_a2, batch_size)
+    _, (batch_b, _) = data_loader.get_random_data(chain_b, batch_size)
+
+    assert jnp.all(batch_a1["ordered_indices"] == batch_a2["ordered_indices"])
+    assert jnp.any(batch_b["ordered_indices"] != batch_a2["ordered_indices"])
 
 @pytest.mark.tensorflow
 class TestTensorflowDataLoader:

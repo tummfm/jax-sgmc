@@ -81,6 +81,7 @@ def problem():
 
 class TestSGLD:
 
+  @pytest.mark.slow
   def test_default(self, problem):
 
     data_loader, batch_fn, potential_fn, w, w_init = problem
@@ -104,6 +105,7 @@ class TestSGLD:
     # Check that the standard deviation is close
     assert jnp.all(jnp.abs(default[0]["samples"]["variables"]["sigma"] - 0.5)  < 0.5)
 
+  @pytest.mark.slow
   def test_rms(self, problem):
 
     data_loader, batch_fn, potential_fn, w, w_init = problem

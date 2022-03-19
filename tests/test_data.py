@@ -666,7 +666,7 @@ class TestRandomDataAccess:
       assert onp.all(test_sample_count == 1)
       assert test_obs_size == obs_count
 
-  @pytest.mark.skip("Pmap requires more devices")
+  @pytest.mark.pmap
   def test_pmap_random_data(self, data_loader, example_problem, dataset):
     _, _, obs_count = dataset
 
@@ -817,7 +817,7 @@ class TestFullDataAccess:
   def test_vmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     pass
 
-  @pytest.mark.skip("Pmap requires more devices")
+  @pytest.mark.pmap
   def test_pmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     pass
 
@@ -825,6 +825,6 @@ class TestFullDataAccess:
   def test_vmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     pass
 
-  @pytest.mark.skip("Pmap requires more devices")
+  @pytest.mark.pmap
   def test_pmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     pass

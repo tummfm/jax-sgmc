@@ -68,7 +68,7 @@ class TestPotential():
 
     scan_pot = minibatch_potential(prior, likelihood, strategy="map")
     vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap")
-    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
+    # pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -84,11 +84,11 @@ class TestPotential():
 
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, true_result)
     test_util.check_close(vmap_result, true_result)
-    test_util.check_close(pmap_result, true_result)
+    # test_util.check_close(pmap_result, true_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_zero(self, potential, obs, dim):
@@ -98,7 +98,7 @@ class TestPotential():
 
     scan_pot = minibatch_potential(prior, likelihood, strategy="map")
     vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap")
-    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
+    # pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -114,11 +114,11 @@ class TestPotential():
     zero_array = jnp.array(-0.0)
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, zero_array)
     test_util.check_close(vmap_result, zero_array)
-    test_util.check_close(pmap_result, zero_array)
+    # test_util.check_close(pmap_result, zero_array)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_jit(self, potential, obs, dim):
@@ -128,7 +128,7 @@ class TestPotential():
 
     scan_pot = jit(minibatch_potential(prior, likelihood, strategy="map"))
     vmap_pot = jit(minibatch_potential(prior, likelihood, strategy="vmap"))
-    pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
+    # pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -145,11 +145,11 @@ class TestPotential():
     zero_array = jnp.array(-0.0)
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, zero_array)
     test_util.check_close(vmap_result, zero_array)
-    test_util.check_close(pmap_result, zero_array)
+    # test_util.check_close(pmap_result, zero_array)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_equal(self, potential, obs, dim):
@@ -158,7 +158,7 @@ class TestPotential():
 
     scan_pot = jit(minibatch_potential(prior, likelihood, strategy="map"))
     vmap_pot = jit(minibatch_potential(prior, likelihood, strategy="vmap"))
-    pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
+    # pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -174,10 +174,10 @@ class TestPotential():
 
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, vmap_result)
-    test_util.check_close(scan_result, pmap_result)
+    # test_util.check_close(scan_result, pmap_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_gradient_equal(self, potential, obs, dim):
@@ -192,10 +192,10 @@ class TestPotential():
       jax.grad(minibatch_potential(prior, likelihood, strategy="vmap"),
                has_aux=True,
                argnums=0))
-    pmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
-               has_aux=True,
-               argnums=0))
+    # pmap_grad = jit(
+    #   jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
+    #            has_aux=True,
+    #            argnums=0))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -211,10 +211,10 @@ class TestPotential():
 
     scan_result, _ = scan_grad(sample, reference_data)
     vmap_result, _ = vmap_grad(sample, reference_data)
-    pmap_result, _ = pmap_grad(sample, reference_data)
+    # pmap_result, _ = pmap_grad(sample, reference_data)
 
     test_util.check_close(scan_result, vmap_result)
-    test_util.check_close(scan_result, pmap_result)
+    # test_util.check_close(scan_result, pmap_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_gradient_shape(self, potential, obs, dim):
@@ -230,10 +230,10 @@ class TestPotential():
       jax.grad(minibatch_potential(prior, likelihood, strategy="vmap"),
                has_aux=True,
                argnums=0))
-    pmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
-               has_aux=True,
-               argnums=0))
+    # pmap_grad = jit(
+    #   jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
+    #            has_aux=True,
+    #            argnums=0))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -251,15 +251,15 @@ class TestPotential():
     zero_gradient = jax.tree_map(jnp.zeros_like, sample)
     scan_result, _ = scan_grad(sample, reference_data)
     vmap_result, _ = vmap_grad(sample, reference_data)
-    pmap_result, _ = pmap_grad(sample, reference_data)
+    # pmap_result, _ = pmap_grad(sample, reference_data)
 
     print(scan_result)
     print(vmap_result)
-    print(pmap_result)
+    # print(pmap_result)
 
     test_util.check_close(scan_result, zero_gradient)
     test_util.check_close(vmap_result, zero_gradient)
-    test_util.check_close(pmap_result, zero_gradient)
+    # test_util.check_close(pmap_result, zero_gradient)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stateful_stochastic_potential_zero(self, stateful_potential, obs, dim):
@@ -269,7 +269,7 @@ class TestPotential():
 
     scan_pot = minibatch_potential(prior, likelihood, strategy="map", has_state=True)
     vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap", has_state=True)
-    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap", has_state=True)
+    # pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap", has_state=True)
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -285,14 +285,14 @@ class TestPotential():
 
     _, new_state_map = scan_pot(sample, reference_data, state=init_state)
     _, new_state_vmap = vmap_pot(sample, reference_data, state=init_state)
-    _, new_state_pmap = pmap_pot(sample, reference_data, state=init_state)
+    # _, new_state_pmap = pmap_pot(sample, reference_data, state=init_state)
 
     print(init_state)
     print(new_state_map)
 
     test_util.check_close(new_state_map, sample)
     test_util.check_close(new_state_vmap, sample)
-    test_util.check_close(new_state_pmap, sample)
+    # test_util.check_close(new_state_pmap, sample)
 
   @pytest.mark.parametrize("obs, dim, mbsize", itertools.product([7, 11], [3, 5], [2, 3]))
   def test_full_potential(self, potential, obs, dim, mbsize):

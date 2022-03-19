@@ -95,6 +95,7 @@ class TestTreeMap():
     test_util.check_close(zero, zero_tree)
     test_util.check_close(one, one_tree)
 
+  @pytest.mark.pmap
   def test_pmap(self, random_tree):
     (random_tree, _), _ = random_tree
 

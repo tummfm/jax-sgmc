@@ -28,6 +28,7 @@ from jax_sgmc import potential
 from jax_sgmc import scheduler
 from jax_sgmc import solver
 from jax_sgmc import integrator
+from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 @pytest.fixture
 def problem():
@@ -52,7 +53,7 @@ def problem():
   M = 10
   cs = 1000
 
-  data_loader = data.NumpyDataLoader(x=x, y=y)
+  data_loader = NumpyDataLoader(x=x, y=y)
   batch_fn = data.random_reference_data(data_loader,
                                         cached_batches_count=cs,
                                         mb_size=M)
@@ -80,6 +81,7 @@ def problem():
 
 class TestSGLD:
 
+  @pytest.mark.slow
   def test_default(self, problem):
 
     data_loader, batch_fn, potential_fn, w, w_init = problem
@@ -103,6 +105,7 @@ class TestSGLD:
     # Check that the standard deviation is close
     assert jnp.all(jnp.abs(default[0]["samples"]["variables"]["sigma"] - 0.5)  < 0.5)
 
+  @pytest.mark.slow
   def test_rms(self, problem):
 
     data_loader, batch_fn, potential_fn, w, w_init = problem

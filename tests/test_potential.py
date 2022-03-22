@@ -12,7 +12,8 @@ import pytest
 
 # from jax_sgmc.data import mini_batch
 from jax_sgmc.potential import minibatch_potential, full_potential
-from jax_sgmc.data import mini_batch_information, NumpyDataLoader, full_reference_data
+from jax_sgmc.data import mini_batch_information, full_reference_data
+from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 # Todo: Test the potential evaluation function on arbitrary pytrees.
 
@@ -67,7 +68,7 @@ class TestPotential():
 
     scan_pot = minibatch_potential(prior, likelihood, strategy="map")
     vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap")
-    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
+    # pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -75,18 +76,19 @@ class TestPotential():
     split1, split2 = random.split(key, 2)
     observations = jnp.tile(jnp.arange(4), (dim, 1))
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=dim)
+                                                          batch_size=dim,
+                                                          mask=jnp.ones(dim))
     sample = jnp.ones(4)
 
     true_result = -jnp.sum(jnp.arange(4)) * obs -4
 
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, true_result)
     test_util.check_close(vmap_result, true_result)
-    test_util.check_close(pmap_result, true_result)
+    # test_util.check_close(pmap_result, true_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_zero(self, potential, obs, dim):
@@ -96,7 +98,7 @@ class TestPotential():
 
     scan_pot = minibatch_potential(prior, likelihood, strategy="map")
     vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap")
-    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
+    # pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap")
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -105,17 +107,18 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
     zero_array = jnp.array(-0.0)
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, zero_array)
     test_util.check_close(vmap_result, zero_array)
-    test_util.check_close(pmap_result, zero_array)
+    # test_util.check_close(pmap_result, zero_array)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_jit(self, potential, obs, dim):
@@ -125,7 +128,7 @@ class TestPotential():
 
     scan_pot = jit(minibatch_potential(prior, likelihood, strategy="map"))
     vmap_pot = jit(minibatch_potential(prior, likelihood, strategy="vmap"))
-    pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
+    # pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -135,17 +138,18 @@ class TestPotential():
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": jnp.zeros(dim)}
 
     zero_array = jnp.array(-0.0)
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, zero_array)
     test_util.check_close(vmap_result, zero_array)
-    test_util.check_close(pmap_result, zero_array)
+    # test_util.check_close(pmap_result, zero_array)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_equal(self, potential, obs, dim):
@@ -154,7 +158,7 @@ class TestPotential():
 
     scan_pot = jit(minibatch_potential(prior, likelihood, strategy="map"))
     vmap_pot = jit(minibatch_potential(prior, likelihood, strategy="vmap"))
-    pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
+    # pmap_pot = jit(minibatch_potential(prior, likelihood, strategy="pmap"))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -164,15 +168,16 @@ class TestPotential():
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": random.uniform(split3, (dim, ))}
 
     scan_result, _ = scan_pot(sample, reference_data)
     vmap_result, _ = vmap_pot(sample, reference_data)
-    pmap_result, _ = pmap_pot(sample, reference_data)
+    # pmap_result, _ = pmap_pot(sample, reference_data)
 
     test_util.check_close(scan_result, vmap_result)
-    test_util.check_close(scan_result, pmap_result)
+    # test_util.check_close(scan_result, pmap_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_gradient_equal(self, potential, obs, dim):
@@ -187,10 +192,10 @@ class TestPotential():
       jax.grad(minibatch_potential(prior, likelihood, strategy="vmap"),
                has_aux=True,
                argnums=0))
-    pmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
-               has_aux=True,
-               argnums=0))
+    # pmap_grad = jit(
+    #   jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
+    #            has_aux=True,
+    #            argnums=0))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -200,15 +205,16 @@ class TestPotential():
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": random.uniform(split3, (dim,))}
 
     scan_result, _ = scan_grad(sample, reference_data)
     vmap_result, _ = vmap_grad(sample, reference_data)
-    pmap_result, _ = pmap_grad(sample, reference_data)
+    # pmap_result, _ = pmap_grad(sample, reference_data)
 
     test_util.check_close(scan_result, vmap_result)
-    test_util.check_close(scan_result, pmap_result)
+    # test_util.check_close(scan_result, pmap_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stochastic_potential_gradient_shape(self, potential, obs, dim):
@@ -224,10 +230,10 @@ class TestPotential():
       jax.grad(minibatch_potential(prior, likelihood, strategy="vmap"),
                has_aux=True,
                argnums=0))
-    pmap_grad = jit(
-      jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
-               has_aux=True,
-               argnums=0))
+    # pmap_grad = jit(
+    #   jax.grad(minibatch_potential(prior, likelihood, strategy="pmap"),
+    #            has_aux=True,
+    #            argnums=0))
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -238,21 +244,22 @@ class TestPotential():
                     "power": random.exponential(split1, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(
       observation_count=obs,
-      batch_size=obs)
+      batch_size=obs,
+      mask=jnp.ones(dim))
     sample = {"scale": 0.5, "base": random.uniform(split2, (dim,))}
 
     zero_gradient = jax.tree_map(jnp.zeros_like, sample)
     scan_result, _ = scan_grad(sample, reference_data)
     vmap_result, _ = vmap_grad(sample, reference_data)
-    pmap_result, _ = pmap_grad(sample, reference_data)
+    # pmap_result, _ = pmap_grad(sample, reference_data)
 
     print(scan_result)
     print(vmap_result)
-    print(pmap_result)
+    # print(pmap_result)
 
     test_util.check_close(scan_result, zero_gradient)
     test_util.check_close(vmap_result, zero_gradient)
-    test_util.check_close(pmap_result, zero_gradient)
+    # test_util.check_close(pmap_result, zero_gradient)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
   def test_stateful_stochastic_potential_zero(self, stateful_potential, obs, dim):
@@ -262,7 +269,7 @@ class TestPotential():
 
     scan_pot = minibatch_potential(prior, likelihood, strategy="map", has_state=True)
     vmap_pot = minibatch_potential(prior, likelihood, strategy="vmap", has_state=True)
-    pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap", has_state=True)
+    # pmap_pot = minibatch_potential(prior, likelihood, strategy="pmap", has_state=True)
 
     # Setup reference data
     key = random.PRNGKey(0)
@@ -271,20 +278,21 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(dim))
     sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
     init_state = {"scale": jnp.array([0.0]), "base": jnp.zeros(dim)}
 
     _, new_state_map = scan_pot(sample, reference_data, state=init_state)
     _, new_state_vmap = vmap_pot(sample, reference_data, state=init_state)
-    _, new_state_pmap = pmap_pot(sample, reference_data, state=init_state)
+    # _, new_state_pmap = pmap_pot(sample, reference_data, state=init_state)
 
     print(init_state)
     print(new_state_map)
 
     test_util.check_close(new_state_map, sample)
     test_util.check_close(new_state_vmap, sample)
-    test_util.check_close(new_state_pmap, sample)
+    # test_util.check_close(new_state_pmap, sample)
 
   @pytest.mark.parametrize("obs, dim, mbsize", itertools.product([7, 11], [3, 5], [2, 3]))
   def test_full_potential(self, potential, obs, dim, mbsize):
@@ -300,7 +308,8 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(mbsize))
     sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
     init_state = {"scale": jnp.array([0.0]), "base": jnp.zeros(dim)}
 
@@ -336,13 +345,17 @@ class TestPotential():
     observations = {"scale": random.exponential(split1, shape=(obs,)),
                     "power": random.exponential(split2, shape=(obs, dim))}
     reference_data = observations, mini_batch_information(observation_count=obs,
-                                                          batch_size=obs)
+                                                          batch_size=obs,
+                                                          mask=jnp.ones(mbsize))
 
     sample = {"scale": jnp.array([0.5]), "base": jnp.ones(dim)}
     pot_results = lambda obs: scan_pot(
       sample,
       (jax.tree_map(partial(jnp.expand_dims, axis=0), obs),
-       mini_batch_information(observation_count=1, batch_size=1)))
+       mini_batch_information(
+         observation_count=1,
+         batch_size=1,
+         mask=jnp.ones(1))))
 
     likelihoods, _ = lax.map(pot_results, observations)
     true_variance = jnp.var(likelihoods)

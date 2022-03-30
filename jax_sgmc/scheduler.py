@@ -137,6 +137,7 @@ from typing import Callable, Tuple
 import jax.numpy as jnp
 from jax import lax
 from jax import random
+from jax.experimental import host_callback as hcb
 
 from jax_sgmc.util import Array
 
@@ -173,7 +174,8 @@ scheduler_state = namedtuple("scheduler_state",
                               "step_size_state",
                               "temperature_state",
                               "burn_in_state",
-                              "thinning_state"])
+                              "thinning_state",
+                              "progress_bar_state"])
 """Collects the states of the specific schedulers.
 
 Attributes:
@@ -200,12 +202,12 @@ Attributes:
 # implement only rarely used auxillary variables by providing default values.
 # The update functions are collected at a central state.
 
-# Todo: Make this more flexible for developers?
-
 def init_scheduler(step_size: specific_scheduler = None,
                    temperature: specific_scheduler = None,
                    burn_in: specific_scheduler = None,
                    thinning: specific_scheduler = None,
+                   progress_bar: bool = True,
+                   progress_bar_steps: Array = 20
                    ) -> Tuple[Callable, Callable, Callable]:
   """Initialize the scheduler.
 
@@ -218,6 +220,7 @@ def init_scheduler(step_size: specific_scheduler = None,
     temperature: Triplet from temperature scheduler initialization
     burn_in: Triplet from burn-in scheduler initialization
     thinning: Triplet from thinning scheduler initialization
+    progress_bar: Show the percentage of completed steps
 
   Returns:
     Returns a triplet of ``(init_fn, update_fn, get_fn)``.
@@ -237,12 +240,15 @@ def init_scheduler(step_size: specific_scheduler = None,
       lambda *args, **kwargs: None,
       lambda *args, **kwargs: True)
 
+  if progress_bar:
+    init_progress_bar, update_progress_bar = _progress_bar(burn_in, thinning)
+
   def init_fn(iterations: int,
               **scheduler_kwargs
               ) -> Tuple[scheduler_state, static_information]:
 
     # Initialize all the specific schedulers
-    state = (0,) # Start with iteration 0
+    state = (0, iterations) # Start with iteration 0
     thinning_state, total_samples = thinning.init(
       iterations,
       **scheduler_kwargs.get('thinning', {}))
@@ -251,6 +257,15 @@ def init_scheduler(step_size: specific_scheduler = None,
       **scheduler_kwargs.get('burn_in', {}))
     # If not thinning is provided, collect all samples not subject to burn in
     total_samples = min(total_samples, collected_samples)
+
+    if progress_bar:
+      pg_steps = scheduler_kwargs.get("progress_bar_steps", progress_bar_steps)
+      pg_enabled = scheduler_kwargs.get("enabled", jnp.array(progress_bar))
+
+      progress_bar_state = init_progress_bar(
+        jnp.array(iterations), total_samples, pg_steps, pg_enabled)
+    else:
+      progress_bar_state = None
 
     init_state = scheduler_state(
       state=state,
@@ -261,15 +276,17 @@ def init_scheduler(step_size: specific_scheduler = None,
         iterations,
         **scheduler_kwargs.get('temperature', {})),
       burn_in_state=burn_in_state,
-      thinning_state=thinning_state)
+      thinning_state=thinning_state,
+      progress_bar_state=progress_bar_state)
     static = static_information(
       samples_collected=total_samples)
     return init_state, static
 
   def update_fn(state: scheduler_state, **kwargs) -> scheduler_state:
     # Keep track of current iteration
-    iteration, = state.state
+    iteration, total_iterations = state.state
     current_iteration = iteration + 1
+
     # Update the states
     step_size_state = step_size.update(state.step_size_state,
                                        iteration,
@@ -283,17 +300,31 @@ def init_scheduler(step_size: specific_scheduler = None,
     thinning_state = thinning.update(state.thinning_state,
                                      iteration,
                                      **kwargs)
-    state = (current_iteration,)
+
+    if progress_bar:
+      # The burn in and thinning state are required to count the number of
+      # collected samples
+      progress_bar_state = update_progress_bar(
+        state.progress_bar_state,
+        iteration,
+        burn_in_state,
+        thinning_state,
+        **kwargs)
+    else:
+      progress_bar_state = None
+
+    new_scheduler_state = (current_iteration, total_iterations)
     updated_scheduler_state = scheduler_state(
-      state=state,
+      state=new_scheduler_state,
       step_size_state=step_size_state,
       temperature_state=temperature_state,
       burn_in_state=burn_in_state,
-      thinning_state=thinning_state)
+      thinning_state=thinning_state,
+      progress_bar_state=progress_bar_state)
     return updated_scheduler_state
 
   def get_fn(state: scheduler_state, **kwargs) -> schedule:
-    iteration, = state.state
+    iteration, total_iterations = state.state
     current_step_size = step_size.get(state.step_size_state,
                                       iteration,
                                       **kwargs)
@@ -306,6 +337,7 @@ def init_scheduler(step_size: specific_scheduler = None,
     current_thinning = thinning.get(state.thinning_state,
                                     iteration,
                                     **kwargs)
+
     current_schedule = schedule(
       step_size=jnp.array(current_step_size),
       temperature=jnp.array(current_temperature),
@@ -371,6 +403,80 @@ def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
     Returns a triplet as described above
   """
   raise NotImplementedError
+
+################################################################################
+#
+# Progress bar
+#
+################################################################################
+
+def _progress_bar(burn_in: specific_scheduler,
+                  thinning: specific_scheduler):
+  """Prints the progress of the solver.
+
+  Args:
+    burn_in: Burn in scheduler to count accepted samples
+    thinning: Thinning scheduler to count accepted samples
+
+  """
+
+  def _print_fn(info, _):
+    percentage = round(info['current_iteration'] / info['total_iterations'] * 100)
+    total_samples = int(info["total_samples"])
+    collected_samples = int(info["collected_samples"])
+    current_iteration = int(info["current_iteration"])
+    total_iterations = int(info["total_iterations"])
+
+    print(f"[Step {current_iteration}/{total_iterations}]"
+          f"({percentage}%) Collected {collected_samples} of "
+          f"{total_samples} samples...")
+
+  def init_fn(iterations: Array,
+              num_samples: Array,
+              steps: Array = jnp.array(20),
+              enabled: Array = jnp.array(True)
+              ) -> Tuple[Array, Array, Array, Array, Array]:
+    # Set already collected samples to zero
+    init_state = iterations, num_samples, jnp.zeros(1), steps, enabled
+    return init_state
+
+  def step_fn(state: Tuple[Array, Array, Array, Array, Array],
+              iteration: Array,
+              burn_in_state,
+              thinning_state,
+              **kwargs
+              ):
+    iterations, tot_samples, collected_samples, steps, enabled = state
+
+    # A sample is going to be saved if it is not subject to burn in and accepted
+    sample_burn_in = burn_in.get(burn_in_state, iteration, **kwargs)
+    sample_accepted = thinning.get(thinning_state, iteration, **kwargs)
+    saved = sample_burn_in * sample_accepted
+    collected_samples += saved
+
+    info = {
+      "total_iterations": iterations,
+      "current_iteration": iteration,
+      "total_samples": tot_samples,
+      "collected_samples": collected_samples,
+      "kwargs": kwargs
+    }
+
+    # Calculate number of steps until the progress should be printed out
+    num_its = jnp.int_(jnp.floor(iterations / steps))
+
+    # Return the number of collected samples as result of id_tap
+    collected_samples = lax.cond(
+      jnp.logical_and(jnp.mod(iteration, num_its) == 0, enabled),
+      lambda arg: hcb.id_tap(_print_fn, arg, result=collected_samples),
+      lambda arg: info["collected_samples"],
+      info
+    )
+
+    new_state = iterations, tot_samples, collected_samples, steps, enabled
+    return new_state
+
+  return init_fn, step_fn
 
 ################################################################################
 #

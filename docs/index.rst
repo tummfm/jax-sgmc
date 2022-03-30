@@ -16,13 +16,17 @@ Modular stochastic gradient MCMC for Jax.
    :maxdepth: 2
    :caption: Reference Documentation
 
+   usage/solver
    usage/data
-
+   usage/potential
+   usage/io
 
 .. toctree::
    :maxdepth: 2
    :caption: Advanced Topics
 
+   advanced/adaption
+   advanced/scheduler
    advanced/util
 
 

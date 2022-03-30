@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.abspath('..'))
 # -- Project information -----------------------------------------------------
 
 project = 'jax-sgmc'
-copyright = '2021, Paul Fuchs'
-author = 'Paul Fuchs'
+copyright = '2021, Multiscale Modeling of Fluid Materials, TU Munich'
+author = 'Multiscale Modeling of Fluid Materials'
 
 # The full version, including alpha/beta/rc tags
 release = '0.0.1'
@@ -35,6 +35,7 @@ release = '0.0.1'
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
+    'sphinx.ext.coverage',
     'sphinx.ext.doctest',
     'sphinx.ext.intersphinx',
     'sphinx.ext.mathjax',
@@ -77,6 +78,17 @@ nb_render_priority = {
             "text/plain",
         ),
   "doctest": (
+            "application/vnd.jupyter.widget-view+json",
+            "application/javascript",
+            "text/html",
+            "image/svg+xml",
+            "image/png",
+            "image/jpeg",
+            "text/markdown",
+            "text/latex",
+            "text/plain",
+  ),
+  "coverage": (
             "application/vnd.jupyter.widget-view+json",
             "application/javascript",
             "text/html",

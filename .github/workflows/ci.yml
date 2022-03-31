@@ -66,18 +66,18 @@ jobs:
   test-alias:
   
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v2
     - name: Set up Python 3.8
       uses: actions/setup-python@v2
       with:
         python-version: 3.8
-    - name: Install jax_sgmc
+    - name: Install tox
       run: |
         python -m pip install --upgrade pip
-        pip install .
-    - name: Test slow tests with pytest
+        pip install tox
+    - name: Test with tox
       run: |
-        pytest ./tests -m "slow"
+        tox -e pytest_alias
     

@@ -6,6 +6,7 @@ jax_sgmc
    :caption: jax_sgmc
 
    jax_sgmc.adaption
+   jax_sgmc.alias
    jax_sgmc.data
    jax_sgmc.integrator
    jax_sgmc.io

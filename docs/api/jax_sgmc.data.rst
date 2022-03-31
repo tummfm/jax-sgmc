@@ -13,6 +13,23 @@ ________________________
 
 .. autofunction:: jax_sgmc.data.core.full_reference_data
 
+.. autoclass:: jax_sgmc.data.core.GetBatchFunction
+
+   .. automethod:: __call__
+
+.. autoclass:: jax_sgmc.data.core.FullDataMapFunction
+
+    .. automethod:: __call__
+
+.. autoclass:: jax_sgmc.data.core.MaskedMappedFunction
+
+    .. automethod:: __call__
+
+.. autoclass:: jax_sgmc.data.core.UnmaskedMappedFunction
+
+    .. automethod:: __call__
+
+
 States
 _______
 

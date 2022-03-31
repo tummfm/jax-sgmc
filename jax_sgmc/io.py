@@ -30,7 +30,7 @@ from pathlib import Path
 from functools import partial
 import threading
 
-from typing import Any, NoReturn, Union, Tuple, Callable, Type, Dict
+from typing import Any, Union, Tuple, Callable, Type, Dict, NoReturn
 
 from collections import namedtuple
 
@@ -67,7 +67,7 @@ PyTree = Any
 # Global rules for translating a tree-node into a dict
 _dictionize_rules: Dict[Type, Callable] = {}
 
-def register_dictionize_rule(type: Type) -> NoReturn:
+def register_dictionize_rule(type: Type) -> Callable[[Callable], None]:
   """Decorator to define new rules transforming a pytree node to a dict.
 
   By default, transformations are defined for some default types:

@@ -186,6 +186,7 @@ by passing the keyword argument `exclude_keys`.
 
   >>> # The data pipeline can be used directly
   >>> pipeline, info = tfds.load("cifar10", split="train", with_info=True)
+  ...
   >>> print(info.features)
   FeaturesDict({
       'id': Text(shape=(), dtype=tf.string),

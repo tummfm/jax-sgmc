@@ -43,7 +43,7 @@ jobs:
         pip install .[test]
     - name: Test with pytest
       run: |
-        pytest --tb=line -m "not tensorflow and not hdf5 and not pmap and not slow"
+        pytest --tb=line -m "not tensorflow and not hdf5 and not pmap and not solver"
 
   test-with-tensorflow:
 
@@ -59,6 +59,24 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install .[test,tensorflow]
-    - name: Test with tox
+    - name: Test with pytest
       run: |
         pytest --tb=line -m "tensorflow"
+
+  test-alias:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
+    - name: Install requirements
+      run: |
+        python -m pip install --upgrade pip
+        pip install .[test,tensorflow]
+    - name: Test with pytest
+      run: |
+        pytest --tb=line -m "solver"

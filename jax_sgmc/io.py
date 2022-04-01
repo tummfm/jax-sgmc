@@ -375,6 +375,10 @@ class HDF5Collector(DataCollector):
   into the hdf5 file format. The samples are saved in a structure similar to the
   original pytree and can thus be viewed easily via the hdf5-viewer.
 
+  Note:
+    This class requires that ``h5py`` is installed. Additional information
+    can be found in the :ref:`installation instructions<additional_requirements>`.
+
   .. doctest::
 
     >>> import tempfile

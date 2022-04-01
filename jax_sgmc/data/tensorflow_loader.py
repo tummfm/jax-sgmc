@@ -17,6 +17,11 @@
 The tensorflow dataloader supports tensorflow Datasets, e.g. from the
 `tensorflow_datasets` package.
 
+Note:
+  This submodule requires that ``tensorflow`` and ``tensorflow_datasets`` are
+  installed. Additional information can be found in the
+  :ref:`installation instructions<additional_requirements>`.
+
 """
 
 from typing import List, Any

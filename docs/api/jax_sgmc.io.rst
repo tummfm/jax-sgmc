@@ -1,5 +1,5 @@
-jax_sgmc.io.rst
-================
+jax_sgmc.io
+===========
 
 .. automodule:: jax_sgmc.io
 

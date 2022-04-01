@@ -24,6 +24,9 @@ EXTRAS_REQUIRE = {
         'sphinx_rtd_theme',
         'sphinx-autodoc-typehints==1.11.1',
         'myst-nb',
+    ],
+    'hdf5': [
+        'h5py'
     ]
 }
 

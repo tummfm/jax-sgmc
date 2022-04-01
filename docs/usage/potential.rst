@@ -1,3 +1,4 @@
+.. _likelihood_to_potential:
 Compute Potential from Likelihood
 ==================================
 

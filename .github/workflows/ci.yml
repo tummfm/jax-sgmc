@@ -43,7 +43,7 @@ jobs:
         pip install .[test]
     - name: Test with pytest
       run: |
-        pytest --tb=line -m "not tensorflow and not hdf5 and not pmap and not slow"
+        pytest --tb=line -m "not tensorflow and not hdf5 and not pmap and not solver"
 
   test-with-tensorflow:
 
@@ -79,4 +79,4 @@ jobs:
         pip install .[test,tensorflow]
     - name: Test with pytest
       run: |
-        pytest --tb=line -m "slow"
+        pytest --tb=line -m "solver"

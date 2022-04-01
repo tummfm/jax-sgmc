@@ -81,7 +81,7 @@ def problem():
 
 class TestAlias:
 
-  @pytest.mark.slow
+  @pytest.mark.solver
   def test_rms_prop(self, problem):
     data_loader, batch_fn, potential_fn, _, w, w_init = problem
 
@@ -103,6 +103,7 @@ class TestAlias:
     assert jnp.all(
       jnp.abs(results[0]["samples"]["variables"]["sigma"] - 0.5) < 0.5)
 
+  @pytest.mark.solver
   def test_re_sgld(self, problem):
     data_loader, batch_fn, potential_fn, _, w, w_init = problem
 
@@ -124,6 +125,7 @@ class TestAlias:
     assert jnp.all(
       jnp.abs(results[0]["samples"]["variables"]["sigma"] - 0.7) < 0.7)
 
+  @pytest.mark.solver
   def test_amagold(self, problem):
     data_loader, batch_fn, potential_fn, full_potential_fn, w, w_init = problem
 
@@ -144,6 +146,7 @@ class TestAlias:
     assert jnp.all(
       jnp.abs(results[0]["samples"]["variables"]["sigma"] - 0.5) < 0.5)
 
+  @pytest.mark.solver
   def test_sggmc(self, problem):
     data_loader, batch_fn, potential_fn, full_potential_fn, w, w_init = problem
 
@@ -164,6 +167,7 @@ class TestAlias:
     assert jnp.all(
       jnp.abs(results[0]["samples"]["variables"]["sigma"] - 0.5) < 0.5)
 
+  @pytest.mark.solver
   def test_obabo(self, problem):
     data_loader, batch_fn, potential_fn, _, w, w_init = problem
 

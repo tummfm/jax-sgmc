@@ -9,7 +9,7 @@ INSTALL_REQUIRES = [
     'dataclasses'
 ]
 
-EXTRAS_REQUIRES = {
+EXTRAS_REQUIRE = {
     'tensorflow' : [
         'tensorflow',
         'tensorflow_datasets'
@@ -33,7 +33,7 @@ setuptools.setup(
     license='Apache 2.0',
     author='MMFM',
     install_requires=INSTALL_REQUIRES,
-    extras_requires=EXTRAS_REQUIRES,
+    extras_require=EXTRAS_REQUIRE,
     packages=setuptools.find_packages(),
     long_description_content_type='text/markdown',
     description='Stochastic Gradient Monte Carlo using Jax',

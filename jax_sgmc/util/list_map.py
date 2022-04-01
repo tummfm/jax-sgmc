@@ -34,7 +34,7 @@ def pytree_list_to_leaves(pytrees):
     >>>
     >>> concat_tree = lm.pytree_list_to_leaves([tree_a, tree_b])
     >>> print(concat_tree)
-    {'a': DeviceArray([0., 1.], dtype=float32), 'b': DeviceArray([[0., 0.],
+    {'a': DeviceArray([0., 1.], dtype=float32, weak_type=True), 'b': DeviceArray([[0., 0.],
                  [1., 1.]], dtype=float32)}
 
 

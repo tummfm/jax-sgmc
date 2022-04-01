@@ -14,3 +14,4 @@ Solvers
    amagold
    sggmc
    sghmc
+   obabo

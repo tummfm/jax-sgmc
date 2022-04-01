@@ -53,8 +53,8 @@ reference data sequentially via ``map`` or parallel via ``vmap`` or ``pmap``.
   >>> new_random_data_state, random_batch = batch_get(random_data_state, information=True)
   >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
   >>>
-  >>> print(potential_eval)
-  837.9893
+  >>> print(round(potential_eval))
+  838
 
 Batched Likelihood
 ___________________
@@ -81,15 +81,15 @@ case, it is expected that the returned likelihoods are a vectore with shape
   >>> new_random_data_state, random_batch = batch_get(random_data_state, information=True)
   >>> potential_eval, unused_state = stochastic_potential_fn(test_sample, random_batch)
   >>>
-  >>> print(potential_eval)
-  837.9893
+  >>> print(round(potential_eval))
+  838
   >>>
   >>> _, (likelihoods, _) = stochastic_potential_fn(test_sample,
   ...                                               random_batch,
   ...                                               likelihoods=True)
   >>>
-  >>> print(jnp.var(likelihoods))
-  7.289153
+  >>> print(round(jnp.var(likelihoods)))
+  7
 
 
 Full Potential
@@ -116,8 +116,8 @@ Here, the likelihood written for a single observation can be re-used.
   >>> potential_eval, (data_state, unused_state) = potential_fn(
   ...   test_sample, data_state, fmap_fun)
   >>>
-  >>> print(potential_eval)
-  707.4376
+  >>> print(round(potential_eval))
+  707
 
 Bached Likelihood
 __________________
@@ -131,8 +131,8 @@ The batched likelihood can also be used to calculate the full potential.
   >>> potential_eval, (data_state, unused_state) = potential_fn(
   ...   test_sample, data_state, fmap_fun)
   >>>
-  >>> print(potential_eval)
-  707.4376
+  >>> print(round(potential_eval))
+  707
 
 
 Likelihoods with States
@@ -159,7 +159,8 @@ as first positional argument.
   ...                                          random_batch,
   ...                                          state=(jnp.array(2), jnp.ones(5)))
   >>>
-  >>> print(potential_eval)
-  837.9893
+  >>> print(round(potential_eval))
+  838
   >>> print(new_state)
-  (DeviceArray(3, dtype=int32), DeviceArray([0.8914191 , 0.1184448 , 0.7666685 , 0.55906993, 1.1051651 ],            dtype=float32))
+  (DeviceArray(3, dtype=int32), DeviceArray([0.8914191 , 0.11844492, 0.7666685 , 0.55906993, 1.1051652 ],            dtype=float32))
+

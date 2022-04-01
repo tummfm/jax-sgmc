@@ -42,6 +42,7 @@ class TensorflowDataLoader(HostDataLoader):
   .. doctest::
 
     >>> import tensorflow_datasets as tdf
+    >>> import tensorflow_datasets as tfds
     >>> from jax_sgmc import data
     >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
     >>>

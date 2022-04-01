@@ -89,11 +89,11 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
   .. doctest::
 
     >>> import numpy as onp
-    >>> from jax_sgmc import data
+    >>> from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
     >>>
     >>> x, y = onp.arange(10), onp.zeros((10, 4, 3))
     >>>
-    >>> data_loader = data.DeviceNumpyDataLoader(name_for_x=x, name_for_y=y)
+    >>> data_loader = DeviceNumpyDataLoader(name_for_x=x, name_for_y=y)
     >>>
     >>> zero_batch = data_loader.initializer_batch(4)
     >>> for key, value in zero_batch.items():
@@ -145,11 +145,11 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
   .. doctest::
 
     >>> import numpy as onp
-    >>> from jax_sgmc import data
+    >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
     >>>
     >>> x, y = onp.arange(10), onp.zeros((10, 4, 3))
     >>>
-    >>> data_loader = data.NumpyDataLoader(name_for_x=x, name_for_y=y)
+    >>> data_loader = NumpyDataLoader(name_for_x=x, name_for_y=y)
     >>>
     >>> zero_batch = data_loader.initializer_batch(4)
     >>> for key, value in zero_batch.items():

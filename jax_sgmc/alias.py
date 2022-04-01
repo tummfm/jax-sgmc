@@ -18,80 +18,6 @@ While jax-sgmc has been designed to be flexible, starting with full
 flexibility can be complicated. Therefore, this file contains some popular
 solvers with preset properties, which can be applied directly to the problem or
 used as a guide to setup a custom solver.
-
-Usage
-------
-
-This toy example performs a small bayesian linear regression problem on a toy
-dataset. It contains all necessary steps to use a solver from ``alias.py``.
-
-.. doctest::
-
-  >>> import jax
-  >>> import jax.numpy as jnp
-  >>> from jax import random
-  >>> from jax.scipy.stats import norm
-  >>>
-  >>> from jax_sgmc import data, alias, potential
-  >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
-
-Setup Data Loader
-__________________
-
-In this example we first have to generate some data. As the data is already in
-the form of jnp-arrays, constructing a :class:`NumpyDataLoader` is the simplest
-option. For many datasets such as mnist, using the `TFDataLoader` is
-recommended, as it accepts datasets from `tensorflow_datasets`.
-
-  >>> N = 4
-  >>> samples = 1000  # Total samples
-  >>> sigma = 0.5
-  >>>
-  >>> key = random.PRNGKey(0)
-  >>> split1, split2, split3 = random.split(key, 3)
-  >>>
-  >>> w = random.uniform(split3, minval=-1, maxval=1, shape=(N, 1))
-  >>> noise = sigma * random.normal(split2, shape=(samples, 1))
-  >>> x = random.uniform(split1, minval=-10, maxval=10, shape=(samples, N))
-  >>> x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
-  ...                x[:, 3]]).transpose()
-  >>> y = jnp.matmul(x, w) + noise
-  >>>
-  >>> data_loader = NumpyDataLoader(x=x, y=y)
-
-Likelihood and Prior
-____________________
-
-The likelihood and prior wrap the model to be investigated. The potential
-modules takes care of combining both into a single potential function, which
-can be applied to a batch of data. Optionally, an additional model state can be
-passed to the likelihood.
-
-  >>> def model(sample, observations):
-  ...   weights = sample["w"]
-  ...   predictors = observations["x"]
-  ...   return jnp.dot(predictors, weights)
-  >>>
-  >>> def likelihood(state, sample, observations):
-  ...   sigma = sample["sigma"]
-  ...   y = observations["y"]
-  ...   y_pred = model(sample, observations)
-  ...   # Simply count upwards to demonstrate support of state
-  ...   new_state = state + 1
-  ...   return norm.logpdf(y - y_pred, scale=sigma), new_state
-  >>>
-  >>> def prior(unused_sample):
-  ...   return 0.0
-  >>>
-  >>> potential_fn = potential.minibatch_potential(prior=prior,
-  ...                                              likelihood=likelihood,
-  ...                                              strategy='vmap',
-  ...                                              has_state=True)
-  >>> full_potential_fn = potential.full_potential(prior=prior,
-  ...                                              likelihood=likelihood,
-  ...                                              strategy='vmap',
-  ...                                              has_state=True)
-
 """
 
 from functools import partial
@@ -121,19 +47,12 @@ def sgld(potential_fn: potential.minibatch_potential,
 
   [1] https://arxiv.org/abs/1512.07666
 
-    >>> rms_run = alias.sgld(potential_fn,
-    ...                      data_loader,
-    ...                      cache_size=512,
-    ...                      batch_size=10,
-    ...                      first_step_size=0.05,
-    ...                      last_step_size=0.001,
-    ...                      burn_in=20000,
-    ...                      accepted_samples=4000,
-    ...                      rms_prop=True,
-    ...                      progress_bar=False)
-    >>>
-    >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}
-    >>> results = rms_run(sample, init_model_state=0, iterations=50000)[0]['samples']['variables']
+  ::
+
+    rms_run = alias.sgld(...)
+
+    sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(10.0)}
+    results = rms_run(sample, init_model_state=0, iterations=50000)[0]['samples']['variables']
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -218,23 +137,16 @@ def re_sgld(potential_fn: potential.minibatch_potential,
 
   [1] https://arxiv.org/abs/2008.05367v3
 
-    >>> resgld_run = alias.re_sgld(potential_fn,
-    ...                            data_loader,
-    ...                            cache_size=512,
-    ...                            batch_size=10,
-    ...                            first_step_size=0.0001,
-    ...                            last_step_size=0.000005,
-    ...                            burn_in=20000,
-    ...                            accepted_samples=4000,
-    ...                            temperature=100.0,
-    ...                            progress_bar=False)
-    >>>
-    >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
-    >>> init_samples = [(sample, sample), (sample, sample), (sample, sample)]
-    >>>
-    >>> results = resgld_run(
-    ...   *init_samples, init_model_state=0, iterations=50000
-    ...   )[0]['samples']['variables']
+  ::
+
+    resgld_run = alias.re_sgld(...)
+
+    sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
+    init_samples = [(sample, sample), (sample, sample), (sample, sample)]
+
+    results = resgld_run(
+      *init_samples, init_model_state=0, iterations=50000
+      )[0]['samples']['variables']
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -321,21 +233,15 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
 
   [1] https://arxiv.org/abs/2003.00193
 
-    >>> amagold_run = alias.amagold(potential_fn,
-    ...                             full_potential_fn,
-    ...                             data_loader,
-    ...                             cache_size=512,
-    ...                             batch_size=64,
-    ...                             first_step_size=0.005,
-    ...                             last_step_size=0.0005,
-    ...                             burn_in=2000,
-    ...                             progress_bar=False)
-    >>>
-    >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
-    >>>
-    >>> results = amagold_run(
-    ...   sample, init_model_state=0, iterations=5000
-    ...   )[0]['samples']['variables']
+  ::
+
+    amagold_run = alias.amagold(...)
+
+    sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
+
+    results = amagold_run(
+      sample, init_model_state=0, iterations=5000
+      )[0]['samples']['variables']
 
   Args:
     stochastic_potential_fn: Stochastic potential over a minibatch of data
@@ -435,21 +341,15 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
 
   [1] https://arxiv.org/abs/2102.01691
 
-    >>> sggmc_run = alias.sggmc(potential_fn,
-    ...                         full_potential_fn,
-    ...                         data_loader,
-    ...                         cache_size=512,
-    ...                         batch_size=64,
-    ...                         first_step_size=0.005,
-    ...                         last_step_size=0.0005,
-    ...                         burn_in=2000,
-    ...                         progress_bar=False)
-    >>>
-    >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
-    >>>
-    >>> results = sggmc_run(
-    ...   sample, init_model_state=0, iterations=5000
-    ...   )[0]['samples']['variables']
+  ::
+
+    sggmc_run = alias.sggmc(...)
+
+    sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
+
+    results = sggmc_run(
+      sample, init_model_state=0, iterations=5000
+      )[0]['samples']['variables']
 
   Args:
     stochastic_potential_fn: Stochastic potential over a minibatch of data
@@ -542,20 +442,12 @@ def sghmc(potential_fn: potential.minibatch_potential,
 
   [1] https://arxiv.org/abs/1402.4102
 
-    >>> sghmc_run = alias.sghmc(potential_fn,
-    ...                         data_loader,
-    ...                         cache_size=512,
-    ...                         batch_size=10,
-    ...                         friction=100.0,
-    ...                         first_step_size=0.005,
-    ...                         last_step_size=0.00005,
-    ...                         burn_in=2000,
-    ...                         adapt_noise_model=True,
-    ...                         diagonal_noise=True,
-    ...                         progress_bar=False)
-    >>>
-    >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
-    >>> results = sghmc_run(sample, init_model_state=0, iterations=5000)[0]['samples']['variables']
+  ::
+
+    sghmc_run = alias.sghmc(...)
+
+    sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
+    results = sghmc_run(sample, init_model_state=0, iterations=5000)[0]['samples']['variables']
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data
@@ -631,18 +523,12 @@ def obabo(potential_fn: potential.minibatch_potential,
 
   [1] https://arxiv.org/abs/2102.01691
 
-    >>> sghmc_run = alias.obabo(potential_fn,
-    ...                         data_loader,
-    ...                         cache_size=512,
-    ...                         batch_size=10,
-    ...                         friction=100.0,
-    ...                         first_step_size=0.05,
-    ...                         last_step_size=0.001,
-    ...                         burn_in=2000,
-    ...                         progress_bar=False)
-    >>>
-    >>> sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
-    >>> results = sghmc_run(sample, init_model_state=0, iterations=5000)[0]['samples']['variables']
+  ::
+
+    sghmc_run = alias.obabo(...)
+
+    sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
+    results = sghmc_run(sample, init_model_state=0, iterations=5000)[0]['samples']['variables']
 
   Args:
     potential_fn: Stochastic potential over a minibatch of data

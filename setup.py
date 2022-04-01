@@ -9,12 +9,31 @@ INSTALL_REQUIRES = [
     'dataclasses'
 ]
 
+EXTRAS_REQUIRES = {
+    'tensorflow' : [
+        'tensorflow',
+        'tensorflow_datasets'
+    ],
+    'test': [
+        'pylint',
+        'pytest',
+        'pytest-mock'
+    ],
+    'doc': [
+        'sphinx >= 3',
+        'sphinx_rtd_theme',
+        'sphinx-autodoc-typehints==1.11.1',
+        'myst-nb',
+    ]
+}
+
 setuptools.setup(
     name='jax_sgmc',
     version='0.0.1',
     license='Apache 2.0',
     author='MMFM',
     install_requires=INSTALL_REQUIRES,
+    extras_requires=EXTRAS_REQUIRES,
     packages=setuptools.find_packages(),
     long_description_content_type='text/markdown',
     description='Stochastic Gradient Monte Carlo using Jax',

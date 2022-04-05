@@ -1,6 +1,48 @@
 Data Loading
 =============
 
+Basics
+-------
+
+Steps for Setting up a Data Chain
+__________________________________
+
+Access of (random) data in **JaxSGMC** consists of two steps:
+
+- Setup Data Loader
+- Setup Access Chain
+
+The Data Loaders determines where the data is stored and how it is passed
+to the device (e. g. shuffled in epochs).
+
+The Access Chain provides the functionality for efficient access of the data,
+which is not necessarily stored on the device, even under jax transformations.
+
+The combination of Data Loader and Access chain determines, how the data is
+passed to the computation. Therefore, this guide presents data access with
+NumpyDataLoader and TensorflowDataLoader.
+
+Shape and dtype of the Data
+____________________________
+
+Some models needs to now the shape and dtype of the reference data. Therefore,
+a all-zero batch can be drawn from the dataloader.
+
+  ::
+
+    print(data_loader.initializer_batch(3))
+    {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
+                 [0., 0.],
+                 [0., 0.]], dtype=float32)}
+
+If no batch size is specified, simply a single observation is returned (all
+leaves are reduced by the first axis).
+
+  ::
+
+    print(data_loader.initializer_batch())
+    {'x_r': DeviceArray(0, dtype=int32), 'y_r': DeviceArray([0., 0.], dtype=float32)}
+
 Numpy Data Loader
 ------------------
 
@@ -21,14 +63,6 @@ the keys of the pytree-dict, bundling all observations.
   >>>
   >>> data_loader = NumpyDataLoader(x_r=x, y_r=y)
 
-Some models needs to now the shape and dtype of the reference data. Therefore,
-a all-zero batch can be drawn from the dataloader.
-
-  >>> print(data_loader.initializer_batch(3))
-  {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
-               [0., 0.],
-               [0., 0.]], dtype=float32)}
-
 The host callback wrappers cache some data in the device memory to reduce the
 number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
@@ -37,7 +71,7 @@ has an increased device memory consumption.
   >>> rd_init, rd_batch = data.random_reference_data(data_loader, 100, 2)
 
 The Numpy Data Loader accepts keyword arguments in
-the init function to determnine the starting points of the chains.
+the init function to determine the starting points of the chains.
 
   >>> rd_state = rd_init(seed=0)
   >>> new_state, (rd_batch, info) = rd_batch(rd_state, information=True)
@@ -103,7 +137,7 @@ data loader. In each iteration, the function is mapped over a batch of data to
 speed up the calculation but limit the memory consumption.
 
 In this toy example, the dataset consits of the potential bases
-:math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \\right\}`. In a scan loop,
+:math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \right\}`. In a scan loop,
 the sum of the potentials with given exponents is calculated:
 
 .. math::
@@ -127,9 +161,10 @@ directly by the user with a provided mask.
   >>>
   >>> data_loader = NumpyDataLoader(base=base)
 
-The mask is an boolean array with `True` if the value is valid and `False` if it
-is just a filler. If set to `maksing=False` (default), no positional argument
-mask is expected in the function signature.
+The mask is an boolean array with ``True`` if the value is valid and ``False``
+if it is just a filler.
+If set to ``masking=False`` (default), no positional argument mask is expected
+in the function signature.
 
   >>> def sum_potentials(exp, data, mask, unused_state):
   ...   # Mask out the invalid samples (filler values, already mapped over)
@@ -140,9 +175,29 @@ mask is expected in the function signature.
   ...                                              cached_batches_count=3,
   ...                                              mb_size=4)
 
-The results per batch must be post-processed. If `masking=False`, a result for
+The results per batch must be post-processed. If ``masking=False``, a result for
 each observation is returned. Therefore, using the masking option improves the
 memory consumption.
+
+  >>> # The exponential value is fixed during the mapping, therefore add it via
+  >>> # functools.partial to the mapped function.
+  >>> map_results = map_fun(partial(sum_potentials, 2),
+  ...                       init_fun(),
+  ...                       None,
+  ...                       masking=True)
+  >>>
+  >>> data_state, (batch_sums, unused_state) = map_results
+  >>>
+  >>> # As we used the masking, a single result for each batch is returned.
+  >>> # Now we need to postprocess those results, in this case by summing, to
+  >>> # get the true result.
+  >>> summed_result = jnp.sum(batch_sums)
+  >>> print(f"Result: {summed_result : d}")
+  Result:  285
+
+The full data map can be used in ``jit``-compiled functions, e. g. in a scan loop,
+such that it is possible to compute the results for multiple exponents in a
+``lax.scan``-loop.
 
   >>> # Calculate for multiple exponents:
   >>> def body_fun(data_state, exp):

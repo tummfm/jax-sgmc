@@ -32,10 +32,10 @@ import warnings
 from functools import partial
 import itertools
 
-from typing import Tuple, Any, Callable, List, Union, NamedTuple, Dict, Optional
+from typing import Tuple, Any, Callable, Union, NamedTuple, Dict, Protocol
 
 import jax
-from jax import tree_util, lax, random
+from jax import tree_util, lax
 import jax.numpy as jnp
 from jax.experimental import host_callback as hcb
 
@@ -66,9 +66,6 @@ PyTree = Any
 MiniBatch = Union[Tuple[PyTree],
                   Tuple[PyTree, mini_batch_information],
                   Tuple[PyTree, mini_batch_information, Array]]
-RandomBatch = Tuple[Callable, Callable]
-OrderedBatch = Tuple[Callable, Callable]
-PyTree = Any
 
 # Definition of the data loader class
 
@@ -221,7 +218,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
   def batch_format(self,
                    cache_size: int,
                    mb_size: int,
-                   ) -> PyTree:
+                   ) -> Tuple[PyTree, MiniBatchInformation]:
     """Returns dtype and shape of cached mini-batches.
 
     Args:
@@ -272,6 +269,106 @@ class CacheState(NamedTuple):
 
 random_data_state = CacheState
 
+Batch = Union[Tuple[CacheState, PyTree],
+              Tuple[CacheState, Tuple[PyTree, MiniBatchInformation]]]
+
+class GetBatchFunction(Protocol):
+  def __call__(self,
+               data_state: CacheState,
+               information: bool = False
+               ) -> Batch:
+    """Draws a batch of data.
+
+    Args:
+      data_state: State of the chain containing id and cached batches
+      information: Include namedtuple containing information about the data
+        and batch
+
+    Returns:
+      Returns the new state of the random chain and a batch. Optionally a
+      namedtuple containing information about the batch and dataset can be
+      returned.
+
+    """
+
+class MaskedMappedFunction(Protocol):
+  def __call__(self,
+               batch: PyTree,
+               mask: Array,
+               state: PyTree
+               ) -> Tuple[PyTree, PyTree]:
+    """Function which can be mapped over the whole dataset.
+
+    A function of this form must be passed to the full data map function if it
+    is called with ``masking = True``.
+
+    Args:
+      batch: Batch of data
+      mask: Array marking invalid (double) samples
+      state: Variables which results are used in the next computation
+
+    Returns:
+      Must return a tuple consisting of the computation results and the state
+      which should be used in the computation of the next batch.
+
+    """
+
+class UnmaskedMappedFunction(Protocol):
+  def __call__(self,
+               batch: PyTree,
+               state: PyTree
+               ) -> Tuple[PyTree, PyTree]:
+    """Function which can be mapped over the whole dataset.
+
+    A function of this form must be passed to the full data map function if it
+    is called with ``masking = False``.
+
+    Args:
+      batch: Batch of data
+      state: Variables which results are used in the next computation
+
+    Returns:
+      Must return a tuple consisting of the computation results and the state
+      which should be used in the computation of the next batch.
+
+    """
+
+MappedFunction = Union[MaskedMappedFunction, UnmaskedMappedFunction]
+
+class FullDataMapFunction(Protocol):
+  def __call__(self,
+               fun: MappedFunction,
+               data_state: CacheState,
+               carry: PyTree,
+               masking: bool = False,
+               information: bool = False
+               ) -> Tuple[PyTree, PyTree]:
+    """Maps a function over the complete dataset.
+
+    Args:
+      fun: Function to be mapped over the dataset
+      data_state: Namedtuple containing the id of the chain and cached batches
+      carry: Variables which are carried over to the next evaluation of ``fun``
+      masking: If true, an array marking invalid samples is passed to the
+        function such that a single result for a batch of data can be
+        calculated. If false, then a result for each observation must be
+        returned and the invalid results are discared automatically after the
+        computation.
+      information: Pass the batch information together with the batch
+
+    Returns:
+      Returns the new data state and the results of the computation including
+      the carry of the last computation:
+
+      ::
+
+        (data_state, (results, carry)) = full_data_map(...)
+
+    """
+
+RandomBatch = Tuple[Any, GetBatchFunction]
+OrderedBatch = Tuple[Any, FullDataMapFunction]
+
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int,
@@ -306,7 +403,7 @@ def random_reference_data(data_loader: DataLoader,
       data_loader, cached_batches_count, mb_size)
   elif isinstance(data_loader, DeviceDataLoader):
     if not cached_batches_count == 1:
-      raise ValueError(f"No caching on device.")
+      raise ValueError("No caching on device.")
     return _random_reference_data_device(
       data_loader, mb_size)
   else:
@@ -373,11 +470,12 @@ def full_reference_data(data_loader: DataLoader,
 
     return (data_state, fun_state), result
 
-  def batch_scan(fun: Callable[[PyTree, Array, PyTree], Tuple[PyTree, PyTree]],
+  def batch_scan(fun: MappedFunction,
                  data_state: CacheState,
                  carry: PyTree,
                  masking: bool = False,
-                 information: bool = False):
+                 information: bool = False
+                 ) -> Tuple[PyTree, PyTree]:
     """Map the function over all data and return the results.
 
     Args:
@@ -450,7 +548,7 @@ def tree_index(pytree: PyTree, index):
 # Callback is independent of assembling of the batches
 def _hcb_wrapper(data_loader: HostDataLoader,
                  cached_batches_count: int,
-                 mb_size: int):
+                 mb_size: int) -> Tuple[GetBatchFunction, mini_batch_information]:
   # These are helper function which keep a reference to the stateful data object
   # and can be called via the host_callback.call function
   # The format of the mini batch is static.
@@ -501,9 +599,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 
   def batch_fn(data_state: CacheState,
                information: bool = False
-               ) -> Union[Tuple[CacheState, MiniBatch],
-                          Tuple[CacheState,
-                                Tuple[MiniBatch, mini_batch_information]]]:
+               ) -> Batch:
     """Draws a new random batch (hides data transfer between devices).
 
     Args:
@@ -586,15 +682,13 @@ def _random_reference_data_device(data_loader: DeviceDataLoader,
                                   ) -> RandomBatch:
   """Random reference data on device. """
 
-  def init_fn(*args, **kwargs) -> CacheState:
-    state = data_loader.init_random_data(*args, **kwargs)
+  def init_fn(**kwargs) -> CacheState:
+    state = data_loader.init_random_data(**kwargs)
     return CacheState(state=state)
 
   def batch_fn(state: CacheState,
                information: bool = False
-               ) -> Union[Tuple[CacheState, MiniBatch],
-                          Tuple[CacheState,
-                                Tuple[MiniBatch, mini_batch_information]]]:
+               ) -> Batch:
 
     state, (batch, mb_info) = data_loader.get_random_data(
       state.state, batch_size=mb_size)

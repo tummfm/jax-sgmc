@@ -170,7 +170,9 @@ def pytree_dict_keys(tree: PyTree):
   idx_tree = tree_util.tree_unflatten(treedef, list(range(len(leaves))))
   key_list = [None] * len(leaves)
   def _recurse(node, path):
-    if isinstance(node, int):
+    if node is None:
+      return
+    elif isinstance(node, int):
       key_list[node] = path
     else:
       for key, value in node.items():
@@ -471,7 +473,7 @@ class HDF5Collector(DataCollector):
 
     """
     # Is called after all host callback calls have been processed
-    self._finished[chain_id].wait()
+    # self._finished[chain_id].wait()
 
   def checkpoint(self, chain_id: int, state):
     """Called every nth step. """
@@ -490,7 +492,7 @@ class HDF5Collector(DataCollector):
       chain_id: ID of chain requesting continuation of normal program flow.
 
     """
-    self._finished[chain_id].wait()
+    # self._finished[chain_id].wait()
 
 class MemoryCollector(DataCollector):
   """Stores samples entirely in RAM (numpy arrays).

@@ -337,10 +337,11 @@ def obabo(potential_fn: StochasticPotential,
 
     return state
 
-  def get_fn(state: LeapfrogState):
+  def get_fn(state: LeapfrogState) -> Dict[str, PyTree]:
     """Returns the latent variables."""
     return {"variables": state.positions,
-            "energy": state.potential}
+            "energy": state.potential,
+            "model_state": state.model_state}
 
   return init_fn, integrate, get_fn
 
@@ -551,9 +552,10 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
     return final_state
 
-  def get_fn(state: LeapfrogState):
+  def get_fn(state: LeapfrogState) -> Dict[str, PyTree]:
     return {"variables": state.positions,
-            "energy": state.potential}
+            "energy": state.potential,
+            "model_state": state.model_state}
 
   return init_fn, integrate, get_fn
 
@@ -755,11 +757,11 @@ def friction_leapfrog(potential_fn: StochasticPotential,
 
     return final_state
 
-  def get_fn(state: LeapfrogState):
+  def get_fn(state: LeapfrogState) -> Dict[str, PyTree]:
     """Returns the latent variables."""
-    # Todo: This is not truly the likelihood
     return {"variables": state.positions,
-            "energy": state.potential}
+            "energy": state.potential,
+            "model_state": state.model_state}
 
   return init_fn, integrate, get_fn
 
@@ -847,10 +849,11 @@ def langevin_diffusion(
   # Returns the important parameters of a state and excludes. Makes information
   # hiding possible
 
-  def get_fn(state: LangevinState):
+  def get_fn(state: LangevinState) -> Dict[str, PyTree]:
     """Returns the latent variables."""
     return {"variables": state.latent_variables,
-            "likelihood": -state.potential}
+            "likelihood": -state.potential,
+            "model_state": state.model_state}
 
   # Update according to the integrator update rule
 

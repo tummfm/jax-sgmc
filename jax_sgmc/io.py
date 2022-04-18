@@ -95,6 +95,11 @@ def register_dictionize_rule(type: Type) -> Callable[[Callable], None]:
     _dictionize_rules[type] = rule
   return register_function
 
+def _default_dictionize(node):
+  leaves = tree_util.tree_leaves(node)
+  leaf_names = [f"unknown~pytree~leaf~{idx}" for idx in range(len(leaves))]
+  return zip(leaf_names, leaves)
+
 def _dictionize(node):
   """Apply the registered rules to a pytree node."""
   global _dictionize_rules
@@ -104,8 +109,8 @@ def _dictionize(node):
   for node_type, node_rule in _dictionize_rules.items():
     if isinstance(node, node_type):
       return node_rule(node)
-  raise NotImplementedError(f"Node type {type(node).__name__} cannot be "
-                            f"transformed to dict, please register a rule.")
+    else:
+      return _default_dictionize(node)
 
 def pytree_to_dict(tree: PyTree):
   """Construct a dictionary from a pytree.

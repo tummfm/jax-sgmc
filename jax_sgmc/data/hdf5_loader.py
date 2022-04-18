@@ -112,3 +112,6 @@ class HDF5Loader(NumpyDataLoader):
       "observation_count": self._observation_count
     }
     return information
+
+  def close(self):
+    self._dataset.close()

@@ -44,18 +44,18 @@ class TensorflowDataLoader(HostDataLoader):
   The tensorflow datasets package provides a high number of ready to go
   datasets, which can be provided directly to the Tensorflow Data Loader.
 
-  .. testsetup::
-    import tensorflow_datasets as tfds
-    tfds.load("cifar10", split="train")
-
   .. doctest::
-
+  
+    >>> import contextlib
+    >>> import io 
+    >>> 
     >>> import tensorflow_datasets as tdf
     >>> import tensorflow_datasets as tfds
     >>> from jax_sgmc import data
     >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
-    >>>
-    >>> pipeline = tfds.load("cifar10", split="train")
+    >>> 
+    >>> with contextlib.redirect_stdout(io.StringIO) as _:
+    ...   pipeline = tfds.load("cifar10", split="train")
     >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
 
   Args:

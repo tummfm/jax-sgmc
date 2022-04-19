@@ -44,6 +44,10 @@ class TensorflowDataLoader(HostDataLoader):
   The tensorflow datasets package provides a high number of ready to go
   datasets, which can be provided directly to the Tensorflow Data Loader.
 
+  .. testsetup::
+    import tensorflow_datasets as tfds
+    tfds.load("cifar10", split="train")
+
   .. doctest::
 
     >>> import tensorflow_datasets as tdf

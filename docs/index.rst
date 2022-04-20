@@ -27,7 +27,6 @@ Modular stochastic gradient MCMC for Jax.
 
    advanced/adaption
    advanced/scheduler
-   advanced/util
 
 
 .. toctree::

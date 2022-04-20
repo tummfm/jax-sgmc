@@ -229,7 +229,9 @@ available on tensorflow_datasets.
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
   >>>
-  >>> tfds.disable_progress_bar()
+  >>> import contextlib
+  >>> import io
+  >>>
   >>> # Helper function to look at the data provided
   >>> def show_data(data):
   ...   for key, item in data.items():
@@ -241,7 +243,8 @@ eample the feature 'id', which is a string. Those keys can be simply excluded
 by passing the keyword argument `exclude_keys`.
 
   >>> # The data pipeline can be used directly
-  >>> pipeline, info = tfds.load("cifar10", split="train", with_info=True)
+  >>> with contextlib.redirect_stdout(io.StringIO()):
+  ...   pipeline, info = tfds.load("cifar10", split="train", with_info=True)
   >>> print(info.features)
   FeaturesDict({
       'id': Text(shape=(), dtype=tf.string),

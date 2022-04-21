@@ -26,6 +26,8 @@ Host Callback Wrappers from the Data Loaders and loaded on the device via the
 """
 
 import abc
+import dataclasses
+import threading
 
 import warnings
 
@@ -186,7 +188,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
     Args:
       cache_size: The number of drawn batches.
       mb_size: The number of observations per batch.
-      seed: Set the random seed to start the chain at a well defined state.
+      seed: Set the random seed to start the chain at a well-defined state.
 
     Returns:
       Returns the id of the new chain.
@@ -199,7 +201,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
                                 mb_size: int = None,
                                 **kwargs
                                 ) -> int:
-    """Register a chain which assembles batches in an ordered manor.
+    """Register a chain which assembles batches in an ordered manner.
 
     Args:
       cache_size: The number of drawn batches.
@@ -226,7 +228,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
 
     Returns:
       Returns a pytree with the same tree structure as the random data cache but
-      with ``jax.ShapedDtypeStruct``` as leaves.
+      with ``jax.ShapedDtypeStruct`` as leaves.
     """
     obs_format = self._format
 
@@ -245,9 +247,6 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
       mask=onp.ones(mb_size, dtype=onp.bool_))
     return format, mb_info
 
-# Todo: Add variable to keept track of already returned batches to implement
-#       masking
-
 class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.
 
@@ -256,7 +255,7 @@ class CacheState(NamedTuple):
     cached_batches_count: Number of cached mini-batches. Equals the first
       dimension of the cached batches
     current_line: Marks the next batch to be returned.
-    chain_id: Identifier of the chain to associate random state
+    chain_id: Identifier of the chain
     state: Additional information
     valid: Array containing information about the validity of individual samples
   """
@@ -352,7 +351,7 @@ class FullDataMapFunction(Protocol):
       masking: If true, an array marking invalid samples is passed to the
         function such that a single result for a batch of data can be
         calculated. If false, then a result for each observation must be
-        returned and the invalid results are discared automatically after the
+        returned and the invalid results are discarded automatically after the
         computation.
       information: Pass the batch information together with the batch
 
@@ -363,6 +362,38 @@ class FullDataMapFunction(Protocol):
       ::
 
         (data_state, (results, carry)) = full_data_map(...)
+
+    """
+
+class FullDataMapperFunction(Protocol):
+  def __call__(self,
+               fun: MappedFunction,
+               carry: PyTree,
+               masking: bool = False,
+               information: bool = False
+               ) -> PyTree:
+    """Maps a function over the complete dataset.
+
+    This function differs to :class:`FullDataMapFunction` that it acquires a
+    :class:`CacheState` before each mapping over the full dataset.
+
+    Args:
+      fun: Function to be mapped over the dataset
+      carry: Variables which are carried over to the next evaluation of ``fun``
+      masking: If true, an array marking invalid samples is passed to the
+        function such that a single result for a batch of data can be
+        calculated. If false, then a result for each observation must be
+        returned and the invalid results are discared automatically after the
+        computation.
+      information: Pass the batch information together with the batch
+
+    Returns:
+      Returns the results of the computation including the carry of the last
+      computation:
+
+      ::
+
+        (results, carry) = full_data_mapper(...)
 
     """
 
@@ -781,3 +812,100 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
       return new_state, selected_data
 
   return init_fn, (batch_fn, mb_info)
+
+
+class _FullDataHelper:
+  """Class to keep track of unused CacheStates. """
+
+  def __init__(self, data_loader, cache_size, batch_size):
+    self._init_fn, self._batch_fn = full_reference_data(
+      data_loader, cache_size, batch_size)
+
+    # Initialize the first cache state to compute the shape of the CacheState
+    self._unused_states = [self._new_cache_state()]
+    self._cache_state_format = tree_util.tree_map(
+      lambda leaf: jax.ShapeDtypeStruct(dtype=leaf.dtype, shape=leaf.shape),
+      self._unused_states[0])
+
+    self._lock = threading.Lock()
+
+  @property
+  def get_batch_fn(self) -> FullDataMapFunction:
+    return self._batch_fn
+
+  @property
+  def get_cache_state_format(self) -> PyTree:
+    return self._cache_state_format
+
+  def get_cache_state(self) -> CacheState:
+    """Return unused cache state or create new one if none available."""
+    with self._lock:
+      if len(self._unused_states) == 0:
+        state = self._new_cache_state()
+      else:
+        state = self._unused_states.pop()
+    return state
+
+  def free_cache_state(self, cache_state: CacheState) -> Array:
+    """Adds cache state back to the unused cache states."""
+    with self._lock:
+      self._unused_states.append(cache_state)
+    return jnp.array(1.0)
+
+  def _new_cache_state(self) -> CacheState:
+    """Creates a new cache state. """
+    new_cache_state = self._init_fn()
+    return new_cache_state
+
+
+def full_data_mapper(data_loader: DataLoader = None,
+                     cached_batches_count: int = 1,
+                     mb_size: int = 1
+                     ) -> FullDataMapperFunction:
+  """Initializes a functional to map a function over a complete dataset.
+
+  This function extends the functionality of
+  :func:`full_reference_data` by loading the data states
+  form the host before each mapping.
+
+  Args:
+    data_loader: Reads data from storage.
+    cached_batches_count: Number of batches in the cache. A larger number is
+      faster, but requires more memory.
+    mb_size: Size of the data batch.
+
+  Returns:
+    Returns a function to map another function over a complete dataset of an
+    appropriate :class:`DataLoader`.
+
+  """
+
+  _helper = _FullDataHelper(data_loader, cached_batches_count, mb_size)
+
+  # Helper functions to load/save the CacheStates on the host via host_callback
+  def _get_state() -> CacheState:
+    cache_state = hcb.call(
+      lambda _: _helper.get_cache_state(),
+      jnp.array(1.0),
+      result_shape=_helper.get_cache_state_format)
+    return cache_state
+
+  def _free_cache_state(cache_state: CacheState, results: PyTree) -> Array:
+    # Loop-through the results to hinder XLA to remove the tap call
+    results = hcb.id_tap(
+      lambda cs, _: _helper.free_cache_state(cs),
+      cache_state,
+      result=results)
+    return results
+
+  def mapper_fn(fun: Union[MaskedMappedFunction, UnmaskedMappedFunction],
+                carry: PyTree,
+                masking: bool = False,
+                information: bool = False) -> PyTree:
+    data_state = _get_state()
+    (new_data_state, results) = _helper.get_batch_fn(
+      fun, data_state, carry, masking=masking, information=information)
+    results = _free_cache_state(new_data_state, results)
+    return results
+
+  return mapper_fn

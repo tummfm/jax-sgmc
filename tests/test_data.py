@@ -712,7 +712,7 @@ class TestFullDataMapper:
   def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cache_size=3,
+    mapper = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -733,7 +733,7 @@ class TestFullDataMapper:
                               example_problem_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cache_size=3,
+    mapper = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -754,7 +754,7 @@ class TestFullDataMapper:
   def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cache_size=3,
+    mapper = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -768,7 +768,7 @@ class TestFullDataMapper:
   def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cache_size=3,
+    mapper = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 

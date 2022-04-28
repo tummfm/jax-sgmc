@@ -780,6 +780,22 @@ class TestFullDataMapper:
 
     assert onp.sum(count == 1) == obs_count
 
+  @pytest.mark.parametrize("mb_size", [1, 2])
+  def test_full_data_unbatched(self, dataset, data_loader, mb_size, example_problem_no_mask):
+    _, _, obs_count = dataset
+
+    mapper = full_data_mapper(cached_batches_count=3,
+                              mb_size=mb_size,
+                              data_loader=data_loader)
+
+    samples, _ = mapper(example_problem_no_mask, None, masking=False, batched=False)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+
 class TestFullDataAccess:
 
   @pytest.fixture

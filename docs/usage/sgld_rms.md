@@ -71,13 +71,13 @@ flowchart TD
     B2[Get] --> B21[Get Specific Schedules]
   end
 
-  subgraph Solver
+  subgraph D [Solver]
     direction TB
     D1[Update Solver State]
     D2[Get Samples from Solver State]
   end
 
-  subgraph Integrator
+  subgraph C [Integrator]
     direction TB
     CU[Update Integrator State]
     CG[Get Variables from Integrator State]
@@ -97,7 +97,7 @@ flowchart TD
   
   subgraph FDL [Data Loader]
     direction TB
-    F2 -- Yes --> FDL1[Assemble New Cache] --> F3
+    F2 -. Yes .-> FDL1[Assemble New Cache] -.-> F3
   end
 
   subgraph H [Potential]
@@ -105,10 +105,23 @@ flowchart TD
     H1[Evaluate Stochastic Potential]
   end
   
+  subgraph I [Saving]
+    direction TB
+    I1[Save] --> I2{Thinning / Burn In?}
+    I2 --> I3[Update Statistics]
+  end
+
+  subgraph J [Data Collector]
+    J1[Save Sample]
+  end
+
+  I2 -. Yes .-> J1
+
   MCMC --> B1
   MCMC --> B2
   MCMC --> D1
   MCMC --> D2
+  MCMC --> I1
   
   D1 ---> CU
   D2 ---> CG
@@ -123,11 +136,26 @@ flowchart TD
 
 ```
 
-## Problem Setup
+## Construct Solver
 
 The Solver is applied to the problem in quickstart.
 
-### Data Generation
+
+### Setup Reference Data Loading
+
+The reference data is passed to the solver via two components, the data loader
+and the host callback wrapper.
+
+The host callback wrappers load the data into the jit-compiled programs via
+``host_callback.call()``. To balance the memory usage and the delay of loading
+the data, a number of batches is loaded in each call.
+
+The data loader assembles the batches requested by the host callback wrappers.
+It loads the data from a source (HDF-File, numpy-array, tensorflow dataset)
+and selects the observations in each batch after a specific method
+(ordered access, shuffling). Which of those methods are available differe
+between the data loaders.
+
 
 ```{code-cell}
 :tags: [hide-cell]
@@ -147,13 +175,26 @@ x = random.uniform(split1, minval=-10, maxval=10, shape=(samples, N))
 x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
                x[:, 3]]).transpose()
 y = jnp.matmul(x, w) + noise
+
 ```
 
+```{code-cell}
 
-## Data Loader
+# The construction of the data loader can be different. For the numpy data
+# loader, the numpy arrays can be passed as keyword arguments and are later
+# returned as a dictionary with corresponding keys.
+data_loader = NumpyDataLoader(x=x, y=y)
 
+# The cache size corresponds to the number of batches per cache. The state
+# initialized via the init function is necessary to identify which data chain
+# request new batches of data.
+init_fn, batch_fn = data.random_reference_data(data_loader,
+                                               mb_size=N,
+                                               cache_size=100)
 
-## Likelihood and Prior
+```
+
+### Setup Potential
 
 The model is connected to the solver via the (log-)prior and (log-)likelihood
 function. The model for our problem is:
@@ -165,7 +206,6 @@ def model(sample, observations):
     return jnp.dot(predictors, weights)
 
 ```
-
 **JaxSGMC** supports samples in the form of pytrees, so no flattering of e.g.
 Neural Net parameters is necessary. In our case we can separate the standard
 deviation, which is only part of the likelihood, from the weights by using a
@@ -199,9 +239,12 @@ potential_fn = potential.minibatch_potential(prior=prior,
                                              strategy="vmap")                                    
 ```
 
-For more complex models it is also possible to sequentially evaluate the
-likelihood via ``"map"`` or to make use of multiple accelerators via ``"pmap"``.
+### Setup Adaption
 
-Note that it is also possible to write the likelihood for a batch of
-observations and that **JaxSGMC** also supports stateful models (see 
-{doc}`/usage/potential`).
+### Setup Integrator and Solver
+
+### Setup Scheduler
+
+### Setup Saving
+
+### Run Solver

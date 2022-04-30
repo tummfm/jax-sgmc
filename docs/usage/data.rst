@@ -157,6 +157,20 @@ memory consumption.
   >>> print(result)
   [ 10  45 285]
 
+It is also possible to store the ``CacheStates`` in the host memory, such that
+it is not necessary to carry the ``data state`` through all function calls.
+The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
+its usage is a little bit simpler:
+
+  >>> mapper_fn = data.full_data_mapper(data_loader,
+  ...                                   cached_batches_count=3,
+  ...                                   mb_size=4)
+  >>>
+  >>> results, _ = mapper_fn(partial(sum_potentials, 2), None, masking=True)
+  >>>
+  >>> print(f"Result with exp = 2: {jnp.sum(results) : d}")
+  Result with exp = 2:  285
+
 
 Tensorflow Data Loader
 -----------------------

@@ -18,6 +18,7 @@ The numpy data loader is easy to use if the whole dataset fits into RAM and is
 already present as numpy-arrays.
 
 """
+import copy
 from copy import deepcopy
 
 import math
@@ -349,7 +350,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     mask = onp.arange(chain['mb_size']) + chain['idx_offset'] < self._observation_count
 
     # Start again at the first sample if all samples have been returned
-    if chain['idx_offset'] + chain['mb_size'] > self._observation_count:
+    if chain['idx_offset'] + chain['mb_size'] >= self._observation_count:
       chain['idx_offset'] = 0
     else:
       chain['idx_offset'] += chain['mb_size']
@@ -378,7 +379,8 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
 
   def _shuffle_indices(self, chain):
     floor_draws = math.floor(self._observation_count / chain['mb_size'])
-    ceil_draws = floor_draws + 1
+    # The partial valid cache must not be changed when updating the indices
+    ceil_draws = floor_draws + 2
 
     if chain['remaining_samples'] < chain['mb_size']:
       # The indices have to be refreshed. Shuffling is equivalent to drawing

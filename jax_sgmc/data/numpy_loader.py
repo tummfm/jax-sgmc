@@ -18,7 +18,6 @@ The numpy data loader is easy to use if the whole dataset fits into RAM and is
 already present as numpy-arrays.
 
 """
-import copy
 from copy import deepcopy
 
 import math

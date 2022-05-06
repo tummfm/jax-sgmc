@@ -29,6 +29,11 @@ ________________________
 
     .. automethod:: __call__
 
+.. autofunction:: jax_sgmc.data.core.full_data_mapper
+
+.. autoclass:: jax_sgmc.data.core.FullDataMapperFunction
+
+   .. automethod:: __call__
 
 States
 _______

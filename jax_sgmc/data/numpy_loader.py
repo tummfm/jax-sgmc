@@ -30,7 +30,7 @@ import jax
 from jax import random
 
 from jax_sgmc.data.core import DeviceDataLoader, HostDataLoader, DataLoader
-from jax_sgmc.data.core import mini_batch_information
+from jax_sgmc.data.core import MiniBatchInformation
 from jax_sgmc.data.core import tree_index
 from jax_sgmc.util import Array
 
@@ -61,7 +61,7 @@ class NumpyBase(DataLoader):
   @property
   def _format(self):
     """Returns shape and dtype of a single observation. """
-    mb_format = dict()
+    mb_format = {}
     for name, array in self._reference_data.items():
       # Get the format and dtype of the data
       mb_format[name] = jax.ShapeDtypeStruct(
@@ -118,15 +118,15 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
   def get_random_data(self,
                       state,
                       batch_size
-                      ) ->Tuple[PyTree, Tuple[PyTree, mini_batch_information]]:
+                      ) ->Tuple[PyTree, Tuple[PyTree, MiniBatchInformation]]:
     key, split = random.split(state)
     selection_indices = random.randint(
       split, shape=(batch_size,), minval=0, maxval=self._observation_count)
 
     selected_observations = tree_index(self._reference_data, selection_indices)
-    info = mini_batch_information(observation_count=self._observation_count,
-                                  batch_size=batch_size,
-                                  mask=jnp.ones(batch_size, dtype=jnp.bool_))
+    info = MiniBatchInformation(observation_count=self._observation_count,
+                                batch_size=batch_size,
+                                mask=jnp.ones(batch_size, dtype=jnp.bool_))
 
     return key, (selected_observations, info)
 
@@ -318,7 +318,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     selections_idx, selections_mask = self._get_indices(chain_id)
 
     # Slice the data and transform into device array.
-    selected_observations: Dict[str, Array] = dict()
+    selected_observations: Dict[str, Array] = {}
     for key, data in self._reference_data.items():
       if data.ndim == 1:
         selection = jnp.array(data[selections_idx,])
@@ -349,7 +349,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     mask = onp.arange(chain['mb_size']) + chain['idx_offset'] < self._observation_count
 
     # Start again at the first sample if all samples have been returned
-    if chain['idx_offset'] + chain['mb_size'] > self._observation_count:
+    if chain['idx_offset'] + chain['mb_size'] >= self._observation_count:
       chain['idx_offset'] = 0
     else:
       chain['idx_offset'] += chain['mb_size']
@@ -378,7 +378,8 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
 
   def _shuffle_indices(self, chain):
     floor_draws = math.floor(self._observation_count / chain['mb_size'])
-    ceil_draws = floor_draws + 1
+    # The partial valid cache must not be changed when updating the indices
+    ceil_draws = floor_draws + 2
 
     if chain['remaining_samples'] < chain['mb_size']:
       # The indices have to be refreshed. Shuffling is equivalent to drawing

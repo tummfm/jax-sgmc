@@ -81,7 +81,7 @@ The introduction of quantities simplifies the implementation into an integrator
 or solver.
 
 For example, adapting a manifold :math:`G` for SGLD requires the calculation of
-:math:`G^{-1},\ G^{-\\frac{1}{2}},\ \\text{and}\ \\Gamma`. If
+:math:`G^{-1},\ G^{-\frac{1}{2}},\ \text{and}\ \Gamma`. If
 :func:`get_adaption` returns all three quantities in the order
 
 ::

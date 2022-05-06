@@ -41,4 +41,3 @@ Pytree to Dict Transformation
 .. autofunction:: jax_sgmc.io.pytree_dict_keys
 
 .. autofunction:: jax_sgmc.io.register_dictionize_rule
-

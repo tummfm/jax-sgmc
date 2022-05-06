@@ -14,10 +14,10 @@
 
 """Popular solvers ready to use.
 
-While jax-sgmc has been designed to be flexible, starting with full
+While JaxSGMC has been designed to be flexible, starting with full
 flexibility can be complicated. Therefore, this file contains some popular
 solvers with preset properties, which can be applied directly to the problem or
-used as a guide to setup a custom solver.
+used as a guide to set up a custom solver.
 """
 
 from functools import partial
@@ -42,7 +42,7 @@ def sgld(potential_fn: potential.minibatch_potential,
          progress_bar: bool = True):
   """Stochastic Gradient Langevin Dynamics.
 
-  SGLD with a polynomial step size schedule and optional speed up via RMSprop-
+  SGLD with a polynomial step size schedule and optional speed up via RMS-prop
   adaption [1].
 
   [1] https://arxiv.org/abs/1512.07666

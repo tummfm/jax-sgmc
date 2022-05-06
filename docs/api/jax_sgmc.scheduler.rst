@@ -54,4 +54,3 @@ __________
     :toctree: _autosummary
 
     random_thinning
-

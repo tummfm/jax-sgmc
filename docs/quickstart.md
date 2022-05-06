@@ -1,6 +1,6 @@
 ---
 jupytext:
-  formats: ipynb,md:myst,py
+  formats: examples///ipynb,docs///md:myst
   main_language: python
   text_representation:
     extension: .md
@@ -33,6 +33,7 @@ limitations under the License.
 
 ```{code-cell}
 :tags: [hide-cell]
+
 import numpy as onp
 
 import jax.numpy as jnp
@@ -119,15 +120,13 @@ data via ``batch['x']`` and ``batch['y']``:
 
 ```{code-cell}
 data_loader = NumpyDataLoader(x=x, y=y)
-
 ```
 
 Sometimes, a model needs the shape and type of the data to initialize its state.
 Therefore, each data loader has a method to get an all-zero observation and an
 all-zero batch of observations:
 
-```{code-cell}}
-
+```{code-cell}
 # Print a single observation
 print("Single observation:")
 print(data_loader.initializer_batch())
@@ -150,7 +149,6 @@ def model(sample, observations):
     weights = sample["w"]
     predictors = observations["x"]
     return jnp.dot(predictors, weights)
-
 ```
 
 **JaxSGMC** supports samples in the form of pytrees, so no flattering of e.g.
@@ -159,7 +157,6 @@ deviation, which is only part of the likelihood, from the weights by using a
 dictionary:
 
 ```{code-cell}
-
 def likelihood(sample, observations):
     sigma = sample["sigma"]
     y = observations["y"]
@@ -180,7 +177,6 @@ of observations. As the model is not computationally demanding, we let
 **JaxSGMC** vectorize the evaluation of the likelihood:
 
 ```{code-cell}
-
 potential_fn = potential.minibatch_potential(prior=prior,
                                              likelihood=likelihood,
                                              strategy="vmap")                                    
@@ -203,6 +199,7 @@ data loader and some static settings.
 
 ```{code-cell}
 :tags: [remove-output]
+
 sgld = alias.sgld(potential_fn,
                   data_loader,
                   cache_size=512,
@@ -234,7 +231,7 @@ results = results[0]["samples"]["variables"]
 
 For a full list of read to use solver see {doc}`/api/jax_sgmc.alias`.
 Moreover, it is possible to construct custom solvers by the combination of
-different modules (see {doc}`/usage/solver`).
+different modules.
 
 ## Comparison with numpyro
 
@@ -244,7 +241,6 @@ a solution returned by numpyro.
 ### Numpyro Solution
 
 ```{code-cell}
-
 def numpyro_model(y_obs=None):
   sigma = npy_smpl("sigma", npy_dist.Uniform(low=0.0, high=10.0))
   weights = npy_smpl("weights",

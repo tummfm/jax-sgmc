@@ -230,7 +230,7 @@ def rms_prop() -> AdaptionStrategy:
   gradient.
 
   Returns:
-    Returns RMSprop adaption strategy.
+    Returns RMS-prop adaption strategy.
 
   [1] https://arxiv.org/abs/1512.07666
   """
@@ -246,7 +246,7 @@ def rms_prop() -> AdaptionStrategy:
       lmbd: Stabilization constant
 
     Returns:
-      Returns the inital adaption state
+      Returns the initial adaption state
     """
     v = jnp.ones_like(sample)
     return (v, alpha, lmbd)
@@ -256,7 +256,7 @@ def rms_prop() -> AdaptionStrategy:
              sample_grad: Array,
              *args: Any,
              **kwargs: Any):
-    """Updates the RMSprop adaption.
+    """Updates the RMS-prop adaption.
 
     Args:
       state: Adaption state
@@ -276,7 +276,7 @@ def rms_prop() -> AdaptionStrategy:
           sample_grad: Array,
           *args: Any,
           **kwargs: Any):
-    """Calculates the current manifold of the RMSprop adaption.
+    """Calculates the current manifold of the RMS-prop adaption.
 
     Args:
       state: Current RMSprop adaption state
@@ -372,7 +372,7 @@ def mass_matrix(diagonal=True, burn_in=1000):
 def fisher_information(minibatch_potential: Callable = None,
                        diagonal = True
                        ) -> AdaptionStrategy:
-  """Adapt empirical fisher information.
+  """Adapts empirical fisher information.
 
   Use the empirical fisher information as a noise model for SGHMC. The empirical
   fisher information is approximated according to [1].

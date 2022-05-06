@@ -42,7 +42,7 @@ class NumpyBase(DataLoader):
     super().__init__()
 
     observation_counts = []
-    self._reference_data = dict()
+    self._reference_data = {}
     for name, array in reference_data.items():
       observation_counts.append(len(array))
       # Transform to jax arrays if on device
@@ -81,7 +81,7 @@ class NumpyBase(DataLoader):
 class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
   """Load complete dataset into memory from multiple numpy arrays.
 
-  This data loader supports checkpointing, starting chains from a well defined
+  This data loader supports checkpointing, starting chains from a well-defined
   state and true random access.
 
   The pipeline can be constructed directly from numpy arrays:
@@ -137,7 +137,7 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
 class NumpyDataLoader(NumpyBase, HostDataLoader):
   """Load complete dataset into memory from multiple numpy arrays.
 
-  This data loader supports checkpointing, starting chains from a well defined
+  This data loader supports checkpointing, starting chains from a well-defined
   state and true random access.
 
   The pipeline can be constructed directly from numpy arrays:
@@ -222,7 +222,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
                                in_epochs: bool = False,
                                shuffle: bool = False,
                                **kwargs: Any) -> int:
-    """Register a new chain which draw samples randomly.
+    """Register a new chain which draws samples randomly.
 
     Args:
       cache_size: The number of drawn batches.
@@ -231,7 +231,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
         observations.
       in_epochs: Samples returned twice per epoch are marked via mask = 0 (only
         if ``shuffle = True``.
-      seed: Set the random seed to start the chain at a well defined state.
+      seed: Set the random seed to start the chain at a well-defined state.
 
     Returns:
       Returns the id of the new chain.
@@ -279,7 +279,7 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
     Args:
       cache_size: The number of drawn batches.
       mb_size: The number of observations per batch.
-      seed: Set the random seed to start the chain at a well defined state.
+      seed: Set the random seed to start the chain at a well-defined state.
 
     Returns:
       Returns the id of the new chain.
@@ -307,9 +307,9 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
         the batch and the process of assembling.
 
     Returns:
-      Returns a superbatch as registered by :func:`register_random_pipeline` or
-      :func:`register_ordered_pipeline` with `cache_size` batches holding
-      `mb_size` observations.
+      Returns a batch of batches as registered by
+      :func:`register_random_pipeline` or :func:`register_ordered_pipeline` with
+      `cache_size` batches holding `mb_size` observations.
 
     """
     # Data slicing is the same for all methods of random and ordered access,

@@ -32,7 +32,7 @@ EXTRAS_REQUIRE = {
 
 setuptools.setup(
     name='jax_sgmc',
-    version='0.0.1',
+    version='0.0.2',
     license='Apache 2.0',
     author='MMFM',
     install_requires=INSTALL_REQUIRES,

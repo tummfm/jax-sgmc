@@ -231,7 +231,7 @@ results = results[0]["samples"]["variables"]
 
 For a full list of read to use solver see {doc}`/api/jax_sgmc.alias`.
 Moreover, it is possible to construct custom solvers by the combination of
-different modules (see {doc}`/usage/solver`).
+different modules.
 
 ## Comparison with numpyro
 

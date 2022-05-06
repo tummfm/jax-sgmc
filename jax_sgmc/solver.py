@@ -126,7 +126,7 @@ def mcmc(solver,
   # saving is None to sort out not accepted samples. Samples are not accepted
   # due tu burn in or thinning.
 
-  # Intialize a single chain
+  # Initialize a single chain
   def _init(init_state, iterations, schedulers=None):
     main_scheduler, static_information = scheduler_init(iterations)
     # Some solvers might require additional schedulers, such as parallel
@@ -436,7 +436,7 @@ def sggmc(integrator_fn,
           full_data_map: data.OrderedBatch,
           mass_adaption: Callable = None
           ) -> Tuple[Callable, Callable, Callable]:
-  """Guided Gradient Monte Carlo using Stochastic Gradients.
+  """Gradient Guided Monte Carlo using Stochastic Gradients.
 
   The OBABO integration scheme is reversible even when using stochastic
   gradients and provides second order accuracy. Therefore, a MH-acceptance step

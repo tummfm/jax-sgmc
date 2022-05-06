@@ -79,5 +79,3 @@ jax_sgmc.data.tensorflow_loader
 
 .. autoclass:: jax_sgmc.data.tensorflow_loader.TensorflowDataLoader
    :members:
-
-

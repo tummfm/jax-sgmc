@@ -2,7 +2,7 @@
 Compute Potential from Likelihood
 ==================================
 
-Stochastic gradient monte carlo requires to evaluate the potential and the model
+Stochastic Gradient MCMC evaluates the potential and the model
 for a multiple of observations or all observations. The likelihood might be
 written for only a single sample or a batch of data. Therefore, this module acts
 as an interface between the different likelihoods and the integrators.
@@ -25,7 +25,7 @@ as an interface between the different likelihoods and the integrators.
 Setup Data Loaders
 -------------------
 
-For demonstration purposes, we setup a dataloader to compute the potential for
+For demonstration purposes, we setup a data loader to compute the potential for
 a random batch of data as well as for the full dataset.
 
 Stochastic Potential
@@ -61,7 +61,7 @@ Unbatched Likelihood
 In the simplest case, the likelihood and model function only accept a single
 observation and parameter set.
 Therefore, this module maps the evaluation over the mini-batch or even all
-observations by making use of jaxs tools ``map``, ``vmap`` and ``pmap``.
+observations by making use of Jax's tools ``map``, ``vmap`` and ``pmap``.
 
 The likelihood can be written for a single observation. The
 :mod:`jax_sgmc.potential` module then evaluates the likelihood for a batch of
@@ -78,7 +78,7 @@ reference data sequentially via ``map`` or parallel via ``vmap`` or ``pmap``.
 Stochastic Potential
 ______________________
 
-The stochastic potential is the computed automatically from the likelihood of a
+The stochastic potential is computed automatically from the likelihood of a
 single observation.
 
   >>>

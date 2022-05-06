@@ -14,10 +14,10 @@
 
 """Data input in jit-compiled functions
 
-Big Data but limited device memory disallows to store all reference data on the
-computing device. With the following functions, data mini-batches of data can be
-requested just as the data would be fully loaded on the device and thus enables
-to jit-compile or vmap the entiere function.
+Limited device memory disallows to store all reference data on the device for
+big datasets. With the following functions, mini-batches of data can be
+requested in ``jit``-compiled functions without loading the entire dataset into
+the device's memory.
 
 In the background, a cache of mini-batches is sequentially requested by the
 Host Callback Wrappers from the Data Loaders and loaded on the device via the
@@ -48,7 +48,7 @@ class MiniBatchInformation(NamedTuple):
   """Bundles all information about the reference data.
 
   Args:
-    observation_count: Total number of observatins
+    observation_count: Total number of observations
     effective_observation_count: The number of observations without the
       discarded samples remaining after e.g. shuffling.
     mini_batch: List of tuples, tuples consist of ``(observations, parameters)``
@@ -68,8 +68,6 @@ MiniBatch = Union[Tuple[PyTree],
                   Tuple[PyTree, mini_batch_information, Array]]
 
 # Definition of the data loader class
-
-# Todo: Register DataLoader pipes with (optional) the parent chain JaxUUID.
 
 class DataLoader(metaclass=abc.ABCMeta):
   """Abstract class to define required methods of a DataLoader.
@@ -147,9 +145,6 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
   from storage in an ordered and a random fashion.
   """
 
-  # Todo: Add a checkpoint function returning the current state
-  #       def checkpoint(self, ...):
-
   def save_state(self, chain_id: int):
     """Returns all necessary information to restore the dataloader state.
 
@@ -181,12 +176,12 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
                                mb_size: int = None,
                                **kwargs
                                ) -> int:
-    """Register a new chain which draw samples randomly.
+    """Register a new chain which assembles batches randomly.
 
     Args:
       cache_size: The number of drawn batches.
       mb_size: The number of observations per batch.
-      seed: Set the random seed to start the chain at a well defined state.
+      seed: Set the random seed to start the chain at a well-defined state.
 
     Returns:
       Returns the id of the new chain.
@@ -199,7 +194,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
                                 mb_size: int = None,
                                 **kwargs
                                 ) -> int:
-    """Register a chain which assembles batches in an ordered manor.
+    """Register a chain which assembles batches in an ordered manner.
 
     Args:
       cache_size: The number of drawn batches.
@@ -245,7 +240,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
       mask=onp.ones(mb_size, dtype=onp.bool_))
     return format, mb_info
 
-# Todo: Add variable to keept track of already returned batches to implement
+# Todo: Add variable to keep track of already returned batches to implement
 #       masking
 
 class CacheState(NamedTuple):
@@ -352,8 +347,7 @@ class FullDataMapFunction(Protocol):
       masking: If true, an array marking invalid samples is passed to the
         function such that a single result for a batch of data can be
         calculated. If false, then a result for each observation must be
-        returned and the invalid results are discared automatically after the
-        computation.
+        returned and the invalid results are discarded after the computation.
       information: Pass the batch information together with the batch
 
     Returns:
@@ -476,7 +470,7 @@ def full_reference_data(data_loader: DataLoader,
                  masking: bool = False,
                  information: bool = False
                  ) -> Tuple[PyTree, PyTree]:
-    """Map the function over all data and return the results.
+    """Maps the function over all data.
 
     Args:
       fun: Function accepting a batch of data, a mask and a state.
@@ -528,7 +522,7 @@ def tree_index(pytree: PyTree, index):
   """Indexes the leaves of the tree in the first dimension.
 
   Args:
-    PyTree: Tree to index with array-like leaves
+    pytree: Tree to index with array-like leaves
     index: Selects which slice to return
 
   Returns:
@@ -607,7 +601,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       information: Whether to return batch information
 
     Returns:
-      Returns the new data state and the next batch. Optionally also also a
+      Returns the new data state and the next batch. Optionally an additional
       struct containing information about the batch can be returned.
 
     """

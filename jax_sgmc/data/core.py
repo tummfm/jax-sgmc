@@ -26,6 +26,8 @@ Host Callback Wrappers from the Data Loaders and loaded on the device via the
 """
 
 import abc
+import dataclasses
+import threading
 
 import warnings
 
@@ -59,15 +61,10 @@ class MiniBatchInformation(NamedTuple):
   batch_size: Array
 
 
-# Todo: Rework occurences
-mini_batch_information = MiniBatchInformation
-
 PyTree = Any
 MiniBatch = Union[Tuple[PyTree],
-                  Tuple[PyTree, mini_batch_information],
-                  Tuple[PyTree, mini_batch_information, Array]]
-
-# Definition of the data loader class
+                  Tuple[PyTree, MiniBatchInformation],
+                  Tuple[PyTree, MiniBatchInformation, Array]]
 
 class DataLoader(metaclass=abc.ABCMeta):
   """Abstract class to define required methods of a DataLoader.
@@ -127,7 +124,7 @@ class DeviceDataLoader(DataLoader, metaclass=abc.ABCMeta):
   def get_random_data(self,
                       state,
                       batch_size
-                      ) ->Tuple[PyTree, Tuple[PyTree, mini_batch_information]]:
+                      ) ->Tuple[PyTree, Tuple[PyTree, MiniBatchInformation]]:
     """Returns a random batch of the data.
 
     This function must be jit-able and free of side effects.
@@ -221,7 +218,7 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
 
     Returns:
       Returns a pytree with the same tree structure as the random data cache but
-      with ``jax.ShapedDtypeStruct``` as leaves.
+      with ``jax.ShapedDtypeStruct`` as leaves.
     """
     obs_format = self._format
 
@@ -240,9 +237,6 @@ class HostDataLoader(DataLoader, metaclass=abc.ABCMeta):
       mask=onp.ones(mb_size, dtype=onp.bool_))
     return format, mb_info
 
-# Todo: Add variable to keep track of already returned batches to implement
-#       masking
-
 class CacheState(NamedTuple):
   """Caches several batches of randomly batched reference data.
 
@@ -251,7 +245,7 @@ class CacheState(NamedTuple):
     cached_batches_count: Number of cached mini-batches. Equals the first
       dimension of the cached batches
     current_line: Marks the next batch to be returned.
-    chain_id: Identifier of the chain to associate random state
+    chain_id: Identifier of the chain
     state: Additional information
     valid: Array containing information about the validity of individual samples
   """
@@ -357,6 +351,42 @@ class FullDataMapFunction(Protocol):
       ::
 
         (data_state, (results, carry)) = full_data_map(...)
+
+    """
+
+class FullDataMapperFunction(Protocol):
+  def __call__(self,
+               fun: MappedFunction,
+               carry: PyTree,
+               masking: bool = False,
+               information: bool = False,
+               batched: bool = True,
+               ) -> PyTree:
+    """Maps a function over the complete dataset.
+
+    This function differs to :class:`FullDataMapFunction` that it acquires a
+    :class:`CacheState` before each mapping over the full dataset.
+
+    Args:
+      fun: Function to be mapped over the dataset
+      carry: Variables which are carried over to the next evaluation of ``fun``
+      masking: If true, an array marking invalid samples is passed to the
+        function such that a single result for a batch of data can be
+        calculated. If false, then a result for each observation must be
+        returned and the invalid results are discarded automatically after the
+        computation.
+      information: Pass the batch information together with the batch
+      batched: Whether function to be mapped over full dataset is vectorized. If
+        false, the function is vmapped such that it can process a batch of
+        observations.
+
+    Returns:
+      Returns the results of the computation including the carry of the last
+      computation:
+
+      ::
+
+        (results, carry) = full_data_mapper(...)
 
     """
 
@@ -542,7 +572,7 @@ def tree_index(pytree: PyTree, index):
 # Callback is independent of assembling of the batches
 def _hcb_wrapper(data_loader: HostDataLoader,
                  cached_batches_count: int,
-                 mb_size: int) -> Tuple[GetBatchFunction, mini_batch_information]:
+                 mb_size: int) -> Tuple[GetBatchFunction, MiniBatchInformation]:
   # These are helper function which keep a reference to the stateful data object
   # and can be called via the host_callback.call function
   # The format of the mini batch is static.
@@ -624,7 +654,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       chain_id=data_state.chain_id,
       valid=data_state.valid)
 
-    info = mini_batch_information(
+    info = MiniBatchInformation(
       observation_count = mb_information.observation_count,
       batch_size = mb_information.batch_size,
       mask = mask)
@@ -698,7 +728,7 @@ def _random_reference_data_device(data_loader: DeviceDataLoader,
 def _full_reference_data_host(data_loader: HostDataLoader,
                               cached_batches_count: int = 100,
                               mb_size: int = None
-                              ) -> Tuple[Callable, Tuple[Callable, mini_batch_information]]:
+                              ) -> Tuple[Callable, Tuple[Callable, MiniBatchInformation]]:
   """Sequentially load batches of reference data via host-callback. """
   # Warn if cached_batches are bigger than total dataset
   observation_count = data_loader.static_information["observation_count"]
@@ -737,7 +767,7 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
                                 mb_size: int = None
                                 ) -> Tuple[Callable,
                                            Tuple[Callable,
-                                                 mini_batch_information]]:
+                                                 MiniBatchInformation]]:
   """Batches the dataset on the device. """
 
   reference_data = data_loader.get_full_data()
@@ -745,7 +775,7 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
 
 
   # The information about the batches need to be static.
-  mb_info = mini_batch_information(
+  mb_info = MiniBatchInformation(
     observation_count=total_observations,
     batch_size=mb_size)
 
@@ -775,3 +805,135 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
       return new_state, selected_data
 
   return init_fn, (batch_fn, mb_info)
+
+
+class _FullDataHelper:
+  """Class to keep track of unused CacheStates. """
+
+  def __init__(self, data_loader, cache_size, batch_size):
+    self._init_fn, self._map_fn = full_reference_data(
+      data_loader, cache_size, batch_size)
+
+    # Initialize the first cache state to compute the shape of the CacheState
+    self._unused_states = [self._new_cache_state()]
+    self._cache_state_format = tree_util.tree_map(
+      lambda leaf: jax.ShapeDtypeStruct(dtype=leaf.dtype, shape=leaf.shape),
+      self._unused_states[0])
+
+    self._lock = threading.Lock()
+
+  @property
+  def get_map_fn(self) -> FullDataMapFunction:
+    return self._map_fn
+
+  @property
+  def get_cache_state_format(self) -> PyTree:
+    return self._cache_state_format
+
+  def get_cache_state(self) -> CacheState:
+    """Return unused cache state or create new one if none available."""
+    with self._lock:
+      if len(self._unused_states) == 0:
+        state = self._new_cache_state()
+      else:
+        state = self._unused_states.pop()
+    return state
+
+  def free_cache_state(self, cache_state: CacheState) -> Array:
+    """Adds cache state back to the unused cache states."""
+    with self._lock:
+      self._unused_states.append(cache_state)
+    return jnp.array(1.0)
+
+  def _new_cache_state(self) -> CacheState:
+    """Creates a new cache state. """
+    new_cache_state = self._init_fn()
+    return new_cache_state
+
+
+def full_data_mapper(data_loader: DataLoader = None,
+                     cached_batches_count: int = 1,
+                     mb_size: int = 1
+                     ) -> FullDataMapperFunction:
+  """Initializes a functional to map a function over a complete dataset.
+
+  This function extends the functionality of
+  :func:`full_reference_data` by loading the data states
+  form the host before each mapping.
+
+  Args:
+    data_loader: Reads data from storage
+    cached_batches_count: Number of batches in the cache. A larger number is
+      faster, but requires more memory
+    mb_size: Size of the data batch
+
+  Returns:
+    Returns a function to map another function over a complete dataset of an
+    appropriate :class:`DataLoader`.
+
+  """
+
+  _helper = _FullDataHelper(data_loader, cached_batches_count, mb_size)
+
+  # Helper functions to load/save the CacheStates on the host via host_callback
+  def _get_state() -> CacheState:
+    cache_state = hcb.call(
+      lambda _: _helper.get_cache_state(),
+      jnp.array(1.0),
+      result_shape=_helper.get_cache_state_format)
+    return cache_state
+
+  def _free_cache_state(cache_state: CacheState, results: PyTree) -> Array:
+    # Loop-through the results to hinder XLA to remove the tap call
+    results = hcb.id_tap(
+      lambda cs, _: _helper.free_cache_state(cs),
+      cache_state,
+      result=results)
+    return results
+
+  def mapper_fn(fun: Union[MaskedMappedFunction, UnmaskedMappedFunction],
+                carry: PyTree,
+                masking: bool = False,
+                information: bool = False,
+                batched: bool = True) -> PyTree:
+    data_state = _get_state()
+
+    # Batch the function if it is not batched.
+    if batched:
+      batched_fun = fun
+    else:
+      if masking:
+        raise ValueError("The function must be vectorized manually to allow "
+                         "masking.")
+
+      if mb_size == 1:
+        # No vmapping required but first axis of all observations must be
+        # removed.
+        def batched_fun(batch, state):
+          squeezed_batch = tree_util.tree_map(
+            partial(jnp.squeeze, axis=0),
+            batch)
+          result, state = fun(squeezed_batch, state)
+          expanded_result = tree_util.tree_map(
+            partial(jnp.expand_dims, axis=0),
+                    result)
+          return expanded_result, state
+      else:
+        # Only the first resulting state is passed to the next iteration
+        vmapped_fun = jax.vmap(fun, in_axes=(0, None))
+        def batched_fun(batch, state):
+          results, states = vmapped_fun(batch, state)
+          if states is None:
+            state = None
+          else:
+            state = tree_util.tree_map(
+              partial(jnp.take_along_axis, indices=0, axis=0),
+              states)
+          return results, state
+
+    (new_data_state, results) = _helper.get_map_fn(
+      batched_fun, data_state, carry, masking=masking, information=information)
+    results = _free_cache_state(new_data_state, results)
+    return results
+
+  return mapper_fn

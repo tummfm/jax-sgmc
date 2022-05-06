@@ -25,7 +25,7 @@
 **JaxSGMC** tries to simplify the implementation of new solvers by
 providing a toolbox of helper functions and a modular concept:
 
-![Structure of JaxSGMC](/jax-sgmc-structure.pdf)
+![Structure of JaxSGMC](/jax-sgmc-structure.svg)
 
 ### Data Input / Output under ``jit``
 

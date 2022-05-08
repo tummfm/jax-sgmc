@@ -44,14 +44,14 @@ from jax_sgmc import data, potential, scheduler, adaption, integrator, solver, i
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
 ```
 
-# Setup Solver
+# Setup Custom Solver
 
-## Construct Solver
+## Overview
 
 The Solver is applied to the problem in quickstart.
 
 
-### Setup Reference Data Loading
+## Reference Data Loading
 
 The reference data is passed to the solver via two components, the data loader
 and the host callback wrapper.
@@ -107,7 +107,7 @@ data_loader_kwargs = {
 }
 ```
 
-### Setup Potential
+## Log-likelihood to Potential
 
 The model is connected to the solver via the (log-)prior and (log-)likelihood
 function. The model for our problem is:
@@ -149,7 +149,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
                                              strategy="vmap")                                    
 ```
 
-### Setup Adaption
+## RMSprop Adaption
 
 - All kwargs must be passed via the integrator init
 
@@ -162,7 +162,7 @@ adaption_kwargs = {
 }
 ```
 
-### Setup Integrator and Solver
+## Integrator and Solver
 
 ```{code-cell}
 langevin_diffusion = integrator.langevin_diffusion(potential_fn=potential_fn,
@@ -180,7 +180,7 @@ init_state = rms_prop_solver[0](init_sample,
                                 batch_kwargs=data_loader_kwargs)
 ```
 
-### Setup Scheduler
+## Scheduler
 
 ```{code-cell}
 step_size_schedule = scheduler.polynomial_step_size_first_last(first=0.05,
@@ -197,14 +197,14 @@ schedule = scheduler.init_scheduler(step_size=step_size_schedule,
                                     thinning=thinning_schedule)
 ```
 
-### Setup Saving
+## Save Samples in Numpy Arrays
 
 ```{code-cell}
 data_collector = io.MemoryCollector()
 save_fn = io.save(data_collector=data_collector)
 ```
 
-### Run Solver
+## Run Solver
 
 ```{code-cell}
 mcmc = solver.mcmc(solver=rms_prop_solver,
@@ -217,6 +217,8 @@ results = mcmc(init_state, iterations=10000)[0]
 
 print(f"Collected {results['sample_count']} samples")
 ```
+
+## Plot Results
 
 ```{code-cell}
 plt.figure()

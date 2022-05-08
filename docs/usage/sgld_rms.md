@@ -1,6 +1,6 @@
 ---
 jupytext:
-  formats: ipynb,md:myst,py
+  formats: examples///ipynb,docs//usage//md:myst
   main_language: python
   text_representation:
     extension: .md
@@ -33,108 +33,18 @@ limitations under the License.
 
 ```{code-cell}
 :tags: [hide-cell]
-import numpy as onp
-
-import jax.numpy as jnp
-
-from jax import random
 
 import matplotlib.pyplot as plt
-
+import numpy as onp
+import jax.numpy as jnp
+from jax import random
 from jax.scipy.stats import norm
 
-from numpyro import sample as npy_smpl
-import numpyro.infer as npy_inf
-import numpyro.distributions as npy_dist
-
-from scipy.stats import gaussian_kde
-
-
-from jax_sgmc import potential
+from jax_sgmc import data, potential, scheduler, adaption, integrator, solver, io
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
-from jax_sgmc import alias
 ```
 
 # Setup Solver
-
-## Structure of SGLD Solver
-
-```{mermaid}
-flowchart TD
-%%{config: {'height': 'auto'}}%%
-
-  MCMC((MCMC))
-
-  subgraph B [Scheduler]
-    direction TB
-    B1[Update] --> B11[Update Specific Schedulers]
-    B2[Get] --> B21[Get Specific Schedules]
-  end
-
-  subgraph D [Solver]
-    direction TB
-    D1[Update Solver State]
-    D2[Get Samples from Solver State]
-  end
-
-  subgraph C [Integrator]
-    direction TB
-    CU[Update Integrator State]
-    CG[Get Variables from Integrator State]
-  end
-
-  subgraph E [Adaption]
-    direction TB
-    E1[Update Adaption State]
-    E2[Get Manifold from Adaption State]
-  end
-
-  subgraph F [Data]
-    direction TB
-    F1[Draw Random Batch] --> F2{Cache Empty?}
-    F2 -- No --> F3[Load Cached Batch]
-  end
-  
-  subgraph FDL [Data Loader]
-    direction TB
-    F2 -. Yes .-> FDL1[Assemble New Cache] -.-> F3
-  end
-
-  subgraph H [Potential]
-    direction TB
-    H1[Evaluate Stochastic Potential]
-  end
-  
-  subgraph I [Saving]
-    direction TB
-    I1[Save] --> I2{Thinning / Burn In?}
-    I2 --> I3[Update Statistics]
-  end
-
-  subgraph J [Data Collector]
-    J1[Save Sample]
-  end
-
-  I2 -. Yes .-> J1
-
-  MCMC --> B1
-  MCMC --> B2
-  MCMC --> D1
-  MCMC --> D2
-  MCMC --> I1
-  
-  D1 ---> CU
-  D2 ---> CG
-  
-  H1 -->  U1{{Evaluate User Likelihood}}
-  H1 --> U2{{Evaluate User Prior}}
-
-  CU --> E1
-  CU --> E2
-  CU --> F1
-  CU --> H1
-
-```
 
 ## Construct Solver
 
@@ -156,9 +66,9 @@ and selects the observations in each batch after a specific method
 (ordered access, shuffling). Which of those methods are available differe
 between the data loaders.
 
-
 ```{code-cell}
 :tags: [hide-cell]
+
 N = 4 
 samples = 1000 # Total samples
 
@@ -175,11 +85,9 @@ x = random.uniform(split1, minval=-10, maxval=10, shape=(samples, N))
 x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
                x[:, 3]]).transpose()
 y = jnp.matmul(x, w) + noise
-
 ```
 
 ```{code-cell}
-
 # The construction of the data loader can be different. For the numpy data
 # loader, the numpy arrays can be passed as keyword arguments and are later
 # returned as a dictionary with corresponding keys.
@@ -188,10 +96,15 @@ data_loader = NumpyDataLoader(x=x, y=y)
 # The cache size corresponds to the number of batches per cache. The state
 # initialized via the init function is necessary to identify which data chain
 # request new batches of data.
-init_fn, batch_fn = data.random_reference_data(data_loader,
-                                               mb_size=N,
-                                               cache_size=100)
+data_fn = data.random_reference_data(data_loader,
+                                     mb_size=N,
+                                     cached_batches_count=100)
 
+data_loader_kwargs = {
+    "seed": 0,
+    "shuffle": True,
+    "in_epochs": False
+}
 ```
 
 ### Setup Potential
@@ -204,24 +117,22 @@ def model(sample, observations):
     weights = sample["w"]
     predictors = observations["x"]
     return jnp.dot(predictors, weights)
-
 ```
+
 **JaxSGMC** supports samples in the form of pytrees, so no flattering of e.g.
 Neural Net parameters is necessary. In our case we can separate the standard
 deviation, which is only part of the likelihood, from the weights by using a
 dictionary:
 
 ```{code-cell}
-
 def likelihood(sample, observations):
-    sigma = sample["sigma"]
+    sigma = jnp.exp(sample["log_sigma"])
     y = observations["y"]
     y_pred = model(sample, observations)
     return norm.logpdf(y - y_pred, scale=sigma)
 
 def prior(sample):
-    del sample
-    return 0.0
+    return 1 / jnp.exp(sample["log_sigma"])
     
 ```
 
@@ -233,7 +144,6 @@ of observations. As the model is not computationally demanding, we let
 **JaxSGMC** vectorize the evaluation of the likelihood:
 
 ```{code-cell}
-
 potential_fn = potential.minibatch_potential(prior=prior,
                                              likelihood=likelihood,
                                              strategy="vmap")                                    
@@ -241,10 +151,101 @@ potential_fn = potential.minibatch_potential(prior=prior,
 
 ### Setup Adaption
 
+- All kwargs must be passed via the integrator init
+
+```{code-cell}
+rms_prop_adaption = adaption.rms_prop()
+
+adaption_kwargs = {
+    "lmbd": 1e-6,
+    "alpha": 0.99
+}
+```
+
 ### Setup Integrator and Solver
+
+```{code-cell}
+langevin_diffusion = integrator.langevin_diffusion(potential_fn=potential_fn,
+                                                   batch_fn=data_fn,
+                                                   adaption=rms_prop_adaption)
+
+# Returns a triplet of init_fn, update_fn and get_fn
+rms_prop_solver = solver.sgmc(langevin_diffusion)
+
+# Initialize the solver by providing initial values for the latent variables.
+# We provide extra arguments for the data loader and the adaption method.
+init_sample = {"log_sigma": jnp.array(0.0), "w": jnp.zeros(N)}
+init_state = rms_prop_solver[0](init_sample,
+                                adaption_kwargs=adaption_kwargs,
+                                batch_kwargs=data_loader_kwargs)
+```
 
 ### Setup Scheduler
 
+```{code-cell}
+step_size_schedule = scheduler.polynomial_step_size_first_last(first=0.05,
+                                                               last=0.001,
+                                                               gamma=0.33)
+burn_in_schedule = scheduler.initial_burn_in(2000)
+thinning_schedule = scheduler.random_thinning(step_size_schedule=step_size_schedule,
+                                              burn_in_schedule=burn_in_schedule,
+                                              selections=1000)
+
+# Bundles all specific schedules
+schedule = scheduler.init_scheduler(step_size=step_size_schedule,
+                                    burn_in=burn_in_schedule,
+                                    thinning=thinning_schedule)
+```
+
 ### Setup Saving
 
+```{code-cell}
+data_collector = io.MemoryCollector()
+save_fn = io.save(data_collector=data_collector)
+```
+
 ### Run Solver
+
+```{code-cell}
+mcmc = solver.mcmc(solver=rms_prop_solver,
+                   scheduler=schedule,
+                   saving=save_fn)
+
+# Take the result of the first chain
+results = mcmc(init_state, iterations=10000)[0]
+
+
+print(f"Collected {results['sample_count']} samples")
+```
+
+```{code-cell}
+plt.figure()
+plt.title("Sigma")
+
+plt.plot(onp.exp(results["samples"]["variables"]["log_sigma"]), label="RMSprop")
+
+w_rms = results["samples"]["variables"]["w"]
+
+# w1 vs w2
+w1d = onp.linspace(0.00, 0.20, 100)
+w2d = onp.linspace(-0.70, -0.30, 100)
+W1d, W2d = onp.meshgrid(w1d, w2d)
+p12d = onp.vstack([W1d.ravel(), W2d.ravel()])
+
+plt.figure()
+plt.title("w_1 vs w_2 (rms)")
+
+plt.xlim([0.07, 0.12])
+plt.ylim([-0.525, -0.450])
+plt.plot(w_rms[:, 0], w_rms[:, 1], 'o', alpha=0.5, markersize=0.5, zorder=-1)
+
+# w3 vs w4
+w3d = onp.linspace(-0.3, -0.05, 100)
+w4d = onp.linspace(-0.75, -0.575, 100)
+W3d, W4d = onp.meshgrid(w3d, w4d)
+p34d = onp.vstack([W3d.ravel(), W4d.ravel()])
+
+plt.figure()
+plt.title("w_3 vs w_4 (rms)")
+plt.plot(w_rms[:, 2], w_rms[:, 3], 'o', alpha=0.5, markersize=0.5, zorder=-1)
+```

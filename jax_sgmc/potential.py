@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utility to evaluate stochastic or real potential.
+"""Utility to evaluate stochastic or true potential.
 
 This module transforms the likelihood function for a single observation or a
 batch of observations to a function calculating the stochastic or full potential
@@ -48,14 +48,14 @@ class StochasticPotential(Protocol):
                likelihoods: bool = False
                ) -> Union[Tuple[Array, PyTree],
                           Tuple[Array, Tuple[Array, PyTree]]]:
-    """Function calculating the stochastic potential for a mini-batch of data.
+    """Calculates the stochastic potential for a mini-batch of data.
 
       Args:
         sample: Model parameters
         reference_data: Batch of observations
         state: Special parameters of the model which should not change the
           result of a model evaluation.
-        mask: Marking invalid (e.g double) samples
+        mask: Marking invalid (e.g. double) samples
         likelihoods: Return the likelihoods of all model evaluations separately
 
       Returns:
@@ -72,7 +72,7 @@ class FullPotential(Protocol):
                full_data_map_fn: Callable,
                state: PyTree = None
                ) -> Tuple[Array, Tuple[CacheState, PyTree]]:
-    """Function calculating the potential over the full dataset.
+    """Calculates the potential over the full dataset.
 
       Args:
         sample: Model parameters
@@ -99,9 +99,9 @@ def minibatch_potential(prior: Prior,
   """Initializes the potential function for a minibatch of data.
 
   Args:
-    prior: Probability density function which is evaluated for a single
+    prior: Log-prior function which is evaluated for a single
       sample.
-    likelihood: Probability density function. If ``has_state = True``, then the
+    likelihood: Log-likelihood function. If ``has_state = True``, then the
       first argument is the model state, otherwise the arguments are ``sample,
       reference_data``.
     strategy: Determines hwo to evaluate the model function with respect for
@@ -222,9 +222,9 @@ def full_potential(prior: Callable[[PyTree], Array],
   """Transforms a pdf to compute the full potential over all reference data.
 
   Args:
-    prior: Probability density function which is evaluated for a single
+    prior: Log-prior function which is evaluated for a single
       sample.
-    likelihood: Probability density function. If ``has_state = True``, then the
+    likelihood: Log-likelihood function. If ``has_state = True``, then the
       first argument is the model state, otherwise the arguments are ``sample,
       reference_data``.
     strategy: Determines how to evaluate the model function with respect for

@@ -50,7 +50,7 @@ schedule = namedtuple("schedule",
                        "temperature",
                        "burn_in",
                        "accept"])
-"""Auxillary variables for integrator.
+"""Auxiliary variables for integrator.
 
 Attributes:
   step_size: Learning rate
@@ -86,11 +86,8 @@ Attributes:
   samples_collected: Number of samples saved.
 """
 
-# Todo: Change scheduler to allow passing kwargs to init function, which do not
-#       change the static properties.
-
 # The scheduler combines the specific scheduler. This makes it easier to
-# implement only rarely used auxillary variables by providing default values.
+# implement only rarely used auxiliary variables by providing default values.
 # The update functions are collected at a central state.
 
 def init_scheduler(step_size: specific_scheduler = None,
@@ -100,7 +97,7 @@ def init_scheduler(step_size: specific_scheduler = None,
                    progress_bar: bool = True,
                    progress_bar_steps: Array = 20
                    ) -> Tuple[Callable, Callable, Callable]:
-  """Initialize the scheduler.
+  """Initializes the scheduler.
 
   The scheduler combines the specific schedules for each variable. It updates
   them and gets them at a central place and makes it possible to combine them or
@@ -246,7 +243,7 @@ def init_scheduler(step_size: specific_scheduler = None,
 ################################################################################
 
 def constant_temperature(tau: Array = 1.0) -> specific_scheduler:
-  """Scale the added noise with an unchanged constant.
+  """Scales the added noise with an unchanged constant.
 
   Args:
     tau: Scale of the added noise
@@ -280,14 +277,14 @@ def constant_temperature(tau: Array = 1.0) -> specific_scheduler:
 
 
 def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
-  """Cylic switch of the temperature between 0.0 and 1.0.
+  """Cyclic switch of the temperature between 0.0 and 1.0.
 
   Switches temperature form 0.0 (SGD) to 1.0 (SGLD) when ratio of initial step
   size and current step size drops below beta. This scheduler is intended to
   be used with the cyclic step size scheduler.
 
   Args:
-    beta: Ratio of current step size to inital step size when transition to SGLD
+    beta: Ratio of current step size to initial step size when transition to SGLD
     k: Number of cycles
 
   Returns:
@@ -451,7 +448,7 @@ def polynomial_step_size(a: Array = 1.0,
                          b: Array = 1.0,
                          gamma: Array = 0.33
                          ) -> specific_scheduler:
-  """Polynomial descresing step size schedule.
+  """Polynomial decreasing step size schedule.
 
   Implements the original proposal of a polynomial step size schedule
   :math:`\epsilon = a(b + n)^{\gamma}`.
@@ -553,7 +550,7 @@ def polynomial_step_size_first_last(first: Array = 1.0,
 # Burn in: Return 1.0 if the sample should be accepted and 0.0 otherwise
 
 def cyclic_burn_in(beta: Array=1.0, k:int=1):
-  """Discard samples at the beginning of each cycle.
+  """Discards samples at the beginning of each cycle.
 
   Args:
     beta: Ratio of current and initial step size up to which burn in should be
@@ -568,10 +565,10 @@ def cyclic_burn_in(beta: Array=1.0, k:int=1):
   raise NotImplementedError
 
 def initial_burn_in(n: Array = 0) -> specific_scheduler:
-  """Discard the first n steps.
+  """Discards the first n steps.
 
   Args:
-    n: Count of inital steps which should be discarded
+    n: Count of initial steps which should be discarded
 
   Returns:
     Returns specific scheduler.

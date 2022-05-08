@@ -10,23 +10,24 @@ __________________________________
 Access of (random) data in **JaxSGMC** consists of two steps:
 
 - Setup Data Loader
-- Setup Access Chain
+- Setup Callback Wrappers
 
 The Data Loaders determines where the data is stored and how it is passed
 to the device (e. g. shuffled in epochs).
 
-The Access Chain provides the functionality for efficient access of the data,
-which is not necessarily stored on the device, even under jax transformations.
+The Callback Wrappers requests new batches from the Data Loader and pass them
+to the device via Jax's Host-Callback module. Therefore, only a subset of the
+data is stored in the device memory.
 
-The combination of Data Loader and Access chain determines, how the data is
-passed to the computation. Therefore, this guide presents data access with
-NumpyDataLoader and TensorflowDataLoader.
+The combination of a Data Loader and Callback Wrappers determines how the data is
+passed to the computation. Therefore, this guide presents different methods of
+data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
 
 Shape and dtype of the Data
 ____________________________
 
 Some models needs to now the shape and dtype of the reference data. Therefore,
-a all-zero batch can be drawn from the dataloader.
+an all-zero batch can be drawn from every Data Loader.
 
   ::
 
@@ -35,8 +36,8 @@ a all-zero batch can be drawn from the dataloader.
                  [0., 0.],
                  [0., 0.]], dtype=float32)}
 
-If no batch size is specified, simply a single observation is returned (all
-leaves are reduced by the first axis).
+If no batch size is specified a single observation is returned (all leaves
+shapes are reduced by the first axis).
 
   ::
 
@@ -52,7 +53,7 @@ Numpy Data Loader
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
-First we set up the dataset. This is very simply, as each array can be asigned
+First we set up the dataset. This is very simply, as each array can be assigned
 as a keyword argument to the dataloader. The keywords of the single arrays form
 the keys of the pytree-dict, bundling all observations.
 
@@ -62,6 +63,14 @@ the keys of the pytree-dict, bundling all observations.
   >>> y = onp.zeros((10, 2))
   >>>
   >>> data_loader = NumpyDataLoader(x_r=x, y_r=y)
+
+Some models needs to now the shape and dtype of the reference data. Therefore,
+a all-zero batch can be drawn from the dataloader.
+
+  >>> print(data_loader.initializer_batch(3))
+  {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
+               [0., 0.],
+               [0., 0.]], dtype=float32)}
 
 The host callback wrappers cache some data in the device memory to reduce the
 number of calls to the host. The cache size equals the number of batches stored
@@ -87,7 +96,7 @@ Random Data Access
 ___________________
 
 The NumpyDataLoader provides three different methods to randomly select
-oservations:
+observations:
 
 - Independent draw (default): Draw from all samples with replacement.
 - Shuffling: Draw from all samples without replacement and immediately reshuffle
@@ -108,7 +117,7 @@ multiplicity of the batch size:
   >>> data_loader = NumpyDataLoader(x=x)
   >>> init_fn, batch_fn = data.random_reference_data(data_loader, 2, 3)
 
-The prefered method has to be passed when initializing the different chains:
+The preferred method has to be passed when initializing the different chains:
 
   >>> random_chain = init_fn()
   >>> shuffle_chain = init_fn(shuffle=True)
@@ -133,10 +142,10 @@ Mapping over Full Dataset
 __________________________
 
 It is also possible to map a function over the complete dataset provided by a
-data loader. In each iteration, the function is mapped over a batch of data to
+Data Loader. In each iteration, the function is mapped over a batch of data to
 speed up the calculation but limit the memory consumption.
 
-In this toy example, the dataset consits of the potential bases
+In this toy example, the dataset consists of the potential bases
 :math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \right\}`. In a scan loop,
 the sum of the potentials with given exponents is calculated:
 
@@ -155,7 +164,7 @@ the sum of the potentials with given exponents is calculated:
 First, the data loader must be set up. The mini batch size is not required to
 truly divide the total observation count. This is realized by filling up the
 last batch with some values, which are sorted out either automatically or
-directly by the user with a provided mask.
+directly by the user with the provided mask.
 
   >>> base = jnp.arange(10)
   >>>
@@ -212,6 +221,20 @@ such that it is possible to compute the results for multiple exponents in a
   >>> print(result)
   [ 10  45 285]
 
+It is also possible to store the ``CacheStates`` in the host memory, such that
+it is not necessary to carry the ``data state`` through all function calls.
+The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
+its usage is a little bit simpler:
+
+  >>> mapper_fn = data.full_data_mapper(data_loader,
+  ...                                   cached_batches_count=3,
+  ...                                   mb_size=4)
+  >>>
+  >>> results, _ = mapper_fn(partial(sum_potentials, 2), None, masking=True)
+  >>>
+  >>> print(f"Result with exp = 2: {jnp.sum(results) : d}")
+  Result with exp = 2:  285
+
 
 Tensorflow Data Loader
 -----------------------
@@ -237,10 +260,10 @@ available on tensorflow_datasets.
   ...   for key, item in data.items():
   ...     print(f"{key} with shape {item.shape} and dtype {item.dtype}")
 
-The pipeline returned by tfds load can be directly passet to the data loader.
+The pipeline returned by tfds load can be directly passed to the data loader.
 However, not all tensorflow data types can be transformed to jax data types, for
-eample the feature 'id', which is a string. Those keys can be simply excluded
-by passing the keyword argument `exclude_keys`.
+example the feature 'id', which is a string. Those keys can be simply excluded
+via the keyword argument `exclude_keys`.
 
   >>> # The data pipeline can be used directly
   >>> with contextlib.redirect_stdout(io.StringIO()):

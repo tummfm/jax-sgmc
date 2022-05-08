@@ -28,7 +28,7 @@ from jax import test_util
 from jax import random
 from jax import lax
 
-from jax_sgmc.data.core import random_reference_data, full_reference_data
+from jax_sgmc.data.core import random_reference_data, full_reference_data, full_data_mapper
 from jax_sgmc.data.numpy_loader import NumpyDataLoader, DeviceNumpyDataLoader
 
 try:
@@ -41,9 +41,9 @@ from jax_sgmc.util import list_vmap, list_pmap
 import pytest
 
 # Todo: Maybe parametrize size of dataset or shape
-@pytest.fixture
-def dataset():
-  obs_count = 13
+@pytest.fixture(params=[13, 20])
+def dataset(request):
+  obs_count = request.param
 
   data = {
     "ordered_indices": jnp.arange(obs_count, dtype=jnp.int_),
@@ -58,7 +58,7 @@ def dataset():
   return data, data_format, obs_count
 
 
-class TestNumpyDeviceDataLoader:
+class TestNumpyDataLoader:
 
   @pytest.fixture
   def data_loader(self, dataset):
@@ -156,10 +156,12 @@ class TestNumpyDeviceDataLoader:
     _, count_a = onp.unique(samples_a, return_counts=True)
     _, count_b = onp.unique(samples_b, return_counts=True)
 
-    assert onp.sum(count_a == 2) == n_duplicated
-    assert onp.sum(count_b == 2) == n_duplicated
+    assert count_a.size == obs_count
+    assert count_b.size == obs_count
     assert onp.sum(count_a == 1) == obs_count - n_duplicated
     assert onp.sum(count_b == 1) == obs_count - n_duplicated
+    assert onp.sum(count_a == 2) == n_duplicated
+    assert onp.sum(count_b == 2) == n_duplicated
 
   def test_shuffeling_in_epochs(self, data_loader, dataset):
     _, data_format, obs_count = dataset
@@ -217,8 +219,36 @@ class TestNumpyDeviceDataLoader:
     print(mask_a)
     print(samples_a)
 
+    assert count_a.size == obs_count
+    assert count_b.size == obs_count
     assert onp.sum(count_a == 1) == obs_count
     assert onp.sum(count_b == 1) == obs_count
+
+  def test_full_data_order(self, data_loader, dataset):
+    # The order of the data should not change
+    _, data_format, obs_count = dataset
+    batch_size = 3
+
+    ceil_samples = int(onp.ceil(obs_count / batch_size))
+
+    # Get all samples in one cache and all samples in single caches
+    chain_a = data_loader.register_ordered_pipeline(cache_size=ceil_samples,
+                                                    mb_size=batch_size)
+
+    # Run for at least two complete iterations over the dataset
+    for _ in range(3):
+      cache, masks = data_loader.get_batches(chain_a)
+      for it in range(batch_size):
+        start_idx = it * batch_size
+        expected_idx = start_idx + onp.arange(batch_size)
+
+        indices = cache["ordered_indices"][it]
+        mask = masks[it]
+
+        # Check that expected indices correspond to actual indices for all valid
+        # samples
+        test_util.check_eq(indices[mask],
+                           onp.squeeze(expected_idx[mask]))
 
   def test_seeding(self, data_loader, dataset):
     batch_size = 3
@@ -383,7 +413,7 @@ class TestNumpyDeviceDataLoader:
       NumpyDataLoader(x=x, y=y)
 
 
-class TestNumpyHostDataLoader:
+class TestNumpyDeviceDataLoader:
 
   @pytest.fixture
   def data_loader(self, dataset):
@@ -690,6 +720,112 @@ class TestRandomDataAccess:
       assert test_obs_size == obs_count
 
 
+class TestFullDataMapper:
+
+  @pytest.fixture
+  def data_loader(self, dataset):
+    data, _, _ = dataset
+    return NumpyDataLoader(**data)
+
+  @pytest.fixture
+  def example_problem_mask(self):
+    def test_update_fn(batch, mask, _):
+        return (jnp.sum(mask), batch["ordered_indices"], mask), None
+    return test_update_fn
+
+  @pytest.fixture
+  def example_problem_no_mask(self):
+    def test_update_fn(batch, _):
+      return batch["ordered_indices"], None
+    return test_update_fn
+
+  def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
+    _, _, obs_count = dataset
+
+    mapper = full_data_mapper(cached_batches_count=3,
+                              mb_size=2,
+                              data_loader=data_loader)
+
+    results, _ = mapper(example_problem_mask, None, masking=True)
+    sum_mask, samples, masks = results
+
+    samples = onp.ravel(samples)
+    masks = onp.ravel(masks)
+    sum_mask = onp.sum(sum_mask)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples[masks], return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+    assert sum_mask == obs_count
+
+  def test_jit_full_data_map_mask(self, dataset, data_loader,
+                              example_problem_mask):
+    _, _, obs_count = dataset
+
+    mapper = full_data_mapper(cached_batches_count=3,
+                              mb_size=2,
+                              data_loader=data_loader)
+
+    jit_mapped = jax.jit(lambda: mapper(example_problem_mask, None, masking=True))
+    results, _ = jit_mapped()
+    sum_mask, samples, masks = results
+
+    samples = onp.ravel(samples)
+    masks = onp.ravel(masks)
+    sum_mask = onp.sum(sum_mask)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples[masks], return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+    assert sum_mask == obs_count
+
+  def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    _, _, obs_count = dataset
+
+    mapper = full_data_mapper(cached_batches_count=3,
+                              mb_size=2,
+                              data_loader=data_loader)
+
+    samples, _ = mapper(example_problem_no_mask, None, masking=False)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    _, _, obs_count = dataset
+
+    mapper = full_data_mapper(cached_batches_count=3,
+                              mb_size=2,
+                              data_loader=data_loader)
+
+    jit_mapped = jax.jit(lambda: mapper(example_problem_no_mask, None, masking=False))
+    samples, _ = jit_mapped()
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  @pytest.mark.parametrize("mb_size", [1, 2])
+  def test_full_data_unbatched(self, dataset, data_loader, mb_size, example_problem_no_mask):
+    _, _, obs_count = dataset
+
+    mapper = full_data_mapper(cached_batches_count=3,
+                              mb_size=mb_size,
+                              data_loader=data_loader)
+
+    samples, _ = mapper(example_problem_no_mask, None, masking=False, batched=False)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+
 class TestFullDataAccess:
 
   @pytest.fixture
@@ -736,27 +872,6 @@ class TestFullDataAccess:
       return init_fn, test_fn
     return init_test_fn
 
-  def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
-    _, _, obs_count = dataset
-    data_map = full_reference_data(data_loader,
-                                  cached_batches_count=3,
-                                   mb_size=2)
-
-    init_fn, test_fn = example_problem_mask(data_map)
-
-    _, (results, _) = test_fn(init_fn())
-    sum_mask, samples, masks = results
-
-    samples = onp.ravel(samples)
-    masks = onp.ravel(masks)
-    sum_mask = onp.sum(sum_mask)
-
-    # Every element must appear exactly once
-    _, count = onp.unique(samples[masks], return_counts=True)
-
-    assert onp.sum(count == 1) == obs_count
-    assert sum_mask == obs_count
-
   def test_jit_full_data_map_mask(self, dataset, data_loader,
                               example_problem_mask):
     _, _, obs_count = dataset
@@ -781,20 +896,34 @@ class TestFullDataAccess:
     assert onp.sum(count == 1) == obs_count
     assert sum_mask == obs_count
 
-  def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+  @pytest.mark.parametrize("cs, mb",
+                           [(2, 3),
+                            (3, 2),
+                            (13, 2),
+                            (2, 13),
+                            (13, 13)])
+  def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask, cs, mb):
+    num_maps = 3 # Check multiple iterations over the full dataset
+
     _, _, obs_count = dataset
     data_map = full_reference_data(data_loader,
-                                  cached_batches_count=3,
-                                   mb_size=2)
+                                   cached_batches_count=cs,
+                                   mb_size=mb)
 
     init_fn, test_fn = example_problem_no_mask(data_map)
 
-    _, (samples, _) = test_fn(init_fn())
+    data_state = init_fn()
 
-    # Every element must appear exactly once
-    _, count = onp.unique(samples, return_counts=True)
+    for it in range(num_maps):
+      data_state, (samples, _) = test_fn(data_state)
 
-    assert onp.sum(count == 1) == obs_count
+      # Every element must appear exactly once and the order of the samples
+      # remains unchanged
+      _, count = onp.unique(samples, return_counts=True)
+
+      assert onp.sum(count == 1) == obs_count
+      assert count.size == obs_count
+      test_util.check_eq(samples, onp.arange(obs_count))
 
   def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     _, _, obs_count = dataset

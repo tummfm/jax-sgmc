@@ -85,7 +85,7 @@ class TensorflowDataLoader(HostDataLoader):
                                cache_size: int = 1,
                                mb_size: int = None,
                                **kwargs) -> int:
-    """Register a new chain which draw samples randomly.
+    """Register a new chain which draws samples randomly.
 
     Args:
       cache_size: The number of drawn batches.
@@ -143,7 +143,7 @@ class TensorflowDataLoader(HostDataLoader):
         the batch and the process of assembling.
 
     Returns:
-      Returns a superbatch as registered by :func:`register_random_pipeline` or
+      Returns a batch of batches as registered by :func:`register_random_pipeline` or
       :func:`register_ordered_pipeline` with `cache_size` batches holding
       `mb_size` observations.
 

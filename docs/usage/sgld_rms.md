@@ -31,7 +31,7 @@ limitations under the License.
 ---
 ```
 
-```{code-cell}
+```{code-cell} ipython3
 :tags: [hide-cell]
 
 import matplotlib.pyplot as plt
@@ -46,27 +46,44 @@ from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 # Setup Custom Solver
 
+This example shows how to customize a solver by combining the individual
+modules of **JaxSGMC**.
+It covers all necessary steps to build a *SGLD* solver with *RMSprop* adaption
+and applies it to the same problem as described in {doc}`/quickstart/`.
+
 ## Overview
 
-The Solver is applied to the problem in quickstart.
+Schematically, a solver in **JaxSGMC** has the structure:
 
+![Structure of JaxSGMC](../../jax-sgmc-structure.svg)
 
-## Reference Data Loading
+The SGLD solver with RMSprop adaption will make use of all modules.
+It is set up in these steps:
 
-The reference data is passed to the solver via two components, the data loader
-and the host callback wrapper.
+- **[Load Reference Data](#load-reference-data)**
+- **[Transform Log-likelihood to Potential](#transform-log-likelihood-to-potential)**
+- **[RMSprop Adaption](#rmsprop-adaption)**
+- **[Integrator and Solver](#integrator-and-solver)**
+- **[Scheduler](#scheduler)**
+- **[Save Samples](#save-samples-in-numpy-arrays)**
+- **[Run Solver](#run-solver)**
 
-The host callback wrappers load the data into the jit-compiled programs via
-``host_callback.call()``. To balance the memory usage and the delay of loading
-the data, a number of batches is loaded in each call.
+## Load Reference Data
 
-The data loader assembles the batches requested by the host callback wrappers.
+The reference data is passed to the solver via two components, the Data Loader
+and the Host Callback Wrapper.
+
+The Data Loader assembles the batches requested by the host callback wrappers.
 It loads the data from a source (HDF-File, numpy-array, tensorflow dataset)
 and selects the observations in each batch after a specific method
-(ordered access, shuffling). Which of those methods are available differe
-between the data loaders.
+(ordered access, shuffling, ...).
 
-```{code-cell}
+The Host Callback Wrapper requests new batches from the Data Loader and loads
+them into jit-compiled programs via Jax's Host Callback module.
+To balance the memory usage and the delay due to loading the data, each device
+call returns multiple batches.
+
+```{code-cell} ipython3
 :tags: [hide-cell]
 
 N = 4 
@@ -87,7 +104,21 @@ x = jnp.stack([x[:, 0] + x[:, 1], x[:, 1], 0.1 * x[:, 2] - 0.5 * x[:, 3],
 y = jnp.matmul(x, w) + noise
 ```
 
-```{code-cell}
+The NumpyDataLoader assembles batches randomly by drawing from the the complete
+dataset with and without replacement (shuffeling).
+It also provides the possibility to start the batching from a defined state, 
+controlled via the seed.
+
+These settings can be passed differently for every chain and are thus not passed
+during the initialization.
+Instead, they have to be passed during the
+[initialization of the chains](#integrator-and-solver).
+
+In this example, the batches are shuffled, i.e. every sample is used at least
+once before an already drawn sample is used again and the chains start at a
+defined state.
+
+```{code-cell} ipython3
 # The construction of the data loader can be different. For the numpy data
 # loader, the numpy arrays can be passed as keyword arguments and are later
 # returned as a dictionary with corresponding keys.
@@ -107,12 +138,12 @@ data_loader_kwargs = {
 }
 ```
 
-## Log-likelihood to Potential
+## Transform Log-likelihood to Potential
 
 The model is connected to the solver via the (log-)prior and (log-)likelihood
 function. The model for our problem is:
 
-```{code-cell}
+```{code-cell} ipython3
 def model(sample, observations):
     weights = sample["w"]
     predictors = observations["x"]
@@ -124,7 +155,7 @@ Neural Net parameters is necessary. In our case we can separate the standard
 deviation, which is only part of the likelihood, from the weights by using a
 dictionary:
 
-```{code-cell}
+```{code-cell} ipython3
 def likelihood(sample, observations):
     sigma = jnp.exp(sample["log_sigma"])
     y = observations["y"]
@@ -138,12 +169,12 @@ def prior(sample):
 
 The prior and likelihood are not passed to the solver directly, but 
 first transformed into a (stochastic) potential.
-This allowed us to formulate the model and so the likelihood with only a single 
+This allows us to formulate the model and so the likelihood with only a single 
 observation in mind and let **JaxSGMC** take care of evaluating it for a batch
 of observations. As the model is not computationally demanding, we let 
 **JaxSGMC** vectorize the evaluation of the likelihood:
 
-```{code-cell}
+```{code-cell} ipython3
 potential_fn = potential.minibatch_potential(prior=prior,
                                              likelihood=likelihood,
                                              strategy="vmap")                                    
@@ -151,9 +182,15 @@ potential_fn = potential.minibatch_potential(prior=prior,
 
 ## RMSprop Adaption
 
-- All kwargs must be passed via the integrator init
+The adaption module simplifies the implementation of an adaption strategy
+by raveling / unraveling the latent variables pytree.
 
-```{code-cell}
+The RMSprop adaption is characterized by two parameters, which can be set
+dynamically for each chain.
+As for the data loader arguments, non-default RMSprop parameters must be passed
+during the [initialization of the chains](#integrator-and-solver).
+
+```{code-cell} ipython3
 rms_prop_adaption = adaption.rms_prop()
 
 adaption_kwargs = {
@@ -164,7 +201,20 @@ adaption_kwargs = {
 
 ## Integrator and Solver
 
-```{code-cell}
+The integrator proposes new samples based on a specific process which are then
+processed by the solver.
+For example, the solver might reject a proposal by a Metropolis Hastings
+acceptance step (AMAGOLD, SGGMC) or swap it with another proposal by a parallel
+tempering chain swap (reSGLD).
+
+In this case, a Langevin Diffusion process proposes a new sample, which is
+accepted unconditionally by the solver.
+
+After this step we defined our process.
+Therefore, we can now initialize the starting states of each chain with the
+dynamic settings for the data loader and adaption.
+
+```{code-cell} ipython3
 langevin_diffusion = integrator.langevin_diffusion(potential_fn=potential_fn,
                                                    batch_fn=data_fn,
                                                    adaption=rms_prop_adaption)
@@ -182,7 +232,17 @@ init_state = rms_prop_solver[0](init_sample,
 
 ## Scheduler
 
-```{code-cell}
+Next, we set up a schedule which updates process parameters such as the
+temperature and the step size independently of the solver state.
+It is moreover necessary to determine which samples should be saved or discarded.
+
+SGLD only depends on the step size, which is chosen to follow a polynomial
+schedule.
+However, as only a few and independent samples should be saved, we also set up a
+burn in schedule, which rejects the first 2000 samples and a thinning schedule,
+which randomly selects 1000 samples not subject to burn in.
+
+```{code-cell} ipython3
 step_size_schedule = scheduler.polynomial_step_size_first_last(first=0.05,
                                                                last=0.001,
                                                                gamma=0.33)
@@ -199,14 +259,35 @@ schedule = scheduler.init_scheduler(step_size=step_size_schedule,
 
 ## Save Samples in Numpy Arrays
 
-```{code-cell}
+By default, **JaxSGMC** save accepted samples in the device memory.
+However, for some models the required memory rapidly exceeds the available 
+memory. Therefore, **JaxSGMC** supports saving the samples on the host in a
+similar manner as it loads reference data from the host.
+
+Hence, also the saving step consists of setting up a Data Collector, which takes
+care of saving the data in different formats and a general Host Callback Wrapper
+which transfers the data out of jit-compiled computations.
+
+In this example, the data is simply passed to (real) numpy arrays in the host
+memory.
+
+```{code-cell} ipython3
 data_collector = io.MemoryCollector()
 save_fn = io.save(data_collector=data_collector)
 ```
 
 ## Run Solver
 
-```{code-cell}
+Finally, all parts of the solver are set up and can be combined to a runnable
+process.
+The mcmc function updates the scheduler and integrator in the correct order and
+passes the results to the saving module. 
+
+The mcmc function can be called with multiple ``init_states`` as
+positional arguments to run multiple chains and returns a list of results, one
+for each chain.
+
+```{code-cell} ipython3
 mcmc = solver.mcmc(solver=rms_prop_solver,
                    scheduler=schedule,
                    saving=save_fn)
@@ -220,7 +301,9 @@ print(f"Collected {results['sample_count']} samples")
 
 ## Plot Results
 
-```{code-cell}
+```{code-cell} ipython3
+:tags: [hide-input]
+
 plt.figure()
 plt.title("Sigma")
 

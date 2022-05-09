@@ -157,14 +157,13 @@ dictionary:
 
 ```{code-cell}
 def likelihood(sample, observations):
-    sigma = sample["sigma"]
+    sigma = jnp.exp(sample["log_sigma"])
     y = observations["y"]
     y_pred = model(sample, observations)
     return norm.logpdf(y - y_pred, scale=sigma)
 
 def prior(sample):
-    del sample
-    return 0.0
+    return 1 / jnp.exp(sample["log_sigma"])
     
 ```
 
@@ -218,7 +217,7 @@ contain solver-specific additional information beside the samples:
 
 ```{code-cell}
 iterations = 50000
-init_sample = {"w": jnp.zeros((N, 1)), "sigma": jnp.array(2.0)}
+init_sample = {"w": jnp.zeros((N, 1)), "log_sigma": jnp.array(1.0)}
 
 # Run the solver
 results = sgld(init_sample, iterations=iterations)
@@ -266,7 +265,7 @@ w_npy = mcmc.get_samples()["weights"]
 plt.figure()
 plt.title("Sigma")
 
-plt.plot(results["sigma"], label="RMSprop")
+plt.plot(onp.exp(results["log_sigma"]), label="RMSprop")
 
 w_rms = results["w"]
 

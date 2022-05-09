@@ -20,6 +20,7 @@ Modular stochastic gradient MCMC for Jax.
    usage/potential
    usage/io
    usage/scheduler
+   usage/sgld_rms
 
 .. toctree::
    :maxdepth: 2

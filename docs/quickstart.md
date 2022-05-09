@@ -31,7 +31,7 @@ limitations under the License.
 ---
 ```
 
-```{code-cell}
+```{code-cell} ipython3
 :tags: [hide-cell]
 
 import numpy as onp
@@ -82,7 +82,7 @@ and the standard deviation of the error is chosen to be
 
 $$\sigma = 0.5.$$
 
-```{code-cell}
+```{code-cell} ipython3
 N = 4 
 samples = 1000 # Total samples
 
@@ -118,7 +118,7 @@ with the corresponding keys.
 For our dataset, we stick to the names x and y such that we can later access the
 data via ``batch['x']`` and ``batch['y']``:
 
-```{code-cell}
+```{code-cell} ipython3
 data_loader = NumpyDataLoader(x=x, y=y)
 ```
 
@@ -126,7 +126,7 @@ Sometimes, a model needs the shape and type of the data to initialize its state.
 Therefore, each data loader has a method to get an all-zero observation and an
 all-zero batch of observations:
 
-```{code-cell}
+```{code-cell} ipython3
 # Print a single observation
 print("Single observation:")
 print(data_loader.initializer_batch())
@@ -144,7 +144,7 @@ arrays have been passed to the ``NumpyDataLoader``.
 The model is connected to the solver via the (log-)prior and (log-)likelihood
 function. The model for our problem is:
 
-```{code-cell}
+```{code-cell} ipython3
 def model(sample, observations):
     weights = sample["w"]
     predictors = observations["x"]
@@ -156,7 +156,7 @@ Neural Net parameters is necessary. In our case we can separate the standard
 deviation, which is only part of the likelihood, from the weights by using a
 dictionary:
 
-```{code-cell}
+```{code-cell} ipython3
 def likelihood(sample, observations):
     sigma = jnp.exp(sample["log_sigma"])
     y = observations["y"]
@@ -175,7 +175,7 @@ observation in mind and let **JaxSGMC** take care of evaluating it for a batch
 of observations. As the model is not computationally demanding, we let 
 **JaxSGMC** vectorize the evaluation of the likelihood:
 
-```{code-cell}
+```{code-cell} ipython3
 potential_fn = potential.minibatch_potential(prior=prior,
                                              likelihood=likelihood,
                                              strategy="vmap")                                    
@@ -196,7 +196,7 @@ which can be found in ``alias.py``.
 First, the solver must be built from the previously generated potential, the
 data loader and some static settings.
 
-```{code-cell}
+```{code-cell} ipython3
 :tags: [remove-output]
 
 sgld = alias.sgld(potential_fn,
@@ -217,7 +217,7 @@ likelihood.
 The solver then returns a list of results, one for each initial sample, which
 contain solver-specific additional information beside the samples:
 
-```{code-cell}
+```{code-cell} ipython3
 iterations = 50000
 init_sample = {"w": jnp.zeros((N, 1)), "log_sigma": jnp.array(1.0)}
 
@@ -239,7 +239,7 @@ a solution returned by numpyro.
 
 ### Numpyro Solution
 
-```{code-cell}
+```{code-cell} ipython3
 def numpyro_model(y_obs=None):
   sigma = npy_smpl("sigma", npy_dist.Uniform(low=0.0, high=10.0))
   weights = npy_smpl("weights",
@@ -261,7 +261,7 @@ w_npy = mcmc.get_samples()["weights"]
 
 ### Comparison
 
-```{code-cell}
+```{code-cell} ipython3
 :tags: [hide-input]
 
 plt.figure()

@@ -15,117 +15,8 @@
 """Schedules parameters of the integrator and solver.
 
 The scheduler organizes the independent variables of the update equation, such
-as the temperature and the step size.
-
-
-Overview
----------
-
-A scheduler is a combination of specific schedulers, which control only a single
-parameter, for example the step size.
-
-.. doctest::
-
-  >>> from jax_sgmc import scheduler
-  >>>
-  >>> step_size_schedule = scheduler.polynomial_step_size(
-  ...   a=0.1, b=1.0, gamma=0.33)
-
-We already provided all required arguments. However, it is also possible to
-provide only the arguments, which should stay equal over all chains.
-
-  >>> step_size_schedule_partial = scheduler.polynomial_step_size(
-  ...   a=0.1, b=1.0)
-
-For all other schedules, the scheduler provide default values. So if we are not
-interested in applying burn in or thinning to the chain, we do not have to
-initialize a scheduler.
-
-  >>> init_fn, next_fn, get_fn = scheduler.init_scheduler(
-  ...   step_size=step_size_schedule_partial)
-
-Now we can provide different values for the partialy initialized schedulers.
-In addition to the scheduler states, we also get a dict which contains
-information such as the total count of accepted samples.
-
-  >>> sched_a, static_information = init_fn(10, step_size={'gamma': 0.1})
-  >>> sched_b, _ = init_fn(10, step_size={'gamma': 1.0})
-  >>>
-  >>> print(static_information)
-  static_information(samples_collected=10)
-  >>> print(get_fn(sched_a))
-  schedule(step_size=DeviceArray(0.1, dtype=float32), temperature=DeviceArray(1., dtype=float32), burn_in=DeviceArray(1., dtype=float32), accept=DeviceArray(True, dtype=bool))
-  >>> print(get_fn(sched_b))
-  schedule(step_size=DeviceArray(0.1, dtype=float32), temperature=DeviceArray(1., dtype=float32), burn_in=DeviceArray(1., dtype=float32), accept=DeviceArray(True, dtype=bool))
-  >>>
-  >>> # Get the parameters at the next iteration
-  >>> sched_a = next_fn(sched_a)
-  >>> sched_b = next_fn(sched_b)
-  >>>
-  >>> print(get_fn(sched_a))
-  schedule(step_size=DeviceArray(0.0933033, dtype=float32), temperature=DeviceArray(1., dtype=float32), burn_in=DeviceArray(1., dtype=float32), accept=DeviceArray(True, dtype=bool))
-  >>> print(get_fn(sched_b))
-  schedule(step_size=DeviceArray(0.05, dtype=float32), temperature=DeviceArray(1., dtype=float32), burn_in=DeviceArray(1., dtype=float32), accept=DeviceArray(True, dtype=bool))
-
-Schedulers
------------
-
-Step-size
-__________
-
-.. autosummary::
-    :toctree: _autosummary
-
-    polynomial_step_size
-    polynomial_step_size_first_last
-    adaptive_step_size
-
-Temperature
-____________
-
-.. autosummary::
-    :toctree: _autosummary
-
-    constant_temperature
-    cyclic_temperature
-
-Burn In
-________
-
-.. autosummary::
-    :toctree: _autosummary
-
-    cyclic_burn_in
-    initial_burn_in
-
-Thinning
-__________
-
-.. autosummary::
-    :toctree: _autosummary
-
-    random_thinning
-
-
-Developer Information
-----------------------
-
-Global and Local Scheduler Arguments
-_____________________________________
-
-- *Global only* arguments are provided by position to the scheduler
-- *Global and local* arguments are provided by keyword to the scheduler and the
-  init function such that they can be overwritten.
-
-For example:
-
-::
-
-  def some_scheduler(global_arg, global_or_local=0.0):
-
-    def init_fn(global_or_local = global_or_local):
-      # Use local arg
-    ...
+as the temperature and the step size, which are organized by multiple specific
+schedulers.
 
 """
 
@@ -137,6 +28,7 @@ from typing import Callable, Tuple
 import jax.numpy as jnp
 from jax import lax
 from jax import random
+from jax.experimental import host_callback as hcb
 
 from jax_sgmc.util import Array
 
@@ -173,16 +65,17 @@ scheduler_state = namedtuple("scheduler_state",
                               "step_size_state",
                               "temperature_state",
                               "burn_in_state",
-                              "thinning_state"])
+                              "thinning_state",
+                              "progress_bar_state"])
 """Collects the states of the specific schedulers.
 
 Attributes:
-  self: Own variables, such as current iteration
+  state: State of the base scheduler, e.g. to keep track of current iteration
   step_size_state: State of the step size scheduler
   temperature_state: State of the temperature scheduler
   burn_in_state: State of the burn in scheduler
-  thinnin_state: State of thinning
-
+  thinning_state: State of thinning
+  progress_bar_state: State of the progress bar
 """
 
 static_information = namedtuple("static_information",
@@ -200,12 +93,12 @@ Attributes:
 # implement only rarely used auxillary variables by providing default values.
 # The update functions are collected at a central state.
 
-# Todo: Make this more flexible for developers?
-
 def init_scheduler(step_size: specific_scheduler = None,
                    temperature: specific_scheduler = None,
                    burn_in: specific_scheduler = None,
                    thinning: specific_scheduler = None,
+                   progress_bar: bool = True,
+                   progress_bar_steps: Array = 20
                    ) -> Tuple[Callable, Callable, Callable]:
   """Initialize the scheduler.
 
@@ -218,6 +111,7 @@ def init_scheduler(step_size: specific_scheduler = None,
     temperature: Triplet from temperature scheduler initialization
     burn_in: Triplet from burn-in scheduler initialization
     thinning: Triplet from thinning scheduler initialization
+    progress_bar: Show the percentage of completed steps
 
   Returns:
     Returns a triplet of ``(init_fn, update_fn, get_fn)``.
@@ -237,12 +131,15 @@ def init_scheduler(step_size: specific_scheduler = None,
       lambda *args, **kwargs: None,
       lambda *args, **kwargs: True)
 
+  if progress_bar:
+    init_progress_bar, update_progress_bar = _progress_bar(burn_in, thinning)
+
   def init_fn(iterations: int,
               **scheduler_kwargs
               ) -> Tuple[scheduler_state, static_information]:
 
     # Initialize all the specific schedulers
-    state = (0,) # Start with iteration 0
+    state = (0, iterations) # Start with iteration 0
     thinning_state, total_samples = thinning.init(
       iterations,
       **scheduler_kwargs.get('thinning', {}))
@@ -251,6 +148,15 @@ def init_scheduler(step_size: specific_scheduler = None,
       **scheduler_kwargs.get('burn_in', {}))
     # If not thinning is provided, collect all samples not subject to burn in
     total_samples = min(total_samples, collected_samples)
+
+    if progress_bar:
+      pg_steps = scheduler_kwargs.get("progress_bar_steps", progress_bar_steps)
+      pg_enabled = scheduler_kwargs.get("enabled", jnp.array(progress_bar))
+
+      progress_bar_state = init_progress_bar(
+        jnp.array(iterations), total_samples, pg_steps, pg_enabled)
+    else:
+      progress_bar_state = None
 
     init_state = scheduler_state(
       state=state,
@@ -261,15 +167,17 @@ def init_scheduler(step_size: specific_scheduler = None,
         iterations,
         **scheduler_kwargs.get('temperature', {})),
       burn_in_state=burn_in_state,
-      thinning_state=thinning_state)
+      thinning_state=thinning_state,
+      progress_bar_state=progress_bar_state)
     static = static_information(
       samples_collected=total_samples)
     return init_state, static
 
   def update_fn(state: scheduler_state, **kwargs) -> scheduler_state:
     # Keep track of current iteration
-    iteration, = state.state
+    iteration, total_iterations = state.state
     current_iteration = iteration + 1
+
     # Update the states
     step_size_state = step_size.update(state.step_size_state,
                                        iteration,
@@ -283,17 +191,31 @@ def init_scheduler(step_size: specific_scheduler = None,
     thinning_state = thinning.update(state.thinning_state,
                                      iteration,
                                      **kwargs)
-    state = (current_iteration,)
+
+    if progress_bar:
+      # The burn in and thinning state are required to count the number of
+      # collected samples
+      progress_bar_state = update_progress_bar(
+        state.progress_bar_state,
+        iteration,
+        burn_in_state,
+        thinning_state,
+        **kwargs)
+    else:
+      progress_bar_state = None
+
+    new_scheduler_state = (current_iteration, total_iterations)
     updated_scheduler_state = scheduler_state(
-      state=state,
+      state=new_scheduler_state,
       step_size_state=step_size_state,
       temperature_state=temperature_state,
       burn_in_state=burn_in_state,
-      thinning_state=thinning_state)
+      thinning_state=thinning_state,
+      progress_bar_state=progress_bar_state)
     return updated_scheduler_state
 
   def get_fn(state: scheduler_state, **kwargs) -> schedule:
-    iteration, = state.state
+    iteration, total_iterations = state.state
     current_step_size = step_size.get(state.step_size_state,
                                       iteration,
                                       **kwargs)
@@ -306,6 +228,7 @@ def init_scheduler(step_size: specific_scheduler = None,
     current_thinning = thinning.get(state.thinning_state,
                                     iteration,
                                     **kwargs)
+
     current_schedule = schedule(
       step_size=jnp.array(current_step_size),
       temperature=jnp.array(current_temperature),
@@ -371,6 +294,81 @@ def cyclic_temperature(beta: Array=1.0, k: int=1) -> specific_scheduler:
     Returns a triplet as described above
   """
   raise NotImplementedError
+
+################################################################################
+#
+# Progress bar
+#
+################################################################################
+
+def _progress_bar(burn_in: specific_scheduler,
+                  thinning: specific_scheduler):
+  """Prints the progress of the solver.
+
+  Args:
+    burn_in: Burn in scheduler to count accepted samples
+    thinning: Thinning scheduler to count accepted samples
+
+  """
+
+  def _print_fn(info, _):
+    percentage = round(
+      int(info['current_iteration']) / int(info['total_iterations']) * 100)
+    total_samples = int(info["total_samples"])
+    collected_samples = int(info["collected_samples"])
+    current_iteration = int(info["current_iteration"])
+    total_iterations = int(info["total_iterations"])
+
+    print(f"[Step {current_iteration}/{total_iterations}]"
+          f"({percentage}%) Collected {collected_samples} of "
+          f"{total_samples} samples...")
+
+  def init_fn(iterations: Array,
+              num_samples: Array,
+              steps: Array = jnp.array(20),
+              enabled: Array = jnp.array(True)
+              ) -> Tuple[Array, Array, Array, Array, Array]:
+    # Set already collected samples to zero
+    init_state = iterations, num_samples, jnp.zeros(1), steps, enabled
+    return init_state
+
+  def step_fn(state: Tuple[Array, Array, Array, Array, Array],
+              iteration: Array,
+              burn_in_state,
+              thinning_state,
+              **kwargs
+              ):
+    iterations, tot_samples, collected_samples, steps, enabled = state
+
+    # A sample is going to be saved if it is not subject to burn in and accepted
+    sample_burn_in = burn_in.get(burn_in_state, iteration, **kwargs)
+    sample_accepted = thinning.get(thinning_state, iteration, **kwargs)
+    saved = sample_burn_in * sample_accepted
+    collected_samples += saved
+
+    info = {
+      "total_iterations": iterations,
+      "current_iteration": iteration,
+      "total_samples": tot_samples,
+      "collected_samples": collected_samples,
+      "kwargs": kwargs
+    }
+
+    # Calculate number of steps until the progress should be printed out
+    num_its = jnp.int_(jnp.floor(iterations / steps))
+
+    # Return the number of collected samples as result of id_tap
+    collected_samples = lax.cond(
+      jnp.logical_and(jnp.mod(iteration, num_its) == 0, enabled),
+      lambda arg: hcb.id_tap(_print_fn, arg, result=collected_samples),
+      lambda arg: info["collected_samples"],
+      info
+    )
+
+    new_state = iterations, tot_samples, collected_samples, steps, enabled
+    return new_state
+
+  return init_fn, step_fn
 
 ################################################################################
 #
@@ -545,19 +543,6 @@ def polynomial_step_size_first_last(first: Array = 1.0,
     return state[iteration]
 
   return specific_scheduler(init_fn, update_fn, get_fn)
-
-
-def cyclic_step_size(alpha: Array=1.0, k: int=1):
-  """Step size cyclically decreasing from alpha.
-
-  Implements a step size schedule folllowing:
-
-  .. math::
-
-     \\epsilon = \\frac{\\alpha}{2}\\left[ a \\right]
-
-  """
-  raise NotImplementedError
 
 ################################################################################
 #

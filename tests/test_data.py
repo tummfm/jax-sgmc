@@ -1,338 +1,830 @@
-"""Test the data loaders. """
-# Pylint complains about the fixtures, because they are static
-# pylint: disable=R
-
-from collections import namedtuple
-from functools import partial
-import itertools
-
-try:
-  import tensorflow
-  import tensorflow_datasets
-except ImportError:
-  print("Tensorflow not found")
-  tensorflow = None
-  tensorflow_datasets = None
-
-import jax
-import jax.numpy as jnp
-from jax import test_util
+# Copyright 2021 Multiscale Modeling of Fluid Materials, TU Munich
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import numpy as onp
 
+try:
+  import tensorflow as tf
+  import tensorflow_datasets as tfds
+except ModuleNotFoundError:
+  tf = None
+  tfds = None
+
+import jax
+import jax.numpy as jnp
+from jax import ShapeDtypeStruct
+from jax import test_util
+from jax import random
+from jax import lax
+
+from jax_sgmc.data.core import random_reference_data, full_reference_data
+from jax_sgmc.data.numpy_loader import NumpyDataLoader, DeviceNumpyDataLoader
+
+try:
+  from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
+except ModuleNotFoundError:
+  TensorflowDataLoader = None
+
+from jax_sgmc.util import list_vmap, list_pmap
+
 import pytest
 
-from jax_sgmc import data, util
-from jax_sgmc.util import stop_vmap
+# Todo: Maybe parametrize size of dataset or shape
+@pytest.fixture
+def dataset():
+  obs_count = 13
 
-@pytest.mark.tensorflow
-class TestTFLoader:
+  data = {
+    "ordered_indices": jnp.arange(obs_count, dtype=jnp.int_),
+    "all_ones": jnp.ones(obs_count, dtype=jnp.bool_),
+    "shape_5": jnp.ones((obs_count, 5), dtype=jnp.float_),
+    "shape_3_5": jnp.ones((obs_count, 3, 5), dtype=jnp.int_)
+  }
 
-  @pytest.fixture(scope='class')
-  def dataset(self):
-    """Construct tensorflow dataset"""
-    def generate_dataset():
-      n = 10
-      for i in range(n):
-        yield {"a": i, "b": [i + 0.1 * 1, i + 0.11]}
-    ds = tensorflow.data.Dataset.from_generator(
-      generate_dataset,
-      output_types={'a': tensorflow.float32,
-      'b': tensorflow.float32},
-      output_shapes={'a': tuple(), 'b': (2,)})
-    return ds
+  data_format = {key: ShapeDtypeStruct(dtype=value.dtype, shape=value.shape)
+                 for key, value in data.items()}
+
+  return data, data_format, obs_count
+
+
+class TestNumpyDeviceDataLoader:
 
   @pytest.fixture
-  def dataloader(self, dataset):
-    pipeline = data.TensorflowDataLoader(dataset, shuffle_cache=100)
-    return pipeline
+  def data_loader(self, dataset):
+    data, _, _ = dataset
+    return NumpyDataLoader(**data)
 
-  @pytest.mark.parametrize(["cs", "mb_size"], itertools.product([3, 13, 29], [1, 3, 5]))
-  def test_batch_size(self, dataloader, cs, mb_size):
-    pipeline = dataloader
+  def test_initializer_batch_format(self, data_loader, dataset):
+    _, data_format, _ = dataset
+    batch_size = 7
 
-    def check_fn(leaf):
-      assert leaf.shape[0] == cs
-      assert leaf.shape[1] == batch_info.batch_size
+    init_batch = data_loader.initializer_batch(batch_size)
 
-    _, batch_info = pipeline.batch_format(cs, mb_size)
-    chain_id = pipeline.register_random_pipeline(cs, mb_size)
-    batch = pipeline.get_batches(chain_id)
+    for key in data_format.keys():
+      required_shape = (batch_size,) + data_format[key].shape[1:]
+      assert required_shape == init_batch[key].shape
+      assert data_format[key].dtype == init_batch[key].dtype
 
-    print(batch)
+  @pytest.mark.parametrize("shuffle, in_epochs",
+                           [(False, False),
+                            (True, False),
+                            (True, True)])
+  def test_get_batches_random_shape(self, data_loader, dataset, shuffle, in_epochs):
+    _, data_format, _ = dataset
+    batch_size = 7
+    cache_size = 5
 
-    jax.tree_map(check_fn, batch)
+    chain_id = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size,
+                                                    in_epochs=in_epochs,
+                                                    shuffle=shuffle)
 
-  @pytest.mark.parametrize("excluded", [[], ["a"], ["a", "b"]])
-  def test_exclude_keys(self, dataset, excluded):
-    mb_size = 2
-    cs = 3
+    batch, _ = data_loader.get_batches(chain_id)
 
-    pipeline = data.TensorflowDataLoader(dataset, shuffle_cache=100,
-                                        exclude_keys=excluded)
-    batch_format, _ = pipeline.batch_format(10, mb_size)
-    chain_id = pipeline.register_random_pipeline(cs, mb_size)
-    first_batch = pipeline.get_batches(chain_id)
+    for key in data_format.keys():
+      required_shape = (cache_size, batch_size) + data_format[key].shape[1:]
+      assert required_shape == batch[key].shape
+      assert data_format[key].dtype == batch[key].dtype
 
-    for key in first_batch.keys():
-      assert key not in excluded
-    for key in batch_format.keys():
-      assert key not in excluded
 
-  @pytest.mark.parametrize(["cs", "mb_size"], itertools.product([1, 5, 10, 15], [1, 3, 7]))
-  def test_sizes(self, dataloader, cs, mb_size):
+  def test_get_batches_ordered_shape(self, data_loader, dataset):
+    _, data_format, _ = dataset
+    batch_size = 7
+    cache_size = 5
 
-    pipeline = dataloader
-    chain_id = pipeline.register_random_pipeline(cache_size=cs, mb_size=mb_size)
-    first_batch = pipeline.get_batches(chain_id)
+    chain_id = data_loader.register_ordered_pipeline(cache_size=cache_size,
+                                                     mb_size=batch_size)
 
-    def test_fn(elem):
-      assert elem.shape[0] == cs
-      assert elem.shape[1] == mb_size
+    batch, _ = data_loader.get_batches(chain_id)
 
-    jax.tree_map(test_fn, first_batch)
+    for key in data_format.keys():
+      required_shape = (cache_size, batch_size) + data_format[key].shape[1:]
+      assert required_shape == batch[key].shape
+      assert data_format[key].dtype == batch[key].dtype
 
-class TestNumpyLoader:
+  def test_all_keys_passed(self, dataset):
+    data, _, _ = dataset
 
-  @pytest.fixture(scope='class')
-  def dataset(self):
-    """Construct a dataset for the numpy data loader."""
+    cache_size = 3
+    batch_size = 2
 
-    n = 17
-    def generate_a(n):
-      for i in range(n):
-        yield i
-    def generate_b(n):
-      for i in range(n):
-        yield [i + 0.1 * 1, i + 0.11]
-    dataset = {'a': onp.array(list(generate_a(n))),
-               'b': onp.array(list(generate_b(n)))}
-    return dataset
+    # Test that all keys are returned in a batch
+    data_loader = NumpyDataLoader(**data)
 
-  @pytest.fixture(scope='function')
-  def dataloader(self, dataset):
-    """Construct a numpy data loader."""
-    pipeline = data.NumpyDataLoader(**dataset)
-    return pipeline
+    chain_a = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                   mb_size=batch_size)
+    chain_b = data_loader.register_ordered_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
 
-  @pytest.mark.parametrize("mb_size", (1, 3, 5))
-  def test_kwargs(self, dataloader, mb_size):
-    """Test that the initial state can be set with the seed as kwarg. """
+    batch_a, _ = data_loader.get_batches(chain_a)
+    batch_b, _ = data_loader.get_batches(chain_b)
 
-    seed = 10
-    pipeline = dataloader
+    assert set(batch_a.keys()) == set(data.keys())
+    assert set(batch_b.keys()) == set(data.keys())
 
-    _, _ = pipeline.batch_format(10, mb_size)
-    chain_a = pipeline.register_random_pipeline(10, mb_size, seed=seed)
-    chain_b = pipeline.register_random_pipeline(10, mb_size, seed=seed)
+  def test_shuffeling(self, data_loader, dataset):
+    _, data_format, obs_count = dataset
+    batch_size = 3
 
-    batch_a = pipeline.get_batches(chain_a)
-    batch_b = pipeline.get_batches(chain_b)
+    ceil_samples = int(onp.ceil(obs_count / batch_size))
+    n_duplicated = ceil_samples * batch_size - obs_count
 
-    test_util.check_eq(batch_a, batch_b)
+    # Get all samples in one cache and all samples in single caches
+    chain_a = data_loader.register_random_pipeline(cache_size=ceil_samples,
+                                                   mb_size=batch_size,
+                                                   shuffle=True)
+    chain_b = data_loader.register_random_pipeline(cache_size=1,
+                                                   mb_size=batch_size,
+                                                   shuffle=True)
 
-  @pytest.mark.parametrize(["cs", "mb_size"], itertools.product([3, 13, 30], [1, 5, 7]))
-  def test_batch_size(self, dataloader, cs, mb_size):
-    """Check that the returned batches have the right format and dtype. """
-    pipeline = dataloader
+    samples_a = data_loader.get_batches(chain_a)[0]["ordered_indices"]
+    samples_b = onp.array([data_loader.get_batches(chain_b)[0]["ordered_indices"]
+                           for _ in range(ceil_samples)])
 
-    def check_fn(leaf):
-      assert leaf.shape[0] == cs
-      assert leaf.shape[1] == batch_info.batch_size
+    # There must be exactly two duplicates
+    _, count_a = onp.unique(samples_a, return_counts=True)
+    _, count_b = onp.unique(samples_b, return_counts=True)
 
-    _, batch_info = pipeline.batch_format(cs, mb_size)
-    chain_id = pipeline.register_random_pipeline(cs, mb_size)
-    batch = pipeline.get_batches(chain_id)
+    assert onp.sum(count_a == 2) == n_duplicated
+    assert onp.sum(count_b == 2) == n_duplicated
+    assert onp.sum(count_a == 1) == obs_count - n_duplicated
+    assert onp.sum(count_b == 1) == obs_count - n_duplicated
 
-    print(batch)
-    print(pipeline.batch_format(cs, mb_size))
+  def test_shuffeling_in_epochs(self, data_loader, dataset):
+    _, data_format, obs_count = dataset
+    batch_size = 3
 
-    jax.tree_map(check_fn, batch)
+    ceil_samples = int(onp.ceil(obs_count / batch_size))
 
-  @pytest.mark.parametrize("cs_small, cs_big, mb_size", [(5,7, 6), (7, 11, 6)])
-  def test_cache_size_order(self, dataloader, cs_small, cs_big, mb_size):
+    # Get all samples in one cache and all samples in single caches
+    chain_a = data_loader.register_random_pipeline(cache_size=ceil_samples,
+                                                   mb_size=batch_size,
+                                                   shuffle=True,
+                                                   in_epochs=True)
+    chain_b = data_loader.register_random_pipeline(cache_size=1,
+                                                   mb_size=batch_size,
+                                                   shuffle=True,
+                                                   in_epochs=True)
+
+    samples_a, mask_a = data_loader.get_batches(chain_a)
+    samples_a = samples_a["ordered_indices"]
+    returned_b = [data_loader.get_batches(chain_b)
+                 for _ in range(ceil_samples)]
+    samples_b = onp.array([batch["ordered_indices"] for batch, _ in returned_b])
+    mask_b = onp.array([mask for _, mask in returned_b])
+
+    # Every element must appear exactly once
+    _, count_a = onp.unique(samples_a[mask_a], return_counts=True)
+    _, count_b = onp.unique(samples_b[mask_b], return_counts=True)
+
+    assert onp.sum(count_a == 1) == obs_count
+    assert onp.sum(count_b == 1) == obs_count
+
+  def test_full_data(self, data_loader, dataset):
+    _, data_format, obs_count = dataset
+    batch_size = 3
+
+    ceil_samples = int(onp.ceil(obs_count / batch_size))
+
+    # Get all samples in one cache and all samples in single caches
+    chain_a = data_loader.register_ordered_pipeline(cache_size=ceil_samples,
+                                                    mb_size=batch_size)
+    chain_b = data_loader.register_ordered_pipeline(cache_size=1,
+                                                    mb_size=batch_size)
+
+    samples_a, mask_a = data_loader.get_batches(chain_a)
+    samples_a = samples_a["ordered_indices"]
+    returned_b = [data_loader.get_batches(chain_b)
+                 for _ in range(ceil_samples)]
+    samples_b = onp.array([batch["ordered_indices"] for batch, _ in returned_b])
+    mask_b = onp.array([mask for _, mask in returned_b])
+
+    # Every element must appear exactly once
+    _, count_a = onp.unique(samples_a[mask_a], return_counts=True)
+    _, count_b = onp.unique(samples_b[mask_b], return_counts=True)
+
+    print(mask_a)
+    print(samples_a)
+
+    assert onp.sum(count_a == 1) == obs_count
+    assert onp.sum(count_b == 1) == obs_count
+
+  def test_seeding(self, data_loader, dataset):
+    batch_size = 3
+
+    # Check that chains with the same seed return the same batches
+    chain_a1 = data_loader.register_random_pipeline(cache_size=1,
+                                                   mb_size=1,
+                                                   seed=1)
+    chain_a2 = data_loader.register_random_pipeline(cache_size=1,
+                                                    mb_size=1,
+                                                    seed=1)
+    chain_b = data_loader.register_random_pipeline(cache_size=1,
+                                                   mb_size=1,
+                                                   seed=2)
+
+    batch_a1, _ = data_loader.get_batches(chain_a1)
+    batch_a2, _ = data_loader.get_batches(chain_a2)
+    batch_b, _ = data_loader.get_batches(chain_b)
+
+    assert batch_a1["ordered_indices"] == batch_a2["ordered_indices"]
+    assert batch_b["ordered_indices"] != batch_a2["ordered_indices"]
+
+
+  @pytest.mark.parametrize("shuffle, in_epochs",
+                           [(False, False),
+                            (True, False),
+                            (True, True)])
+  def test_cache_size_order(self, data_loader, shuffle, in_epochs):
     """Check that changing the cache size does not influence the order. """
-    pipeline = dataloader
 
-    small_chain = pipeline.register_random_pipeline(
-      cs_small, mb_size, seed=0)
-    big_chain = pipeline.register_random_pipeline(
-      cs_big, mb_size, seed=0)
-    small_batch = pipeline.get_batches(small_chain)
-    big_batch = pipeline.get_batches(big_chain)
+    cs_small = 3
+    cs_big = 5
+    mb_size = 2
 
-    def check_fn(a, b):
+    small_chain = data_loader.register_random_pipeline(
+      cs_small, mb_size, seed=0, shuffle=shuffle, in_epochs=in_epochs)
+    big_chain = data_loader.register_random_pipeline(
+      cs_big, mb_size, seed=0, shuffle=shuffle, in_epochs=in_epochs)
+    small_batch, _ = data_loader.get_batches(small_chain)
+    big_batch, _ = data_loader.get_batches(big_chain)
+
+    for key in small_batch.keys():
       for idx in range(cs_small):
-        test_util.check_eq(a[idx, ::], b[idx, ::])
+        test_util.check_eq(small_batch[key][idx], big_batch[key][idx])
 
-    jax.tree_map(check_fn, small_batch, big_batch)
+  @pytest.mark.parametrize("shuffle, in_epochs", [(False, False),
+                                                  (True, False),
+                                                  (True, True)])
+  def test_checkpoint_random_data(self, data_loader, dataset, shuffle, in_epochs):
+    _, _, obs_count = dataset
+    # Check that the NumpyDataLoader can be restarted from a saved state
 
-  @pytest.mark.parametrize("cs", [1, 2, 4])
-  def test_relation(self, dataloader, cs):
-    """Test if sample and observations are corresponding"""
+    cache_size = 3
+    batch_size = 2
 
-    pipeline = dataloader
-    new_pipe = pipeline.register_random_pipeline(cs, 3)
+    chain_a = data_loader.register_random_pipeline(shuffle=shuffle,
+                                                   in_epochs=in_epochs,
+                                                   cache_size=cache_size,
+                                                   mb_size=batch_size)
+    chain_b = data_loader.register_random_pipeline(shuffle=shuffle,
+                                                   in_epochs=in_epochs,
+                                                   cache_size=cache_size,
+                                                   mb_size=batch_size)
 
-    def check_fn(a, b):
-      for i, mb in enumerate(a):
-        for j, sample in enumerate(mb):
-          a = sample
-          b_target = onp.array([a + 0.1, a + 0.11])
-          b_is = b[i, j, ::]
-
-          print(f"a: {a}")
-          print(f"b should be: {b_target}")
-          print(f"b is: {b_is}")
-
-          assert jnp.all(b_is == b_target)
-
-    for _ in range(3):
-      batch = pipeline.get_batches(new_pipe)
-      jax.tree_map(check_fn, batch['a'], batch['b'])
-
-  def test_checkpointing(self, dataloader):
-    """Test that the state can be saved and restored. """
-
-    pipeline = dataloader
-
-    chain_1 = pipeline.register_random_pipeline(3, 5)
-    chain_2 = pipeline.register_random_pipeline(5, 7)
-
-    # Get one batch information
-    _ = pipeline.batch_format(3, 7)
-
-    # Draw some samples
-    for i in range(11):
-      pipeline.get_batches(chain_1)
-      pipeline.get_batches(chain_2)
+    # Run to save the state before a masked state is returned
+    n_iter = int(obs_count / (cache_size * batch_size))
+    for i in range(n_iter):
+      data_loader.get_batches(chain_a)
+      data_loader.get_batches(chain_b)
 
     # Checkpoint
-    checkpoint = [pipeline.save_state(chain_1),
-                  pipeline.save_state(chain_2)]
+    checkpoint_a = data_loader.save_state(chain_a)
+    checkpoint_b = data_loader.save_state(chain_b)
 
-    # Draw some more date for checkpoint
-    no_break_data = [pipeline.get_batches(chain_1),
-                     pipeline.get_batches(chain_1),
-                     pipeline.get_batches(chain_2),
-                     pipeline.get_batches(chain_2)]
+    # Draw masked sample
+    batches_a = data_loader.get_batches(chain_a)
+    batches_b = data_loader.get_batches(chain_b)
 
-    _ = pipeline.batch_format(chain_1, 5)
-    _ = pipeline.batch_format(chain_2, 7)
+    # Initialize new chains and update them to the same state
+    new_chain_a = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                       mb_size=batch_size,
+                                                       shuffle=shuffle,
+                                                       in_epochs=in_epochs)
+    new_chain_b = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                       mb_size=batch_size,
+                                                       shuffle=shuffle,
+                                                       in_epochs=in_epochs)
 
-    pipeline.load_state(chain_1, checkpoint[0])
-    pipeline.load_state(chain_2, checkpoint[1])
+    data_loader.load_state(new_chain_a, checkpoint_a)
+    data_loader.load_state(new_chain_b, checkpoint_b)
 
-    after_resume_data = [pipeline.get_batches(chain_1),
-                         pipeline.get_batches(chain_1),
-                         pipeline.get_batches(chain_2),
-                         pipeline.get_batches(chain_2)]
+    new_batches_a = data_loader.get_batches(new_chain_a)
+    new_batches_b = data_loader.get_batches(new_chain_b)
 
-    test_util.check_eq(no_break_data, after_resume_data)
+    # The old and the new chains should have returned the same samples
+    test_util.check_eq(batches_a, new_batches_a)
+    test_util.check_eq(batches_b, new_batches_b)
+
+  def test_checkpoint_full_data(self, data_loader, dataset):
+    _, _, obs_count = dataset
+    # Check that the NumpyDataLoader can be restarted from a saved state
+
+    cache_size = 3
+    batch_size = 2
+
+    chain_a = data_loader.register_ordered_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
+    chain_b = data_loader.register_ordered_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
+
+    # Run to save the state before a masked state is returned
+    n_iter = int(obs_count / (cache_size * batch_size))
+    for i in range(n_iter):
+      data_loader.get_batches(chain_a)
+      data_loader.get_batches(chain_b)
+
+    # Checkpoint
+    checkpoint_a = data_loader.save_state(chain_a)
+    checkpoint_b = data_loader.save_state(chain_b)
+
+    # Draw masked sample
+    batches_a = data_loader.get_batches(chain_a)
+    batches_b = data_loader.get_batches(chain_b)
+
+    # Initialize new chains and update them to the same state
+    new_chain_a = data_loader.register_ordered_pipeline(cache_size=cache_size,
+                                                        mb_size=batch_size)
+    new_chain_b = data_loader.register_ordered_pipeline(cache_size=cache_size,
+                                                        mb_size=batch_size)
+
+    data_loader.load_state(new_chain_a, checkpoint_a)
+    data_loader.load_state(new_chain_b, checkpoint_b)
+
+    new_batches_a = data_loader.get_batches(new_chain_a)
+    new_batches_b = data_loader.get_batches(new_chain_b)
+
+    # The old and the new chains should have returned the same samples
+    test_util.check_eq(batches_a, new_batches_a)
+    test_util.check_eq(batches_b, new_batches_b)
+
+  @pytest.mark.parametrize("data",
+                           [{"x": [0, 1, 2], "y": [[0, 1], [0, 2], [0, 3]]},
+                            {"x": onp.arange(3), "y": onp.zeros((3, 3))},
+                            {"x": jnp.arange(3), "y": jnp.zeros((3, 3))}],
+                           ids=["python list", "numpy array", "device array"])
+  def test_input_data_type(self, data):
+    # The data returned must always be a jax device array
+    data_loader = NumpyDataLoader(**data)
+
+    chain_a = data_loader.register_random_pipeline(cache_size=1, mb_size=1)
+    batch, _ = data_loader.get_batches(chain_a)
+
+    assert type(batch["x"]) == type(jnp.array(1))
+    assert type(batch["y"]) == type(jnp.array(1))
+
+  def test_input_data_wrong_shape(self):
+    # The first axis determines the total number of observations
+    x = jnp.arange(5)
+    y = jnp.zeros((3, 7))
+
+    with pytest.raises(ValueError):
+      NumpyDataLoader(x=x, y=y)
+
+
+class TestNumpyHostDataLoader:
+
+  @pytest.fixture
+  def data_loader(self, dataset):
+    data, _, _ = dataset
+    return DeviceNumpyDataLoader(**data)
+
+  def test_initializer_batch_format(self, data_loader, dataset):
+    _, data_format, _ = dataset
+
+    batch_size = 7
+
+    init_batch = data_loader.initializer_batch(batch_size)
+
+    for key in data_format.keys():
+      required_shape = (batch_size,) + data_format[key].shape[1:]
+      assert required_shape == init_batch[key].shape
+      assert data_format[key].dtype == init_batch[key].dtype
+
+  @pytest.mark.parametrize("data",
+                           [{"x": [0, 1, 2], "y": [[0, 1], [0, 2], [0, 3]]},
+                            {"x": onp.arange(3), "y": onp.zeros((3, 3))},
+                            {"x": jnp.arange(3), "y": jnp.zeros((3, 3))}],
+                           ids=["python list", "numpy array", "device array"])
+  def test_input_data_type(self, data):
+    # The data returned must always be a jax device array
+    data_loader = DeviceNumpyDataLoader(**data)
+
+    chain_a = data_loader.init_random_data()
+    _, (batch, _) = data_loader.get_random_data(chain_a, batch_size=3)
+
+    assert type(batch["x"]) == type(jnp.array(1))
+    assert type(batch["y"]) == type(jnp.array(1))
+
+  def test_input_data_wrong_shape(self):
+    # The first axis determines the total number of observations
+    x = jnp.arange(5)
+    y = jnp.zeros((3, 7))
+
+    with pytest.raises(ValueError):
+      NumpyDataLoader(x=x, y=y)
+
+  def test_seeding(self, data_loader):
+    batch_size = 3
+
+    # Check that chains with the same seed return the same batches
+    chain_a1 = data_loader.init_random_data(key=random.PRNGKey(1))
+    chain_a2 = data_loader.init_random_data(key=random.PRNGKey(1))
+    chain_b = data_loader.init_random_data(key=random.PRNGKey(2))
+
+    _, (batch_a1, _) = data_loader.get_random_data(chain_a1, batch_size)
+    _, (batch_a2, _) = data_loader.get_random_data(chain_a2, batch_size)
+    _, (batch_b, _) = data_loader.get_random_data(chain_b, batch_size)
+
+    assert jnp.all(batch_a1["ordered_indices"] == batch_a2["ordered_indices"])
+    assert jnp.any(batch_b["ordered_indices"] != batch_a2["ordered_indices"])
 
 @pytest.mark.tensorflow
-class TestRandomAccess:
+class TestTensorflowDataLoader:
 
-  data_format = namedtuple("data_format",
-                           ["mb_size",
-                            "cs"])
+  @pytest.fixture
+  def tf_dataset(self, dataset):
+    data, data_format, obs_count = dataset
 
-  @pytest.fixture(scope='function', params=[data_format(1, 1),
-                                         data_format(1, 7),
-                                         data_format(19, 1),
-                                         data_format(19, 7)])
-  def data_loader_mock(self, request, mocker):
-    """Construct tensorflow dataset without shuffling."""
-    def generate_dataset():
-      n = 5
-      for i in range(n):
-        yield {"a": i, "b": [i + 0.1 * 1, i + 0.11], "c": [[1*i, 2*i], [3*i, 4*i]]}
-    ds = tensorflow.data.Dataset.from_generator(
-      generate_dataset,
-      output_types={'a': tensorflow.float32,
-                    'b': tensorflow.float32,
-                    'c': tensorflow.float32},
-      output_shapes={'a': tuple(), 'b': (2,), 'c': (2, 2)},)
-    ds = ds.repeat().batch(request.param.mb_size)
-    ds_cache = ds.batch(request.param.cs)
+    def gen():
+      for idx in range(obs_count):
+        yield {key: onp.array(value[idx]) for key, value in data.items()}
 
-    init_value = jax.tree_map(jnp.array, next(iter(tensorflow_datasets.as_numpy(ds_cache))))
-    ds_cache = iter(tensorflow_datasets.as_numpy(ds_cache))
+    output_signature = {
+      key: tf.TensorSpec(shape=format.shape[1:], dtype=format.dtype)
+      for key, format in data_format.items()
+    }
 
-    ml = mocker.Mock(data.DataLoader)
+    # Export tensorflow Dataset here to be able to test exclude keys later on
+    tfds = tf.data.Dataset.from_generator(gen, output_signature=output_signature)
+    return tfds
 
-    ml.batch_format.return_value = data.tree_dtype_struct(init_value), None
-    ml.register_random_pipeline.return_value = 0
-    def get_batch(chain_id):
-      del chain_id
-      return jax.tree_map(jnp.array, next(ds_cache))
+  def test_initializer_batch_format(self, tf_dataset, dataset):
+    _, data_format, _ = dataset
 
-    ml.register_ordered_pipeline.return_value = 0
-    ml.get_batches.side_effect = get_batch
+    batch_size = 7
 
-    return ml, request.param, ds
+    data_loader = TensorflowDataLoader(tf_dataset)
+    init_batch = data_loader.initializer_batch(mb_size=batch_size)
 
-  def test_cache_order(self, data_loader_mock):
-    """Test that the cache does not change the order """
+    for key in data_format.keys():
+      required_shape = (batch_size,) + data_format[key].shape[1:]
+      assert required_shape == init_batch[key].shape
+      assert data_format[key].dtype == init_batch[key].dtype
 
-    DL, format, dataset = data_loader_mock
-    iterations = int(format.cs * 4.1)
+  def test_get_batches_random_shape(self, tf_dataset, dataset):
+    _, data_format, _ = dataset
+    batch_size = 7
+    cache_size = 5
 
-    init_fn, batch_fn = data.random_reference_data(DL, format.cs)
-    batch_fn = jax.jit(batch_fn)
-    ds = iter(tensorflow_datasets.as_numpy(dataset))
+    data_loader = TensorflowDataLoader(tf_dataset,
+                                       shuffle_cache=10)
 
-    # Check that the values are returned in the correct order
-    state = init_fn()
-    for _ in range(iterations):
-      compare_batch = jax.tree_map(jnp.array, next(ds))
-      state, batch = batch_fn(state)
-      for key in compare_batch.keys():
-        assert jnp.all(batch[key] == compare_batch[key])
+    chain_id = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
 
-    # Check that random batches are not drawn more often than necessary
+    batch, _ = data_loader.get_batches(chain_id)
+    print(batch)
 
-    assert DL.get_batches.call_count == int(4.1)
+    for key in data_format.keys():
+      required_shape = (cache_size, batch_size) + data_format[key].shape[1:]
+      assert required_shape == batch[key].shape
+      assert data_format[key].dtype == batch[key].dtype
 
-  # Todo: Improve this test
-  @pytest.mark.skip
-  @pytest.mark.parametrize("cs", (1, 5, 11, 17))
-  def test_vmap(self, cs):
-    # Cannot use the tensorflow dataloader for this test as it does not support
-    # starting the pipelines at the same state.
 
-    x = onp.arange(23)
-    y = 1.1 * onp.arange(23)
-    data_loader = data.NumpyDataLoader(x=x, y=y)
+  @pytest.mark.skip("Not Implemented")
+  def test_get_batches_ordered_shape(self):
+    assert False
 
-    states_count = 5
+  @pytest.mark.parametrize("num_exclude", [1, 2, 3])
+  def test_exclude_keys(self, tf_dataset, dataset, num_exclude):
+    _, data_format, _ = dataset
 
-    init_fn, batch_fn = data.random_reference_data(data_loader, cs, mb_size=3)
+    all_keys = list(data_format.keys())
+    excluded_keys = all_keys[0:num_exclude]
+    contained_keys = all_keys[num_exclude:]
 
-    def test_function(state):
-      state, (batch, _) = batch_fn(state, information=True)
-      return jax.tree_map(jnp.sum, batch)
+    data_loader = TensorflowDataLoader(tf_dataset,
+                                       exclude_keys=excluded_keys)
 
-    test_function_vmapped = util.list_vmap(test_function)
+    chain_id = data_loader.register_random_pipeline(cache_size=2,
+                                                    mb_size=3)
+    batch, _ = data_loader.get_batches(chain_id)
 
-    init_states_vmap = [
-      init_fn(seed=idx)
-      for idx in range(states_count)
-    ]
-    init_states = [
-      init_fn(seed=idx)
-      for idx in range(states_count)
-    ]
+    for key in excluded_keys:
+      assert key not in batch.keys()
 
-    test_util.check_eq(init_states[0].cached_batches, init_states_vmap[0].cached_batches)
+    for key in contained_keys:
+      assert key in batch.keys()
 
-    # Init states vorspulen
-    for idx in range(states_count):
-      for _ in range(idx):
-        init_states[idx], _ = batch_fn(init_states[idx])
-        init_states_vmap[idx], _ = batch_fn(init_states_vmap[idx])
+  @pytest.mark.parametrize("name, exclude_keys",
+                           [("MNIST", []),
+                            ("Cifar10", ["id"])])
+  def test_tensorflow_datasets(self, name, exclude_keys):
+    cache_size = 2
+    batch_size = 3
 
-    sequential_results = list(map(test_function, init_states))
-    vmapped_results = test_function_vmapped(*init_states_vmap)
+    tf_dataset, info = tfds.load(name, split="train", with_info=True)
+    data_loader = TensorflowDataLoader(tf_dataset,
+                                       exclude_keys=exclude_keys)
 
-    test_util.check_eq(sequential_results, vmapped_results)
+    chain_id = data_loader.register_random_pipeline(cache_size=cache_size,
+                                                    mb_size=batch_size)
+    batch, _ = data_loader.get_batches(chain_id)
+    init_batch = data_loader.initializer_batch()
+
+    # Check that format and shape is correct
+    for key in info.features:
+      if key in exclude_keys:
+        continue
+      required_shape = (cache_size, batch_size) + info.features[key].shape
+      required_dtype = init_batch[key].dtype
+      assert required_shape == batch[key].shape
+      assert required_dtype == batch[key].dtype
+
+
+class TestRandomDataAccess:
+
+  @pytest.fixture
+  def data_loader(self, dataset):
+    data, _, _ = dataset
+    return NumpyDataLoader(**data)
+
+  @pytest.fixture
+  def example_problem(self):
+    # This problem should check that each sample
+
+    def init_test_fn(obs_count, batch_size, data_fn):
+      init_data_fn, batch_fn = data_fn
+      num_its = int(onp.ceil(obs_count / batch_size))
+
+      def init_fn():
+        # An array to count the number of observations returned
+        sample_counts = jnp.zeros(obs_count)
+        data_state = init_data_fn(shuffle=True, in_epochs=True)
+        return data_state, sample_counts, 0.0
+
+      def _test_update_fn(state, _):
+        data_state, sample_counts, valid_obs_count = state
+        data_state, (batch, mb_info) = batch_fn(
+          data_state,
+          information=True
+        )
+        sample_counts = sample_counts.at[batch["ordered_indices"]].add(mb_info.mask)
+        valid_obs_count += jnp.sum(mb_info.mask)
+        return (data_state, sample_counts, valid_obs_count), None
+
+      def test_fn(init_state):
+        return lax.scan(_test_update_fn, init_state, onp.arange(num_its))
+
+      return init_fn, test_fn
+
+    return init_test_fn
+
+  def test_cache_size_invalid_arguments(self, data_loader, dataset):
+    _, _, obs_count = dataset
+    # The cache size must be positive and should warn if the cache is bigger
+    # than the total dataset.
+
+    with pytest.raises(ValueError):
+      random_reference_data(data_loader, cached_batches_count=0, mb_size=1)
+
+    # This warning only occurs if a HostDataLoader is used
+    with pytest.warns(Warning):
+      random_reference_data(data_loader,
+                            cached_batches_count=obs_count + 1,
+                            mb_size=1)
+
+  def test_mb_size_invalid_arguments(self, data_loader, dataset):
+    _, _, obs_count = dataset
+    # The batch size must be positive and smaller or equal than the total
+    # observation size.
+
+    with pytest.raises(ValueError):
+      random_reference_data(data_loader, cached_batches_count=1, mb_size=0)
+
+    with pytest.raises(ValueError):
+      random_reference_data(data_loader,
+                            cached_batches_count=1,
+                            mb_size=obs_count + 1)
+
+
+  def test_random_data_acces_with_in_epoch_shuffeling(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    (_, test_sample_count, test_obs_size), _ = test_fn(init_fn())
+
+    assert onp.all(test_sample_count == 1)
+    assert test_obs_size == obs_count
+
+  def test_jit_random_data(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    test_fn_jit = jax.jit(test_fn)
+    test_fn_jit(init_fn())
+
+    (_, test_sample_count, test_obs_size), _ = test_fn_jit(init_fn())
+
+    assert onp.all(test_sample_count == 1)
+    assert test_obs_size == obs_count
+
+  @pytest.mark.skip("Custom Batching not implemented")
+  def test_vmap_random_data(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    vmap_size = 2
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    test_fn_vmap = list_vmap(test_fn)
+    init_states = [init_fn() for _ in range(vmap_size)]
+
+    results = test_fn_vmap(*init_states)
+
+    for res in results:
+      (_, test_sample_count, test_obs_size), _ = res
+      assert onp.all(test_sample_count == 1)
+      assert test_obs_size == obs_count
+
+  @pytest.mark.pmap
+  def test_pmap_random_data(self, data_loader, example_problem, dataset):
+    _, _, obs_count = dataset
+
+    pmap_size = 2
+
+    cache_size = 2
+    batch_size = 3
+
+    data_fn = random_reference_data(data_loader, cache_size, batch_size)
+
+    init_fn, test_fn = example_problem(obs_count, batch_size, data_fn)
+
+    test_fn_pmap = list_pmap(test_fn)
+    init_states = [init_fn() for _ in range(pmap_size)]
+
+    results = test_fn_pmap(*init_states)
+
+    for res in results:
+      (_, test_sample_count, test_obs_size), _ = res
+      assert onp.all(test_sample_count == 1)
+      assert test_obs_size == obs_count
+
+
+class TestFullDataAccess:
+
+  @pytest.fixture
+  def data_loader(self, dataset):
+    data, _, _ = dataset
+    return NumpyDataLoader(**data)
+
+  @pytest.fixture
+  def example_problem_mask(self):
+
+    def init_test_fn(data_fn):
+      init_data_fn, map_fn = data_fn
+
+      def init_fn():
+        # An array to count the number of observations returned
+        return init_data_fn()
+
+      def _test_update_fn(batch, mask, _):
+        return (jnp.sum(mask), batch["ordered_indices"], mask), None
+
+
+      def test_fn(data_state):
+        return map_fn(_test_update_fn, data_state, None, masking=True)
+
+      return init_fn, test_fn
+    return init_test_fn
+
+  @pytest.fixture
+  def example_problem_no_mask(self):
+    def init_test_fn(data_fn):
+      init_data_fn, map_fn = data_fn
+
+      def init_fn():
+        # An array to count the number of observations returned
+        return init_data_fn()
+
+      def _test_update_fn(batch, _):
+        return batch["ordered_indices"], None
+
+
+      def test_fn(data_state):
+        return map_fn(_test_update_fn, data_state, None, masking=False)
+
+      return init_fn, test_fn
+    return init_test_fn
+
+  def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                  cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_mask(data_map)
+
+    _, (results, _) = test_fn(init_fn())
+    sum_mask, samples, masks = results
+
+    samples = onp.ravel(samples)
+    masks = onp.ravel(masks)
+    sum_mask = onp.sum(sum_mask)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples[masks], return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+    assert sum_mask == obs_count
+
+  def test_jit_full_data_map_mask(self, dataset, data_loader,
+                              example_problem_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                   cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_mask(data_map)
+    test_fn_jit = jax.jit(test_fn)
+    test_fn_jit(init_fn())
+
+    _, (results, _) = test_fn_jit(init_fn())
+    sum_mask, samples, masks = results
+
+    samples = onp.ravel(samples)
+    masks = onp.ravel(masks)
+    sum_mask = onp.sum(sum_mask)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples[masks], return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+    assert sum_mask == obs_count
+
+  def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                  cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_no_mask(data_map)
+
+    _, (samples, _) = test_fn(init_fn())
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    _, _, obs_count = dataset
+    data_map = full_reference_data(data_loader,
+                                  cached_batches_count=3,
+                                   mb_size=2)
+
+    init_fn, test_fn = example_problem_no_mask(data_map)
+    test_fn_jit = jax.jit(test_fn)
+    test_fn_jit(init_fn())
+
+    _, (samples, _) = test_fn_jit(init_fn())
+
+    # Every element must appear exactly once
+    _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  @pytest.mark.skip("Custom Batching not implemented")
+  def test_vmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass
+
+  @pytest.mark.pmap
+  def test_pmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass
+
+  @pytest.mark.skip("Custom Batching not implemented")
+  def test_vmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass
+
+  @pytest.mark.pmap
+  def test_pmap_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
+    pass

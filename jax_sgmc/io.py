@@ -15,29 +15,8 @@
 """Save and checkpoint chains.
 
   **jax_sgmc** supports saving and checkpointing inside of jit-compiled
-  functions. Saving data consists of two parts:
-
-  Data Collector
-  _______________
-
-  The data collector serializes the data and writes it to the disk and or keeps
-  it in memory. Every data collector following the interface works.
-
-  Saving
-  ________
-
-  The function save initializes the interface between the data collector and the
-  jit-compiled function.
-
-  If the device memory is large, it is possible to use
-  :func:`jax_sgmc.io.no_save`. This function has the same signature towards the
-  jit-compiled function but keeps the all collected data in the device memory.
-
-  Pytre to Dict Transformation
-  _____________________________
-
-  Additionally, this module can be used for its transformation of pytrees to
-  native dicts of dicts.
+  functions. Saving works by combining a Data Collector with the host callback
+  wrappers.
 
 """
 
@@ -51,7 +30,7 @@ from pathlib import Path
 from functools import partial
 import threading
 
-from typing import Any, NoReturn, Union, Tuple, Callable, Type, Dict
+from typing import Any, Union, Tuple, Callable, Type, Dict, NoReturn
 
 from collections import namedtuple
 
@@ -88,48 +67,19 @@ PyTree = Any
 # Global rules for translating a tree-node into a dict
 _dictionize_rules: Dict[Type, Callable] = {}
 
-def register_dictionize_rule(type: Type) -> NoReturn:
+def register_dictionize_rule(type: Type) -> Callable[[Callable], None]:
   """Decorator to define new rules transforming a pytree node to a dict.
 
   By default, transformations are defined for some default types:
 
-  - list
-  - dict
-  - (named)tuple
+    - list
+    - dict
+    - (named)tuple
 
-  Additionaly, transformation for the following optional libraries are
+  Additionally, transformation for the following optional libraries are
   implemented:
 
   - haiku._src.data_structures.FlatMapping
-
-  New a new transformation rule is a function, which accepts a pytree node of
-  a specific type an returns a iterable, which itself returns `(key, value)`-
-  pairs.
-
-  .. doctest::
-
-    >>> from jax_sgmc import io
-    >>> from jax.tree_util import register_pytree_node
-    >>>
-    >>> class SomeClass:
-    ...   def __init__(self, value):
-    ...     self._value = value
-    >>>
-    >>> # Do not forget to register the class as jax pytree node
-    >>> register_pytree_node(SomeClass,
-    ...                      lambda sc: (sc._value, None),
-    ...                      lambda _, data: SomeClass(value=data))
-    >>>
-    >>> # Now define a rule to transform the class into a dict
-    >>> @io.register_dictionize_rule(SomeClass)
-    ... def some_class_to_dict(instance_of_some_class):
-    ...   return [("this_is_the_key", instance_of_some_class._value)]
-    >>>
-    >>> some_class = SomeClass({'a': 0.0, 'b': 0.5})
-    >>> some_class_as_dict = io.pytree_to_dict(some_class)
-    >>>
-    >>> print(some_class_as_dict)
-    {'this_is_the_key': {'a': 0.0, 'b': 0.5}}
 
   Args:
     type: Type (or class) of the currently undefined node
@@ -145,6 +95,11 @@ def register_dictionize_rule(type: Type) -> NoReturn:
     _dictionize_rules[type] = rule
   return register_function
 
+def _default_dictionize(node):
+  leaves = tree_util.tree_leaves(node)
+  leaf_names = [f"unknown~pytree~leaf~{idx}" for idx in range(len(leaves))]
+  return zip(leaf_names, leaves)
+
 def _dictionize(node):
   """Apply the registered rules to a pytree node."""
   global _dictionize_rules
@@ -154,8 +109,8 @@ def _dictionize(node):
   for node_type, node_rule in _dictionize_rules.items():
     if isinstance(node, node_type):
       return node_rule(node)
-  raise NotImplementedError(f"Node type {type(node).__name__} cannot be "
-                            f"transformed to dict, please register a rule.")
+    else:
+      return _default_dictionize(node)
 
 def pytree_to_dict(tree: PyTree):
   """Construct a dictionary from a pytree.
@@ -220,7 +175,9 @@ def pytree_dict_keys(tree: PyTree):
   idx_tree = tree_util.tree_unflatten(treedef, list(range(len(leaves))))
   key_list = [None] * len(leaves)
   def _recurse(node, path):
-    if isinstance(node, int):
+    if node is None:
+      return
+    elif isinstance(node, int):
       key_list[node] = path
     else:
       for key, value in node.items():
@@ -425,6 +382,10 @@ class HDF5Collector(DataCollector):
   into the hdf5 file format. The samples are saved in a structure similar to the
   original pytree and can thus be viewed easily via the hdf5-viewer.
 
+  Note:
+    This class requires that ``h5py`` is installed. Additional information
+    can be found in the :ref:`installation instructions<additional_requirements>`.
+
   .. doctest::
 
     >>> import tempfile
@@ -517,7 +478,7 @@ class HDF5Collector(DataCollector):
 
     """
     # Is called after all host callback calls have been processed
-    self._finished[chain_id].wait()
+    # self._finished[chain_id].wait()
 
   def checkpoint(self, chain_id: int, state):
     """Called every n'th step. """
@@ -536,7 +497,7 @@ class HDF5Collector(DataCollector):
       chain_id: ID of chain requesting continuation of normal program flow.
 
     """
-    self._finished[chain_id].wait()
+    # self._finished[chain_id].wait()
 
 class MemoryCollector(DataCollector):
   """Stores samples entirely in RAM (numpy arrays).
@@ -660,7 +621,7 @@ class MemoryCollector(DataCollector):
 
 def load(init_state, checkpoint):
   """Reconstructs an earlier checkpoint."""
-
+  raise NotImplementedError("Checkpointing is currently not supported.")
 
 def save(data_collector: DataCollector = None,
          checkpoint_every: int = 0
@@ -701,7 +662,7 @@ def save(data_collector: DataCollector = None,
       >>>
       >>> saved_samples = postprocess_save(final_state, None)
       >>> print(saved_samples)
-      {'sample_count': DeviceArray(3, dtype=int32), 'samples': {'iteration': array([0, 2, 4], dtype=int32)}}
+      {'sample_count': DeviceArray(3, dtype=int32, weak_type=True), 'samples': {'iteration': array([0, 2, 4], dtype=int32)}}
 
 
   Args:
@@ -841,7 +802,7 @@ def no_save() -> Saving:
     >>>
     >>> saved_samples = postprocess_save(final_state, None)
     >>> print(saved_samples)
-    {'sample_count': DeviceArray(3, dtype=int32), 'samples': {'iteration': DeviceArray([0, 2, 4], dtype=int32)}}
+    {'sample_count': DeviceArray(3, dtype=int32, weak_type=True), 'samples': {'iteration': DeviceArray([0, 2, 4], dtype=int32)}}
 
   Returns:
     Returns a saving strategy, which keeps the samples entirely in the

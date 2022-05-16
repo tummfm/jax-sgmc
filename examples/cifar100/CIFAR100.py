@@ -3,7 +3,7 @@ import time
 
 import sys
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('2')  # needs to stay before importing jax
 
 from jax import nn, tree_leaves, random, numpy as jnp
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
@@ -183,7 +183,7 @@ rms_integ = rms_integrator[0](sample,
 start = time.time()
 rms_results = rms_run(rms_integ,
                       iterations=iterations)  #["samples"]["variables"]
-file.create_dataset('samples', data=rms_results[0]['samples'])
+# file.create_dataset('samples', data=rms_results[0]['samples'])
 print(f"Run completed in {time.time() - start} seconds")
 if file:
     file.close()

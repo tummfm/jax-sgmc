@@ -44,15 +44,15 @@ class TensorflowDataLoader(HostDataLoader):
   The tensorflow datasets package provides a high number of ready to go
   datasets, which can be provided directly to the Tensorflow Data Loader.
 
-  .. doctest::
+  ::
 
-    >>> import tensorflow_datasets as tdf
-    >>> import tensorflow_datasets as tfds
-    >>> from jax_sgmc import data
-    >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
-    >>>
-    >>> pipeline = tfds.load("cifar10", split="train")
-    >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
+    import tensorflow_datasets as tdf
+    import tensorflow_datasets as tfds
+    from jax_sgmc import data
+    from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
+
+    pipeline = tfds.load("cifar10", split="train")
+    data_loader = TensorflowDataLoader(pipeline, shuffle_cache=100, exclude_keys=['id'])
 
   Args:
     pipeline: A tensorflow data pipeline, which can be obtained from the
@@ -85,7 +85,7 @@ class TensorflowDataLoader(HostDataLoader):
                                cache_size: int = 1,
                                mb_size: int = None,
                                **kwargs) -> int:
-    """Register a new chain which draw samples randomly.
+    """Register a new chain which draws samples randomly.
 
     Args:
       cache_size: The number of drawn batches.
@@ -143,7 +143,7 @@ class TensorflowDataLoader(HostDataLoader):
         the batch and the process of assembling.
 
     Returns:
-      Returns a superbatch as registered by :func:`register_random_pipeline` or
+      Returns a batch of batches as registered by :func:`register_random_pipeline` or
       :func:`register_ordered_pipeline` with `cache_size` batches holding
       `mb_size` observations.
 

@@ -117,7 +117,7 @@ def init_mass(mass) -> MassMatrix:
 
 
 def random_tree(key, a):
-  """Build a tree shaped like a where all nodes are normal distributed.
+  """Build a tree shaped like a where all nodes are normally distributed.
 
   Arguments:
     key: PRNGKey
@@ -281,7 +281,7 @@ def obabo(potential_fn: StochasticPotential,
     Args:
       init_sample: Initial latent variables
       key: Initial PRNGKey
-      batch_kwargs: Determine the inital state of the random data chain
+      batch_kwargs: Determine the initial state of the random data chain
       init_model_state: State of the model.
       mass: Mass matrix
 
@@ -584,7 +584,7 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       information)
 
   Returns:
-    Returns a function running the non conservative leapfrog integrator for T
+    Returns a function running the non-conservative leapfrog integrator for T
     steps.
 
   """
@@ -792,7 +792,7 @@ def langevin_diffusion(
   batch_init, batch_get = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
 
-  # We need to define an update function. All array oprations must be
+  # We need to define an update function. All array operations must be
   # implemented via tree_map. This is probably going to change with the
   # introduction of the tree vectorizing transformation
   # --> https://github.com/google/jax/pull/3263
@@ -806,13 +806,13 @@ def langevin_diffusion(
               adaption_kwargs: Dict = None,
               batch_kwargs: Dict = None,
               init_model_state: PyTree = None):
-    """Initializes the initial state of the integrator.
+    """Initializes the state of the integrator.
 
     Args:
       init_sample: Initial latent variables
       key: Initial PRNGKey
-      adaption_kwargs: Determine the inital state of the adaption
-      batch_kwargs: Determine the inital state of the random data chain
+      adaption_kwargs: Determine the initial state of the adaption
+      batch_kwargs: Determine the initial state of the random data chain
 
     Returns:
       Returns the initial state of the integrator.
@@ -864,7 +864,7 @@ def langevin_diffusion(
 
     Args:
       state: Integrator state
-      parameters: Schedule containig step_size and temperature
+      parameters: Schedule containing step_size and temperature
 
     Returns:
       Returns a new step calculated by applying langevin diffusion.

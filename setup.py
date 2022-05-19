@@ -24,6 +24,7 @@ EXTRAS_REQUIRE = {
         'sphinx_rtd_theme',
         'sphinx-autodoc-typehints==1.11.1',
         'myst-nb',
+        'numpyro'
     ],
     'hdf5': [
         'h5py'
@@ -32,7 +33,7 @@ EXTRAS_REQUIRE = {
 
 setuptools.setup(
     name='jax_sgmc',
-    version='0.0.1',
+    version='0.0.2',
     license='Apache 2.0',
     author='MMFM',
     install_requires=INSTALL_REQUIRES,

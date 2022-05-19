@@ -1,6 +1,49 @@
 Data Loading
 =============
 
+Basics
+-------
+
+Steps for Setting up a Data Chain
+__________________________________
+
+Access of (random) data in **JaxSGMC** consists of two steps:
+
+- Setup Data Loader
+- Setup Callback Wrappers
+
+The Data Loaders determines where the data is stored and how it is passed
+to the device (e. g. shuffled in epochs).
+
+The Callback Wrappers requests new batches from the Data Loader and pass them
+to the device via Jax's Host-Callback module. Therefore, only a subset of the
+data is stored in the device memory.
+
+The combination of a Data Loader and Callback Wrappers determines how the data is
+passed to the computation. Therefore, this guide presents different methods of
+data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
+
+Shape and dtype of the Data
+____________________________
+
+Some models needs to now the shape and dtype of the reference data. Therefore,
+an all-zero batch can be drawn from every Data Loader.
+
+  ::
+
+    print(data_loader.initializer_batch(3))
+    {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
+                 [0., 0.],
+                 [0., 0.]], dtype=float32)}
+
+If no batch size is specified a single observation is returned (all leaves
+shapes are reduced by the first axis).
+
+  ::
+
+    print(data_loader.initializer_batch())
+    {'x_r': DeviceArray(0, dtype=int32), 'y_r': DeviceArray([0., 0.], dtype=float32)}
+
 Numpy Data Loader
 ------------------
 
@@ -10,7 +53,7 @@ Numpy Data Loader
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
-First we set up the dataset. This is very simply, as each array can be asigned
+First we set up the dataset. This is very simply, as each array can be assigned
 as a keyword argument to the dataloader. The keywords of the single arrays form
 the keys of the pytree-dict, bundling all observations.
 
@@ -21,14 +64,6 @@ the keys of the pytree-dict, bundling all observations.
   >>>
   >>> data_loader = NumpyDataLoader(x_r=x, y_r=y)
 
-Some models needs to now the shape and dtype of the reference data. Therefore,
-a all-zero batch can be drawn from the dataloader.
-
-  >>> print(data_loader.initializer_batch(3))
-  {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
-               [0., 0.],
-               [0., 0.]], dtype=float32)}
-
 The host callback wrappers cache some data in the device memory to reduce the
 number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
@@ -37,7 +72,7 @@ has an increased device memory consumption.
   >>> rd_init, rd_batch = data.random_reference_data(data_loader, 100, 2)
 
 The Numpy Data Loader accepts keyword arguments in
-the init function to determnine the starting points of the chains.
+the init function to determine the starting points of the chains.
 
   >>> rd_state = rd_init(seed=0)
   >>> new_state, (rd_batch, info) = rd_batch(rd_state, information=True)
@@ -53,7 +88,7 @@ Random Data Access
 ___________________
 
 The NumpyDataLoader provides three different methods to randomly select
-oservations:
+observations:
 
 - Independent draw (default): Draw from all samples with replacement.
 - Shuffling: Draw from all samples without replacement and immediately reshuffle
@@ -74,7 +109,7 @@ multiplicity of the batch size:
   >>> data_loader = NumpyDataLoader(x=x)
   >>> init_fn, batch_fn = data.random_reference_data(data_loader, 2, 3)
 
-The prefered method has to be passed when initializing the different chains:
+The preferred method has to be passed when initializing the different chains:
 
   >>> random_chain = init_fn()
   >>> shuffle_chain = init_fn(shuffle=True)
@@ -99,11 +134,11 @@ Mapping over Full Dataset
 __________________________
 
 It is also possible to map a function over the complete dataset provided by a
-data loader. In each iteration, the function is mapped over a batch of data to
+Data Loader. In each iteration, the function is mapped over a batch of data to
 speed up the calculation but limit the memory consumption.
 
-In this toy example, the dataset consits of the potential bases
-:math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \\right\}`. In a scan loop,
+In this toy example, the dataset consists of the potential bases
+:math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \right\}`. In a scan loop,
 the sum of the potentials with given exponents is calculated:
 
 .. math::
@@ -121,15 +156,16 @@ the sum of the potentials with given exponents is calculated:
 First, the data loader must be set up. The mini batch size is not required to
 truly divide the total observation count. This is realized by filling up the
 last batch with some values, which are sorted out either automatically or
-directly by the user with a provided mask.
+directly by the user with the provided mask.
 
   >>> base = jnp.arange(10)
   >>>
   >>> data_loader = NumpyDataLoader(base=base)
 
-The mask is an boolean array with `True` if the value is valid and `False` if it
-is just a filler. If set to `maksing=False` (default), no positional argument
-mask is expected in the function signature.
+The mask is an boolean array with ``True`` if the value is valid and ``False``
+if it is just a filler.
+If set to ``masking=False`` (default), no positional argument mask is expected
+in the function signature.
 
   >>> def sum_potentials(exp, data, mask, unused_state):
   ...   # Mask out the invalid samples (filler values, already mapped over)
@@ -140,9 +176,29 @@ mask is expected in the function signature.
   ...                                              cached_batches_count=3,
   ...                                              mb_size=4)
 
-The results per batch must be post-processed. If `masking=False`, a result for
+The results per batch must be post-processed. If ``masking=False``, a result for
 each observation is returned. Therefore, using the masking option improves the
 memory consumption.
+
+  >>> # The exponential value is fixed during the mapping, therefore add it via
+  >>> # functools.partial to the mapped function.
+  >>> map_results = map_fun(partial(sum_potentials, 2),
+  ...                       init_fun(),
+  ...                       None,
+  ...                       masking=True)
+  >>>
+  >>> data_state, (batch_sums, unused_state) = map_results
+  >>>
+  >>> # As we used the masking, a single result for each batch is returned.
+  >>> # Now we need to postprocess those results, in this case by summing, to
+  >>> # get the true result.
+  >>> summed_result = jnp.sum(batch_sums)
+  >>> print(f"Result: {summed_result : d}")
+  Result:  285
+
+The full data map can be used in ``jit``-compiled functions, e. g. in a scan loop,
+such that it is possible to compute the results for multiple exponents in a
+``lax.scan``-loop.
 
   >>> # Calculate for multiple exponents:
   >>> def body_fun(data_state, exp):
@@ -156,6 +212,20 @@ memory consumption.
   >>> _, (result, _) = scan(body_fun, init_data_state, jnp.arange(3))
   >>> print(result)
   [ 10  45 285]
+
+It is also possible to store the ``CacheStates`` in the host memory, such that
+it is not necessary to carry the ``data state`` through all function calls.
+The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
+its usage is a little bit simpler:
+
+  >>> mapper_fn = data.full_data_mapper(data_loader,
+  ...                                   cached_batches_count=3,
+  ...                                   mb_size=4)
+  >>>
+  >>> results, _ = mapper_fn(partial(sum_potentials, 2), None, masking=True)
+  >>>
+  >>> print(f"Result with exp = 2: {jnp.sum(results) : d}")
+  Result with exp = 2:  285
 
 
 Tensorflow Data Loader
@@ -174,19 +244,22 @@ available on tensorflow_datasets.
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
   >>>
-  >>> tfds.disable_progress_bar()
+  >>> import contextlib
+  >>> import io
+  >>>
   >>> # Helper function to look at the data provided
   >>> def show_data(data):
   ...   for key, item in data.items():
   ...     print(f"{key} with shape {item.shape} and dtype {item.dtype}")
 
-The pipeline returned by tfds load can be directly passet to the data loader.
+The pipeline returned by tfds load can be directly passed to the data loader.
 However, not all tensorflow data types can be transformed to jax data types, for
-eample the feature 'id', which is a string. Those keys can be simply excluded
-by passing the keyword argument `exclude_keys`.
+example the feature 'id', which is a string. Those keys can be simply excluded
+via the keyword argument `exclude_keys`.
 
   >>> # The data pipeline can be used directly
-  >>> pipeline, info = tfds.load("cifar10", split="train", with_info=True)
+  >>> with contextlib.redirect_stdout(io.StringIO()):
+  ...   pipeline, info = tfds.load("cifar10", split="train", with_info=True)
   >>> print(info.features)
   FeaturesDict({
       'id': Text(shape=(), dtype=tf.string),

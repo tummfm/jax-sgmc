@@ -50,7 +50,3 @@ And to build the documentation (e.g. in html):
 ```shell
 make -C docs html
 ```
-
-
-
-

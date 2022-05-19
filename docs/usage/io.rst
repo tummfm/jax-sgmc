@@ -4,7 +4,7 @@ Saving of Samples
 Seting up Saving
 -----------------
 
-**jax_sgmc** supports saving and checkpointing inside of jit-compiled
+**JaxSGMC** supports saving and checkpointing inside of jit-compiled
 functions. Saving data consists of two parts:
 
 Data Collector
@@ -33,7 +33,7 @@ By default, transformations are defined for some default types:
   - dict
   - (named)tuple
 
-Additionaly, transformation for the following optional libraries are
+Additionally, transformation for the following optional libraries are
 implemented:
 
   - haiku._src.data_structures.FlatMapping
@@ -66,4 +66,3 @@ pairs.
     >>>
     >>> print(some_class_as_dict)
     {'this_is_the_key': {'a': 0.0, 'b': 0.5}}
-

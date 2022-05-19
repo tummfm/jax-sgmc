@@ -14,7 +14,7 @@
 
 """Save and checkpoint chains.
 
-  **jax_sgmc** supports saving and checkpointing inside of jit-compiled
+  **JaxSGMC** supports saving and checkpointing inside jit-compiled
   functions. Saving works by combining a Data Collector with the host callback
   wrappers.
 
@@ -85,7 +85,7 @@ def register_dictionize_rule(type: Type) -> Callable[[Callable], None]:
     type: Type (or class) of the currently undefined node
 
   Returns:
-    The decoreated function is not intended to be used directly.
+    The decorated function is not intended to be used directly.
 
   """
   def register_function(rule: Callable):
@@ -113,7 +113,7 @@ def _dictionize(node):
       return _default_dictionize(node)
 
 def pytree_to_dict(tree: PyTree):
-  """Construct a dictionary from a pytree.
+  """Constructs a dictionary from a pytree.
 
   Transforms each node of a pytree to a dict by appling defined dictionize. New
   rules can be specified by the :func:`jax_sgmc.io.register_dictionize_rule`
@@ -264,7 +264,7 @@ class DataCollector(metaclass=abc.ABCMeta):
                      init_checkpoint: PyTree = None,
                      static_information: PyTree = None
                      ) -> int:
-    """Register a chain to save samples from.
+    """Registers a chain to save samples from.
 
     Args:
       init_sample: Determining shape, dtype and tree structure of sample.
@@ -291,15 +291,15 @@ class DataCollector(metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def checkpoint(self, chain_id: int, state):
-    """Called every n'th step. """
+    """Called every nth step. """
 
   @abc.abstractmethod
   def resume(self):
     """Called to restore data loader state and return sample states. """
 
-# Todo: Maybe remove? Not useable for big data -> better hdf5
+# Todo: Maybe remove? Not usable for big data -> better hdf5
 class JSONCollector(DataCollector):
-  """Save samples in json format.
+  """Saves samples in json format.
 
   Args:
     dir: Directory to save the collected samples.
@@ -348,7 +348,7 @@ class JSONCollector(DataCollector):
       self._write_file(chain_id, self._sample_count[chain_id])
 
   def checkpoint(self, chain_id: int, state):
-    """Called every n'th step. """
+    """Called every nth step. """
     raise NotImplementedError("Checkpointing is not supported by JSON loader.")
 
   def resume(self):
@@ -417,14 +417,14 @@ class HDF5Collector(DataCollector):
     self._file = file
 
   def register_data_loader(self, data_loader: data.DataLoader):
-    """Register data loader to save the state. """
+    """Registers data loader to save the state. """
 
   def register_chain(self,
                      init_sample: PyTree = None,
                      init_checkpoint: PyTree = None,
                      static_information: PyTree = None
                      ) -> int:
-    """Register a chain to save samples from.
+    """Registers a chain to save samples from.
 
     Args:
       init_sample: Pytree determining tree structure and leafs of samples to be
@@ -459,10 +459,10 @@ class HDF5Collector(DataCollector):
     return chain_id
 
   def save(self, chain_id: int, values):
-    """Save new leaves to dataset.
+    """Saves new leaves to dataset.
 
     Args:
-      chain_id: Id from register_chain
+      chain_id: ID from register_chain
       values: Tree leaves of sample
 
     """
@@ -471,7 +471,7 @@ class HDF5Collector(DataCollector):
     self._sample_count[chain_id] += 1
 
   def finalize(self, chain_id: int):
-    """Wait for all writing to be finished (scheduled via host_callback).
+    """Waits for all writing to be finished (scheduled via host_callback).
 
     Args:
       chain_id: Id of the chain which is finished
@@ -481,13 +481,13 @@ class HDF5Collector(DataCollector):
     # self._finished[chain_id].wait()
 
   def checkpoint(self, chain_id: int, state):
-    """Called every n'th step. """
+    """Called every nth step. """
 
   def resume(self):
     """Called to restore data loader state and return sample states. """
 
   def finished(self, chain_id: int):
-    """Return after everything has been written to the file.
+    """Returns after everything has been written to the file.
 
     Finalize is scheduled via host_callback and finished is called in the normal
     python flow. Via a barrier it is possible to pause the program flow until
@@ -520,13 +520,13 @@ class MemoryCollector(DataCollector):
     self._dir = save_dir
 
   def register_data_loader(self, data_loader: data.DataLoader):
-    """Register data loader to save the state. """
+    """Registers data loader to save the state. """
 
   def register_chain(self,
                      init_sample: PyTree = None,
                      static_information = None,
                      **unused_kwargs) -> int:
-    """Register a chain to save samples from.
+    """Registers a chain to save samples from.
 
     Args:
       init_sample: Pytree determining tree structure and leafs of samples to be
@@ -561,10 +561,10 @@ class MemoryCollector(DataCollector):
     return chain_id
 
   def save(self, chain_id: int, values):
-    """Save new leaves to dataset.
+    """Saves new leaves to dataset.
 
     Args:
-      chain_id: Id from register_chain
+      chain_id: ID from register_chain
       values: Tree leaves of sample
 
     """
@@ -574,10 +574,10 @@ class MemoryCollector(DataCollector):
     self._samples_count[chain_id] += 1
 
   def finalize(self, chain_id: int):
-    """Wait for all writing to be finished (scheduled via host_callback).
+    """Waits for all writing to be finished (scheduled via host_callback).
 
     Args:
-      chain_id: Id of the chain which is finished
+      chain_id: ID of the chain which is finished
 
     """
     # Is called after all host callback calls have been processed
@@ -591,7 +591,7 @@ class MemoryCollector(DataCollector):
         **dict(zip(self._leafnames[chain_id], self._samples[chain_id])))
 
   def finished(self, chain_id):
-    """Return samples after all data has been processed.
+    """Returns samples after all data has been processed.
 
     Finalize is scheduled via host_callback and finished is called in the normal
     python flow. Via a barrier it is possible to pause the program flow until
@@ -613,7 +613,7 @@ class MemoryCollector(DataCollector):
       self._samples[chain_id])
 
   def checkpoint(self, chain_id: int, state):
-    """Called every n'th step. """
+    """Called every nth step. """
 
   def resume(self):
     """Called to restore data loader state and return sample states. """
@@ -629,11 +629,11 @@ def save(data_collector: DataCollector = None,
   """Initializes asynchronous saving of samples and checkpoints.
 
   Accepted samples are sent to the host and processed there. This optimizes the
-  memory usage drastically and also allows to gain insight in the data while the
+  memory usage drastically and also allows gaining insight in the data while the
   simulation is running.
 
-  Returns statistics and samples are depending on the Data Collector. For
-  example hdf5 can be used for samples larger than the (device)memory.
+  Returns statistics and samples depending on the Data Collector. For
+  example hdf5 can be used for samples larger than the (device-)memory.
   Therefore, no samples are returned. Instead, the memory collector returns
   the samples collected as numpy arrays.
 
@@ -695,8 +695,8 @@ def save(data_collector: DataCollector = None,
 
   def _save_wrapper(args) -> int:
     # Use the result to count the number of saved samples. The result must be
-    # used to avoid loosing the call to jax's optimizations.
-    # Only return the leaves, as tree structure is redundant an requires
+    # used to avoid losing the call to Jax's optimizations.
+    # Only return the leaves, as tree structure is redundant and requires
     # flattening on the host.
     chain_id, data = args
     flat_args = (chain_id, tree_util.tree_leaves(data))
@@ -773,10 +773,10 @@ def save(data_collector: DataCollector = None,
 # Todo: Removed the sample collection, consider removing last argument in
 #       postprocess function
 def no_save() -> Saving:
-  """Do not save the data but return it instead.
+  """Does not save the data on the host but return it instead.
 
   If the samples are small, collection on the device is possible. Samples must
-  copied repeatedly.
+  be copied repeatedly.
 
   Save keep every second element of a 5 element scan
 
@@ -806,7 +806,7 @@ def no_save() -> Saving:
 
   Returns:
     Returns a saving strategy, which keeps the samples entirely in the
-    devices memory.
+    device's memory.
 
   """
   def init(init_sample: PyTree,
@@ -862,7 +862,7 @@ def no_save() -> Saving:
            sample: Any,
            **unused_kwargs: Any
            ) -> Any:
-    """Determine whether a sample should be saved.
+    """Determines whether a sample should be saved.
 
     A sample will be saved it is not subject to burn in and not discarded due
     to thinning.

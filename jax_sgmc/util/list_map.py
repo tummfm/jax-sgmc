@@ -48,7 +48,7 @@ def pytree_list_to_leaves(pytrees):
 
   """
 
-  # Transpose the pytress, i. e. make a list (array) of leaves from a list of
+  # Transpose the pytrees, i. e. make a list (array) of leaves from a list of
   # pytrees. Only then vmap can be used to vectorize an operation over pytrees
   treedef = tree_util.tree_structure(pytrees[0])
   superleaves = [jnp.stack(leaves, axis=0)
@@ -59,7 +59,7 @@ def pytree_list_to_leaves(pytrees):
 def pytree_leaves_to_list(pytree):
   """Splits a pytree in a list of pytrees.
 
-  Splits every leaf of the pytree along the first dimenion, thus undoing the
+  Splits every leaf of the pytree along the first dimension, thus undoing the
   :func:`pytree_list_to_leaves` transformation.
 
   Example usage:
@@ -109,7 +109,7 @@ def list_vmap(fun):
     ...   return tree_map(jnp.subtract, pytree, tree_b)
     >>>
     >>> print(tree_add(tree_a, tree_b))
-    [{'a': DeviceArray(-1., dtype=float32), 'b': DeviceArray([-1., -1.], dtype=float32)}, {'a': DeviceArray(0., dtype=float32), 'b': DeviceArray([0., 0.], dtype=float32)}]
+    [{'a': DeviceArray(-1., dtype=float32, weak_type=True), 'b': DeviceArray([-1., -1.], dtype=float32)}, {'a': DeviceArray(0., dtype=float32, weak_type=True), 'b': DeviceArray([0., 0.], dtype=float32)}]
 
   Args:
     fun: Function accepting a single pytree as first argument.

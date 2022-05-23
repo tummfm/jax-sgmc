@@ -49,7 +49,10 @@ class NumpyBase(DataLoader):
       if on_device:
         self._reference_data[name] = jnp.array(array, copy=copy)
       else:
-        self._reference_data[name] = onp.array(array, copy=copy)
+        if not isinstance(array, onp.ndarray) or copy:
+          self._reference_data[name] = onp.array(array, copy=True).view()
+        else:
+          self._reference_data[name] = array.view()
 
     # Check same number of observations
     if onp.any(onp.array(observation_counts) != observation_counts[0]):

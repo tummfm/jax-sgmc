@@ -538,7 +538,7 @@ def full_reference_data(data_loader: DataLoader,
 
     return data_state, (true_results, carry)
 
-  return init_fn, batch_scan
+  return init_fn, batch_scan, cleanup
 
 
 def tree_dtype_struct(pytree: PyTree):
@@ -589,8 +589,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # determines whether the data is collected randomly or sequentially.
 
   def get_data(req):
-    chain_id, data_loader_uuid = req
-    new_data, mask = _host_data_loaders[data_loader_uuid].get_batches(chain_id)
+    chain_id, callback_uuid = req
+    new_data, mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if mask is None:
       # Assume all samples to be valid
       mask = jnp.ones(mask_shape, dtype=jnp.bool_)
@@ -609,7 +609,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       cached_batches=new_data,
       current_line=jnp.array(0),
       chain_id=state.chain_id,
-      valid=masks)
+      valid=masks,
+      callback_uuid=state.callback_uuid)
     return new_state
 
   def _old_cache_fn(state: CacheState) -> CacheState:
@@ -656,7 +657,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       cached_batches_count=data_state.cached_batches_count,
       current_line=current_line,
       chain_id=data_state.chain_id,
-      valid=data_state.valid)
+      valid=data_state.valid,
+      callback_uuid=data_state.callback_uuid)
 
     info = MiniBatchInformation(
       observation_count = mb_information.observation_count,
@@ -685,7 +687,7 @@ def _random_reference_data_host(data_loader: HostDataLoader,
   batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
 
   callback_uuid = JaxUUID()
-  _host_data_loaders[callback_uuid] = data_loader
+  _host_data_loaders[callback_uuid.as_uuid] = data_loader
 
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
@@ -694,7 +696,7 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state, initial_mask = _host_data_loaders[callback_uuid].get_batches(chain_id)
+    initial_state, initial_mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if initial_mask is None:
       initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state = CacheState(
@@ -707,7 +709,7 @@ def _random_reference_data_host(data_loader: HostDataLoader,
     return inital_cache_state
 
   def cleanup():
-    del _host_data_loaders[callback_uuid]
+    del _host_data_loaders[callback_uuid.as_uuid]
 
   return init_fn, batch_fn, cleanup
 
@@ -757,16 +759,16 @@ def _full_reference_data_host(data_loader: HostDataLoader,
 
   # Register the data loader
   callback_uuid = JaxUUID()
-  _host_data_loaders[callback_uuid] = data_loader
+  _host_data_loaders[callback_uuid.as_uuid] = data_loader
 
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = _host_data_loaders[callback_uuid].register_ordered_pipeline(
+    chain_id = _host_data_loaders[callback_uuid.as_uuid].register_ordered_pipeline(
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state, initial_mask = _host_data_loaders[callback_uuid].get_batches(chain_id)
+    initial_state, initial_mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if initial_mask is None:
       initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state=CacheState(
@@ -779,7 +781,7 @@ def _full_reference_data_host(data_loader: HostDataLoader,
     return inital_cache_state
 
   def cleanup():
-    del _host_data_loaders[callback_uuid]
+    del _host_data_loaders[callback_uuid.as_uuid]
 
   return init_fn, batch_fn, cleanup
 

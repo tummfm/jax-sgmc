@@ -39,6 +39,9 @@ class JaxUUID:
     hex128 = hex(int128).replace('0x', '').replace('-','').zfill(32)
     return uuid.UUID(hex128)
 
+  def __repr__(self):
+    return str(self.as_uuid)
+
   @property
   def as_int32s(self):
     return self._uuid_int

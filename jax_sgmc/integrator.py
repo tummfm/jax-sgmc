@@ -162,7 +162,7 @@ def obabo(potential_fn: StochasticPotential,
 
   """
 
-  init_data, get_data = batch_fn
+  init_data, get_data, _ = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
 
   # Calculate the inverse and the square root
@@ -370,7 +370,7 @@ def reversible_leapfrog(potential_fn: StochasticPotential,
 
   """
 
-  init_data, get_data = batch_fn
+  init_data, get_data, _ = batch_fn
   stochastic_gradient = grad(potential_fn, has_aux=True)
 
   # Calculate the inverse and the square root
@@ -587,7 +587,7 @@ def friction_leapfrog(potential_fn: StochasticPotential,
 
   """
 
-  init_data, get_data = batch_fn
+  init_data, get_data, _ = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, has_aux=True)
   if noise_model:
     init_noise_model, update_noise_model, get_noise_model = noise_model
@@ -787,7 +787,7 @@ def langevin_diffusion(
   """
   if adaption is not None:
     adapt_init, adapt_update, adapt_get = adaption
-  batch_init, batch_get = batch_fn
+  batch_init, batch_get, _ = batch_fn
   stochastic_gradient = value_and_grad(potential_fn, argnums=0, has_aux=True)
 
   # We need to define an update function. All array operations must be

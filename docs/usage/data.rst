@@ -23,6 +23,12 @@ The combination of a Data Loader and Callback Wrappers determines how the data i
 passed to the computation. Therefore, this guide presents different methods of
 data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
 
+.. note::
+    When using multiple Data Loaders sequentially in a single script, the
+    release function should be called after the Callback Wrapper has been used in
+    the last computation. After this, the reference to the Data Loader hs been
+    discarded and the Data Loader can be deleted.
+
 Shape and dtype of the Data
 ____________________________
 
@@ -69,7 +75,7 @@ number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
 has an increased device memory consumption.
 
-  >>> rd_init, rd_batch = data.random_reference_data(data_loader, 100, 2)
+  >>> rd_init, rd_batch, _ = data.random_reference_data(data_loader, 100, 2)
 
 The Numpy Data Loader accepts keyword arguments in
 the init function to determine the starting points of the chains.
@@ -107,7 +113,7 @@ multiplicity of the batch size:
 
   >>> x = onp.arange(10)
   >>> data_loader = NumpyDataLoader(x=x)
-  >>> init_fn, batch_fn = data.random_reference_data(data_loader, 2, 3)
+  >>> init_fn, batch_fn, _ = data.random_reference_data(data_loader, 2, 3)
 
 The preferred method has to be passed when initializing the different chains:
 
@@ -172,9 +178,9 @@ in the function signature.
   ...   sum = jnp.sum(mask * jnp.power(data['base'], exp))
   ...   return sum, unused_state
   >>>
-  >>> init_fun, map_fun = data.full_reference_data(data_loader,
-  ...                                              cached_batches_count=3,
-  ...                                              mb_size=4)
+  >>> init_fun, map_fun, _ = data.full_reference_data(data_loader,
+  ...                                                 cached_batches_count=3,
+  ...                                                 mb_size=4)
 
 The results per batch must be post-processed. If ``masking=False``, a result for
 each observation is returned. Therefore, using the masking option improves the
@@ -218,14 +224,17 @@ it is not necessary to carry the ``data state`` through all function calls.
 The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
 its usage is a little bit simpler:
 
-  >>> mapper_fn = data.full_data_mapper(data_loader,
-  ...                                   cached_batches_count=3,
-  ...                                   mb_size=4)
+  >>> mapper_fn, release_fn = data.full_data_mapper(data_loader,
+  ...                                               cached_batches_count=3,
+  ...                                               mb_size=4)
   >>>
   >>> results, _ = mapper_fn(partial(sum_potentials, 2), None, masking=True)
   >>>
   >>> print(f"Result with exp = 2: {jnp.sum(results) : d}")
   Result with exp = 2:  285
+  >>>
+  >>> # Delete the reference to the Data Loader (optional)
+  >>> release_fn()
 
 
 Tensorflow Data Loader
@@ -280,7 +289,7 @@ number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
 has an increased device memory consumption.
 
-  >>> data_init, data_batch = data.random_reference_data(data_loader, 100, 1000)
+  >>> data_init, data_batch, _ = data.random_reference_data(data_loader, 100, 1000)
   >>>
   >>> init_state = data_init()
   >>> new_state, batch = data_batch(init_state)

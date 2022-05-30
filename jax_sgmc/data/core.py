@@ -393,8 +393,8 @@ class FullDataMapperFunction(Protocol):
 
     """
 
-RandomBatch = Tuple[Any, GetBatchFunction, Callable]
-OrderedBatch = Tuple[Any, FullDataMapFunction, Callable]
+RandomBatch = Tuple[Any, GetBatchFunction, Callable[[], None]]
+OrderedBatch = Tuple[Any, FullDataMapFunction, Callable[[], None]]
 
 class _Requests:
 
@@ -450,8 +450,9 @@ def random_reference_data(data_loader: DataLoader,
       necessary if batches are assembles randomly without extra conditions.
 
   Returns:
-    Returns a tuple of functions to initialize a new reference data state and
-    get a minibatch from the reference data state
+    Returns a tuple of functions to initialize a new reference data state, get
+    a minibatch from the reference data state and release the data loader after
+    the last computation.
 
   """
   # Check batch size is not bigger than total observation count
@@ -491,8 +492,9 @@ def full_reference_data(data_loader: DataLoader,
     mb_size: Size of the data batch.
 
   Returns:
-    Returns a tuple of functions to initialize a new reference data state and
-    get a minibatch from the reference data state
+    Returns a tuple of functions to initialize a new reference data state, map a
+    function over the complete dataset and release the data loader after the
+    last computation.
 
   """
   # Check batch size is not bigger than total observation count
@@ -758,10 +760,10 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       token=JaxUUID())
     return inital_cache_state
 
-  def cleanup():
+  def release():
     del _host_data_loaders[callback_uuid.as_uuid]
 
-  return init_fn, batch_fn, cleanup
+  return init_fn, batch_fn, release
 
 
 def _random_reference_data_device(data_loader: DeviceDataLoader,
@@ -786,10 +788,10 @@ def _random_reference_data_device(data_loader: DeviceDataLoader,
     else:
       return new_state, batch
 
-  def cleanup():
+  def release():
     pass
 
-  return init_fn, batch_fn, cleanup
+  return init_fn, batch_fn, release
 
 def _full_reference_data_host(data_loader: HostDataLoader,
                               cached_batches_count: int = 100,
@@ -832,10 +834,10 @@ def _full_reference_data_host(data_loader: HostDataLoader,
       token=JaxUUID())
     return inital_cache_state
 
-  def cleanup():
+  def release():
     del _host_data_loaders[callback_uuid.as_uuid]
 
-  return init_fn, batch_fn, cleanup
+  return init_fn, batch_fn, release
 
 
 def _full_reference_data_device(data_loader: DeviceDataLoader,
@@ -880,10 +882,10 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
     else:
       return new_state, selected_data
 
-  def cleanup():
+  def release():
     pass
 
-  return init_fn, (batch_fn, mb_info), cleanup
+  return init_fn, (batch_fn, mb_info), release
 
 
 class _FullDataHelper:
@@ -931,6 +933,7 @@ class _FullDataHelper:
 
   def cleanup(self):
     self._cleanup_fn()
+    self._unused_states = None
 
 
 def full_data_mapper(data_loader: DataLoader = None,
@@ -950,8 +953,9 @@ def full_data_mapper(data_loader: DataLoader = None,
     mb_size: Size of the data batch
 
   Returns:
-    Returns a function to map another function over a complete dataset of an
-    appropriate :class:`DataLoader`.
+    Returns a tuple of functions to map another function over a complete dataset
+    of an appropriate :class:`DataLoader` and another function to release
+    the data loader after the last computation.
 
   """
 

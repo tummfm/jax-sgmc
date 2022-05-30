@@ -412,8 +412,9 @@ def random_reference_data(data_loader: DataLoader,
     mb_size: Size of the data batch.
 
   Returns:
-    Returns a tuple of functions to initialize a new reference data state and
-    get a minibatch from the reference data state
+    Returns a tuple of functions to initialize a new reference data state, get
+    a minibatch from the reference data state and release the data loader after
+    the last computation.
 
   """
   # Check batch size is not bigger than total observation count
@@ -452,8 +453,9 @@ def full_reference_data(data_loader: DataLoader,
     mb_size: Size of the data batch.
 
   Returns:
-    Returns a tuple of functions to initialize a new reference data state and
-    get a minibatch from the reference data state
+    Returns a tuple of functions to initialize a new reference data state, map a
+    function over the complete dataset and release the data loader after the
+    last computation.
 
   """
   # Check batch size is not bigger than total observation count
@@ -879,6 +881,7 @@ class _FullDataHelper:
 
   def cleanup(self):
     self._cleanup_fn()
+    self._unused_states = None
 
 
 def full_data_mapper(data_loader: DataLoader = None,
@@ -898,8 +901,9 @@ def full_data_mapper(data_loader: DataLoader = None,
     mb_size: Size of the data batch
 
   Returns:
-    Returns a function to map another function over a complete dataset of an
-    appropriate :class:`DataLoader`.
+    Returns a tuple of functions to map another function over a complete dataset
+    of an appropriate :class:`DataLoader` and another function to release
+    the data loader after the last computation.
 
   """
 

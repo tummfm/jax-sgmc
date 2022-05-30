@@ -392,8 +392,8 @@ class FullDataMapperFunction(Protocol):
 
     """
 
-RandomBatch = Tuple[Any, GetBatchFunction, Callable]
-OrderedBatch = Tuple[Any, FullDataMapFunction, Callable]
+RandomBatch = Tuple[Any, GetBatchFunction, Callable[[], None]]
+OrderedBatch = Tuple[Any, FullDataMapFunction, Callable[[], None]]
 
 _host_data_loaders: Dict[JaxUUID, HostDataLoader] = {}
 
@@ -708,10 +708,10 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       callback_uuid=callback_uuid)
     return inital_cache_state
 
-  def cleanup():
+  def release():
     del _host_data_loaders[callback_uuid.as_uuid]
 
-  return init_fn, batch_fn, cleanup
+  return init_fn, batch_fn, release
 
 
 def _random_reference_data_device(data_loader: DeviceDataLoader,
@@ -736,10 +736,10 @@ def _random_reference_data_device(data_loader: DeviceDataLoader,
     else:
       return new_state, batch
 
-  def cleanup():
+  def release():
     pass
 
-  return init_fn, batch_fn, cleanup
+  return init_fn, batch_fn, release
 
 def _full_reference_data_host(data_loader: HostDataLoader,
                               cached_batches_count: int = 100,
@@ -780,10 +780,10 @@ def _full_reference_data_host(data_loader: HostDataLoader,
       callback_uuid=callback_uuid)
     return inital_cache_state
 
-  def cleanup():
+  def release():
     del _host_data_loaders[callback_uuid.as_uuid]
 
-  return init_fn, batch_fn, cleanup
+  return init_fn, batch_fn, release
 
 
 def _full_reference_data_device(data_loader: DeviceDataLoader,
@@ -828,10 +828,10 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
     else:
       return new_state, selected_data
 
-  def cleanup():
+  def release():
     pass
 
-  return init_fn, (batch_fn, mb_info), cleanup
+  return init_fn, (batch_fn, mb_info), release
 
 
 class _FullDataHelper:

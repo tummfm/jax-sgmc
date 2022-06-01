@@ -586,7 +586,7 @@ class TestRandomDataAccess:
     # This problem should check that each sample
 
     def init_test_fn(obs_count, batch_size, data_fn):
-      init_data_fn, batch_fn = data_fn
+      init_data_fn, batch_fn, _ = data_fn
       num_its = int(onp.ceil(obs_count / batch_size))
 
       def init_fn():
@@ -742,7 +742,7 @@ class TestFullDataMapper:
   def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cached_batches_count=3,
+    mapper, release = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -759,11 +759,13 @@ class TestFullDataMapper:
     assert onp.sum(count == 1) == obs_count
     assert sum_mask == obs_count
 
+    release()
+
   def test_jit_full_data_map_mask(self, dataset, data_loader,
                               example_problem_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cached_batches_count=3,
+    mapper, release = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -781,10 +783,12 @@ class TestFullDataMapper:
     assert onp.sum(count == 1) == obs_count
     assert sum_mask == obs_count
 
+    release()
+
   def test_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cached_batches_count=3,
+    mapper, release = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -795,10 +799,12 @@ class TestFullDataMapper:
 
     assert onp.sum(count == 1) == obs_count
 
+    release()
+
   def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cached_batches_count=3,
+    mapper, release = full_data_mapper(cached_batches_count=3,
                               mb_size=2,
                               data_loader=data_loader)
 
@@ -810,13 +816,15 @@ class TestFullDataMapper:
 
     assert onp.sum(count == 1) == obs_count
 
+    release()
+
   @pytest.mark.parametrize("mb_size", [1, 2])
   def test_full_data_unbatched(self, dataset, data_loader, mb_size, example_problem_no_mask):
     _, _, obs_count = dataset
 
-    mapper = full_data_mapper(cached_batches_count=3,
-                              mb_size=mb_size,
-                              data_loader=data_loader)
+    mapper, release = full_data_mapper(cached_batches_count=3,
+                                       mb_size=mb_size,
+                                       data_loader=data_loader)
 
     samples, _ = mapper(example_problem_no_mask, None, masking=False, batched=False)
 
@@ -824,6 +832,8 @@ class TestFullDataMapper:
     _, count = onp.unique(samples, return_counts=True)
 
     assert onp.sum(count == 1) == obs_count
+
+    release()
 
 
 class TestFullDataAccess:
@@ -837,7 +847,7 @@ class TestFullDataAccess:
   def example_problem_mask(self):
 
     def init_test_fn(data_fn):
-      init_data_fn, map_fn = data_fn
+      init_data_fn, map_fn, _ = data_fn
 
       def init_fn():
         # An array to count the number of observations returned
@@ -856,7 +866,7 @@ class TestFullDataAccess:
   @pytest.fixture
   def example_problem_no_mask(self):
     def init_test_fn(data_fn):
-      init_data_fn, map_fn = data_fn
+      init_data_fn, map_fn, _ = data_fn
 
       def init_fn():
         # An array to count the number of observations returned

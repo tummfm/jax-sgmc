@@ -45,6 +45,7 @@ import numpy as onp
 
 
 from jax_sgmc.util import Array, stop_vmap
+from jax_sgmc.util.uuid import JaxUUID
 
 class MiniBatchInformation(NamedTuple):
   """Bundles all information about the reference data.
@@ -249,6 +250,7 @@ class CacheState(NamedTuple):
     state: Additional information
     valid: Array containing information about the validity of individual samples
   """
+  callback_uuid: JaxUUID = None
   cached_batches: PyTree = None
   cached_batches_count: Array = None
   current_line: Array = None
@@ -390,9 +392,10 @@ class FullDataMapperFunction(Protocol):
 
     """
 
-RandomBatch = Tuple[Any, GetBatchFunction]
-OrderedBatch = Tuple[Any, FullDataMapFunction]
+RandomBatch = Tuple[Any, GetBatchFunction, Callable[[], None]]
+OrderedBatch = Tuple[Any, FullDataMapFunction, Callable[[], None]]
 
+_host_data_loaders: Dict[JaxUUID, HostDataLoader] = {}
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int,
@@ -409,8 +412,9 @@ def random_reference_data(data_loader: DataLoader,
     mb_size: Size of the data batch.
 
   Returns:
-    Returns a tuple of functions to initialize a new reference data state and
-    get a minibatch from the reference data state
+    Returns a tuple of functions to initialize a new reference data state, get
+    a minibatch from the reference data state and release the data loader after
+    the last computation.
 
   """
   # Check batch size is not bigger than total observation count
@@ -449,8 +453,9 @@ def full_reference_data(data_loader: DataLoader,
     mb_size: Size of the data batch.
 
   Returns:
-    Returns a tuple of functions to initialize a new reference data state and
-    get a minibatch from the reference data state
+    Returns a tuple of functions to initialize a new reference data state, map a
+    function over the complete dataset and release the data loader after the
+    last computation.
 
   """
   # Check batch size is not bigger than total observation count
@@ -460,10 +465,10 @@ def full_reference_data(data_loader: DataLoader,
                      f"observations. Got {observation_count} and {mb_size}.")
 
   if isinstance(data_loader, HostDataLoader):
-    init_fn, (_batch_fn, mb_information) = _full_reference_data_host(
+    init_fn, (_batch_fn, mb_information), cleanup = _full_reference_data_host(
       data_loader, cached_batches_count, mb_size)
   elif isinstance(data_loader, DeviceDataLoader):
-    init_fn, (_batch_fn, mb_information) = _full_reference_data_device(
+    init_fn, (_batch_fn, mb_information), cleanup = _full_reference_data_device(
       data_loader, cached_batches_count)
   else:
     raise TypeError("The DataLoader must inherit from HostDataLoader or "
@@ -535,7 +540,7 @@ def full_reference_data(data_loader: DataLoader,
 
     return data_state, (true_results, carry)
 
-  return init_fn, batch_scan
+  return init_fn, batch_scan, cleanup
 
 
 def tree_dtype_struct(pytree: PyTree):
@@ -585,8 +590,9 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # of the returned data must be known before the first call. The chain id
   # determines whether the data is collected randomly or sequentially.
 
-  def get_data(chain_id):
-    new_data, mask = data_loader.get_batches(chain_id)
+  def get_data(req):
+    chain_id, callback_uuid = req
+    new_data, mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if mask is None:
       # Assume all samples to be valid
       mask = jnp.ones(mask_shape, dtype=jnp.bool_)
@@ -596,7 +602,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
     """This function is called if the cache must be refreshed."""
     new_data, masks = hcb.call(
       get_data,
-      state.chain_id,
+      (state.chain_id, state.callback_uuid),
       result_shape=(
         hcb_format,
         jax.ShapeDtypeStruct(shape=mask_shape, dtype=jnp.bool_)))
@@ -605,7 +611,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       cached_batches=new_data,
       current_line=jnp.array(0),
       chain_id=state.chain_id,
-      valid=masks)
+      valid=masks,
+      callback_uuid=state.callback_uuid)
     return new_state
 
   def _old_cache_fn(state: CacheState) -> CacheState:
@@ -652,7 +659,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       cached_batches_count=data_state.cached_batches_count,
       current_line=current_line,
       chain_id=data_state.chain_id,
-      valid=data_state.valid)
+      valid=data_state.valid,
+      callback_uuid=data_state.callback_uuid)
 
     info = MiniBatchInformation(
       observation_count = mb_information.observation_count,
@@ -680,6 +688,9 @@ def _random_reference_data_host(data_loader: HostDataLoader,
 
   batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
 
+  callback_uuid = JaxUUID()
+  _host_data_loaders[callback_uuid.as_uuid] = data_loader
+
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
@@ -687,7 +698,7 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state, initial_mask = data_loader.get_batches(chain_id)
+    initial_state, initial_mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if initial_mask is None:
       initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state = CacheState(
@@ -695,10 +706,14 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       cached_batches_count=jnp.array(cached_batches_count),
       current_line=jnp.array(0),
       chain_id=jnp.array(chain_id),
-      valid=initial_mask)
+      valid=initial_mask,
+      callback_uuid=callback_uuid)
     return inital_cache_state
 
-  return init_fn, batch_fn
+  def release():
+    del _host_data_loaders[callback_uuid.as_uuid]
+
+  return init_fn, batch_fn, release
 
 
 def _random_reference_data_device(data_loader: DeviceDataLoader,
@@ -723,12 +738,15 @@ def _random_reference_data_device(data_loader: DeviceDataLoader,
     else:
       return new_state, batch
 
-  return init_fn, batch_fn
+  def release():
+    pass
+
+  return init_fn, batch_fn, release
 
 def _full_reference_data_host(data_loader: HostDataLoader,
                               cached_batches_count: int = 100,
                               mb_size: int = None
-                              ) -> Tuple[Callable, Tuple[Callable, MiniBatchInformation]]:
+                              ) -> Tuple[Callable, Tuple[Callable, MiniBatchInformation], Callable]:
   """Sequentially load batches of reference data via host-callback. """
   # Warn if cached_batches are bigger than total dataset
   observation_count = data_loader.static_information["observation_count"]
@@ -741,14 +759,18 @@ def _full_reference_data_host(data_loader: HostDataLoader,
     cached_batches_count,
     mb_size)
 
+  # Register the data loader
+  callback_uuid = JaxUUID()
+  _host_data_loaders[callback_uuid.as_uuid] = data_loader
+
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = data_loader.register_ordered_pipeline(
+    chain_id = _host_data_loaders[callback_uuid.as_uuid].register_ordered_pipeline(
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state, initial_mask = data_loader.get_batches(chain_id)
+    initial_state, initial_mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if initial_mask is None:
       initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state=CacheState(
@@ -756,18 +778,22 @@ def _full_reference_data_host(data_loader: HostDataLoader,
       cached_batches_count=jnp.array(cached_batches_count),
       current_line=jnp.array(0),
       chain_id=jnp.array(chain_id),
-      valid=initial_mask
-    )
+      valid=initial_mask,
+      callback_uuid=callback_uuid)
     return inital_cache_state
 
-  return init_fn, batch_fn
+  def release():
+    del _host_data_loaders[callback_uuid.as_uuid]
+
+  return init_fn, batch_fn, release
 
 
 def _full_reference_data_device(data_loader: DeviceDataLoader,
                                 mb_size: int = None
                                 ) -> Tuple[Callable,
                                            Tuple[Callable,
-                                                 MiniBatchInformation]]:
+                                                 MiniBatchInformation],
+                                           Callable]:
   """Batches the dataset on the device. """
 
   reference_data = data_loader.get_full_data()
@@ -804,14 +830,17 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
     else:
       return new_state, selected_data
 
-  return init_fn, (batch_fn, mb_info)
+  def release():
+    pass
+
+  return init_fn, (batch_fn, mb_info), release
 
 
 class _FullDataHelper:
   """Class to keep track of unused CacheStates. """
 
   def __init__(self, data_loader, cache_size, batch_size):
-    self._init_fn, self._map_fn = full_reference_data(
+    self._init_fn, self._map_fn, self._cleanup_fn = full_reference_data(
       data_loader, cache_size, batch_size)
 
     # Initialize the first cache state to compute the shape of the CacheState
@@ -850,11 +879,15 @@ class _FullDataHelper:
     new_cache_state = self._init_fn()
     return new_cache_state
 
+  def cleanup(self):
+    self._cleanup_fn()
+    self._unused_states = None
+
 
 def full_data_mapper(data_loader: DataLoader = None,
                      cached_batches_count: int = 1,
                      mb_size: int = 1
-                     ) -> FullDataMapperFunction:
+                     ) -> Tuple[FullDataMapperFunction, Callable]:
   """Initializes a functional to map a function over a complete dataset.
 
   This function extends the functionality of
@@ -868,8 +901,9 @@ def full_data_mapper(data_loader: DataLoader = None,
     mb_size: Size of the data batch
 
   Returns:
-    Returns a function to map another function over a complete dataset of an
-    appropriate :class:`DataLoader`.
+    Returns a tuple of functions to map another function over a complete dataset
+    of an appropriate :class:`DataLoader` and another function to release
+    the data loader after the last computation.
 
   """
 
@@ -936,4 +970,7 @@ def full_data_mapper(data_loader: DataLoader = None,
     results = _free_cache_state(new_data_state, results)
     return results
 
-  return mapper_fn
+  def cleanup():
+    _helper.cleanup()
+
+  return mapper_fn, cleanup

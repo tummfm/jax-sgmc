@@ -416,12 +416,13 @@ class _Requests:
 
       # Check if token is valid or if this is the first request
       if current_token != token.as_uuid and current_token is not None:
+        if strict:
+          raise RuntimeError(f"Device {device} made an invalid request for "
+                             f"chain {chain_id}. This might be due to using a "
+                             f"pmap in a jitted function.")
         warnings.warn(f"Device {device} made an invalid request for chain "
                       f"{chain_id}. This might be due to using a pmap in a "
                       f"jitted function.")
-        # Return results in the wrong shape to stop computation
-        if strict:
-          return jnp.zeros(12345)
 
       # Issue a new token and request data
       new_token = JaxUUID()
@@ -675,7 +676,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
                     data_state)
 
   def batch_fn(data_state: CacheState,
-               information: bool = False,
+               information: bool = False
                ) -> Batch:
     """Draws a new random batch (hides data transfer between devices).
 
@@ -938,7 +939,7 @@ class _FullDataHelper:
 
 def full_data_mapper(data_loader: DataLoader = None,
                      cached_batches_count: int = 1,
-                     mb_size: int = 1,
+                     mb_size: int = 1
                      ) -> Tuple[FullDataMapperFunction, Callable]:
   """Initializes a functional to map a function over a complete dataset.
 

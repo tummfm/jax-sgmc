@@ -408,6 +408,8 @@ class _Requests:
   def __init__(self):
     self._cached_requests: Dict[Any, List[int, CacheState, JaxUUID]] = {}
     self._requests: Dict[Any, Dict[int, CacheState, JaxUUID]] = {}
+    self._host_data_loaders: Dict[Any, HostDataLoader] = {}
+
     self._lock = threading.Lock()
 
   def __call__(self,
@@ -449,7 +451,7 @@ class _Requests:
       else:
         # Issue a new token and request data
         new_token = JaxUUID()
-        callback_response = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
+        callback_response = self._host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
 
         self._requests[callback_uuid.as_uuid][int(chain_id)] = new_token.as_uuid
         # Store data if other devices are going to request it
@@ -459,8 +461,17 @@ class _Requests:
 
     return callback_response, new_token
 
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    # The lock should always be reinitialized
+    del state['_lock']
+    print(f"State to save: {state}")
+    return state
 
-_host_data_loaders: Dict[Any, HostDataLoader] = {}
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
+
 _data_requests = _Requests()
 
 def random_reference_data(data_loader: DataLoader,
@@ -785,10 +796,10 @@ def _random_reference_data_host(data_loader: HostDataLoader,
     verify_calls=verify_calls)
 
   callback_uuid = JaxUUID()
-  _host_data_loaders[callback_uuid.as_uuid] = data_loader
+  _data_requests._host_data_loaders[callback_uuid.as_uuid] = data_loader
 
   callback_uuid = JaxUUID()
-  _host_data_loaders[callback_uuid.as_uuid] = data_loader
+  _data_requests._host_data_loaders[callback_uuid.as_uuid] = data_loader
 
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
@@ -811,7 +822,7 @@ def _random_reference_data_host(data_loader: HostDataLoader,
     return inital_cache_state
 
   def release():
-    del _host_data_loaders[callback_uuid.as_uuid]
+    del _data_requests._host_data_loaders[callback_uuid.as_uuid]
 
   return init_fn, batch_fn, release
 
@@ -862,16 +873,16 @@ def _full_reference_data_host(data_loader: HostDataLoader,
 
   # Register the data loader
   callback_uuid = JaxUUID()
-  _host_data_loaders[callback_uuid.as_uuid] = data_loader
+  _data_requests._host_data_loaders[callback_uuid.as_uuid] = data_loader
 
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
-    chain_id = _host_data_loaders[callback_uuid.as_uuid].register_ordered_pipeline(
+    chain_id = _data_requests._host_data_loaders[callback_uuid.as_uuid].register_ordered_pipeline(
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state, initial_mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
+    initial_state, initial_mask = _data_requests._host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if initial_mask is None:
       initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state=CacheState(
@@ -885,7 +896,7 @@ def _full_reference_data_host(data_loader: HostDataLoader,
     return inital_cache_state
 
   def release():
-    del _host_data_loaders[callback_uuid.as_uuid]
+    del _data_requests._host_data_loaders[callback_uuid.as_uuid]
 
   return init_fn, batch_fn, release
 
@@ -984,6 +995,15 @@ class _FullDataHelper:
   def cleanup(self):
     self._cleanup_fn()
     self._unused_states = None
+
+  def __getstate__(self):
+    state = self.__dict__.copy()
+    del state["_lock"]
+    return state
+
+  def __setstate__(self, state):
+    self.__dict__.update(state)
+    self._lock = threading.Lock()
 
 
 def full_data_mapper(data_loader: DataLoader = None,

@@ -798,9 +798,6 @@ def _random_reference_data_host(data_loader: HostDataLoader,
   callback_uuid = JaxUUID()
   _data_requests._host_data_loaders[callback_uuid.as_uuid] = data_loader
 
-  callback_uuid = JaxUUID()
-  _data_requests._host_data_loaders[callback_uuid.as_uuid] = data_loader
-
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
@@ -808,7 +805,7 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       cached_batches_count,
       mb_size=mb_size,
       **kwargs)
-    initial_state, initial_mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
+    initial_state, initial_mask = _data_requests._host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
     if initial_mask is None:
       initial_mask = jnp.ones((cached_batches_count, mb_size), dtype=jnp.bool_)
     inital_cache_state = CacheState(

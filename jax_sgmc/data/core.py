@@ -416,12 +416,13 @@ class _Requests:
 
       # Check if token is valid or if this is the first request
       if current_token != token.as_uuid and current_token is not None:
+        if strict:
+          raise RuntimeError(f"Device {device} made an invalid request for "
+                             f"chain {chain_id}. This might be due to using a "
+                             f"pmap in a jitted function.")
         warnings.warn(f"Device {device} made an invalid request for chain "
                       f"{chain_id}. This might be due to using a pmap in a "
                       f"jitted function.")
-        # Return results in the wrong shape to stop computation
-        if strict:
-          return jnp.zeros(12345)
 
       # Issue a new token and request data
       new_token = JaxUUID()

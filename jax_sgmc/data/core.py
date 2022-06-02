@@ -741,6 +741,9 @@ def _random_reference_data_host(data_loader: HostDataLoader,
   callback_uuid = JaxUUID()
   _host_data_loaders[callback_uuid.as_uuid] = data_loader
 
+  callback_uuid = JaxUUID()
+  _host_data_loaders[callback_uuid.as_uuid] = data_loader
+
   def init_fn(**kwargs) -> CacheState:
     # Pass the data loader the information about the number of cached
     # mini-batches. The data loader returns an unique id for reproducibility
@@ -1023,7 +1026,7 @@ def full_data_mapper(data_loader: DataLoader = None,
     results = _free_cache_state(new_data_state, results)
     return results
 
-  def cleanup():
+  def release():
     _helper.cleanup()
 
-  return mapper_fn, cleanup
+  return mapper_fn, release

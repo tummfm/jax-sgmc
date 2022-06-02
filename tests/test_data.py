@@ -834,6 +834,8 @@ class TestFullDataMapper:
 
     assert onp.sum(count == 1) == obs_count
 
+    release()
+
   @pytest.mark.pmap
   def test_pmap_full_data_map_no_mask(self, dataset, data_loader,
                                      example_problem_pmap):

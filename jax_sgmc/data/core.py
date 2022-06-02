@@ -26,7 +26,6 @@ Host Callback Wrappers from the Data Loaders and loaded on the device via the
 """
 
 import abc
-import dataclasses
 import threading
 
 import warnings
@@ -34,7 +33,7 @@ import warnings
 from functools import partial
 import itertools
 
-from typing import Tuple, Any, Callable, Union, NamedTuple, Dict, Protocol
+from typing import Tuple, Any, Callable, Union, NamedTuple, Dict, Protocol, List
 
 import jax
 from jax import tree_util, lax
@@ -267,14 +266,16 @@ Batch = Union[Tuple[CacheState, PyTree],
 class GetBatchFunction(Protocol):
   def __call__(self,
                data_state: CacheState,
-               information: bool = False
-               ) -> Batch:
+               information: bool = False,
+               device_count: int = 1) -> Batch:
     """Draws a batch of data.
 
     Args:
       data_state: State of the chain containing id and cached batches
       information: Include namedtuple containing information about the data
         and batch
+      device_count: Number of the devices on which this function is going to be
+        called with replicated data states.
 
     Returns:
       Returns the new state of the random chain and a batch. Optionally a
@@ -333,7 +334,8 @@ class FullDataMapFunction(Protocol):
                data_state: CacheState,
                carry: PyTree,
                masking: bool = False,
-               information: bool = False
+               information: bool = False,
+               device_count: int = 1
                ) -> Tuple[PyTree, PyTree]:
     """Maps a function over the complete dataset.
 
@@ -346,6 +348,8 @@ class FullDataMapFunction(Protocol):
         calculated. If false, then a result for each observation must be
         returned and the invalid results are discarded after the computation.
       information: Pass the batch information together with the batch
+      device_count: Number of the devices on which this function is going to be
+        called with replicated data states.
 
     Returns:
       Returns the new data state and the results of the computation including
@@ -364,6 +368,7 @@ class FullDataMapperFunction(Protocol):
                masking: bool = False,
                information: bool = False,
                batched: bool = True,
+               device_count: int = 1
                ) -> PyTree:
     """Maps a function over the complete dataset.
 
@@ -382,6 +387,8 @@ class FullDataMapperFunction(Protocol):
       batched: Whether function to be mapped over full dataset is vectorized. If
         false, the function is vmapped such that it can process a batch of
         observations.
+      device_count: Number of the devices on which this function is going to be
+        called with replicated data states.
 
     Returns:
       Returns the results of the computation including the carry of the last
@@ -399,7 +406,8 @@ OrderedBatch = Tuple[Any, FullDataMapFunction, Callable[[], None]]
 class _Requests:
 
   def __init__(self):
-    self._requests: Dict[Any, Dict[int, CacheState]] = {}
+    self._cached_requests: Dict[Any, List[int, CacheState, JaxUUID]] = {}
+    self._requests: Dict[Any, Dict[int, CacheState, JaxUUID]] = {}
     self._lock = threading.Lock()
 
   def __call__(self,
@@ -407,15 +415,27 @@ class _Requests:
                token: JaxUUID,
                device: jax.xla.Device,
                callback_uuid: JaxUUID,
+               device_count: int = 1,
                strict: bool = False):
     with self._lock:
       if callback_uuid.as_uuid not in self._requests.keys():
         self._requests[callback_uuid.as_uuid] = {}
 
+      # The token that is expected for a new callback
       current_token = self._requests[callback_uuid.as_uuid].get(int(chain_id))
 
-      # Check if token is valid or if this is the first request
-      if current_token != token.as_uuid and current_token is not None:
+      # Check if token is from previous request
+      old_request = self._cached_requests.get(token.as_uuid)
+      if old_request is not None:
+        counter, callback_response, new_token = old_request
+        if counter == 1:
+          # The callback response is no longer necessary
+          del self._cached_requests[token.as_uuid]
+        else:
+          self._cached_requests[token.as_uuid][0] -= 1
+
+      # Check if token is invalid
+      elif current_token != token.as_uuid and current_token is not None:
         if strict:
           raise RuntimeError(f"Device {device} made an invalid request for "
                              f"chain {chain_id}. This might be due to using a "
@@ -424,10 +444,20 @@ class _Requests:
                       f"{chain_id}. This might be due to using a pmap in a "
                       f"jitted function.")
 
-      # Issue a new token and request data
-      new_token = JaxUUID()
-      self._requests[callback_uuid.as_uuid][int(chain_id)] = new_token.as_uuid
-    return _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id), new_token
+      # The request is valid and the first request, so the results have to be
+      # stored in the cache
+      else:
+        # Issue a new token and request data
+        new_token = JaxUUID()
+        callback_response = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
+
+        self._requests[callback_uuid.as_uuid][int(chain_id)] = new_token.as_uuid
+        # Store data if other devices are going to request it
+        if device_count != 1:
+          self._cached_requests[token.as_uuid] = [
+            device_count - 1, callback_response, new_token]
+
+    return callback_response, new_token
 
 
 _host_data_loaders: Dict[Any, HostDataLoader] = {}
@@ -523,14 +553,17 @@ def full_reference_data(data_loader: DataLoader,
                              state,
                              iteration,
                              information=False,
-                             masking=False):
+                             masking=False,
+                             device_count=1):
     # The mask has is 1 if the observation is valid and 0 otherwise. This is
     # necessary to ensure, that fun is always called with the same tree shape.
     observations = iteration * batch_size + jnp.arange(batch_size)
     mask = observations < mb_information.observation_count
 
     data_state, fun_state = state
-    data_state, batch = _batch_fn(data_state, information=information)
+    data_state, batch = _batch_fn(
+      data_state,
+      information=information, device_count=device_count)
 
     if masking:
       result, fun_state = fun(batch, mask, fun_state)
@@ -543,7 +576,8 @@ def full_reference_data(data_loader: DataLoader,
                  data_state: CacheState,
                  carry: PyTree,
                  masking: bool = False,
-                 information: bool = False
+                 information: bool = False,
+                 device_count: int = 1
                  ) -> Tuple[PyTree, PyTree]:
     """Maps the function over all data.
 
@@ -562,7 +596,8 @@ def full_reference_data(data_loader: DataLoader,
     _body_fn = partial(_uninitialized_body_fn,
                        fun,
                        information=information,
-                       masking=masking)
+                       masking=masking,
+                       device_count=device_count)
     (data_state, carry), results = lax.scan(
       _body_fn, (data_state, carry), onp.arange(num_iterations))
 
@@ -633,20 +668,21 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # determines whether the data is collected randomly or sequentially.
 
   def get_data(req, device):
-    chain_id, callback_uuid, token = req
+    chain_id, callback_uuid, token, device_count = req
     (new_data, mask), new_token = _data_requests(
-      chain_id, token, device, callback_uuid,
+      chain_id, token, device, callback_uuid, device_count,
       strict=verify_calls)
     if mask is None:
       # Assume all samples to be valid
       mask = jnp.ones(mask_shape, dtype=jnp.bool_)
     return new_data, mask, new_token
 
-  def _new_cache_fn(state: CacheState) -> CacheState:
+  def _new_cache_fn(req: Tuple[CacheState, int]) -> CacheState:
     """This function is called if the cache must be refreshed."""
+    state, device_count = req
     new_data, masks, token = hcb.call(
       get_data,
-      (state.chain_id, state.callback_uuid, state.token),
+      (state.chain_id, state.callback_uuid, state.token, device_count),
       result_shape=(
         hcb_format,
         jax.ShapeDtypeStruct(shape=mask_shape, dtype=jnp.bool_),
@@ -662,35 +698,45 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       token=token)
     return new_state
 
-  def _old_cache_fn(state: CacheState) -> CacheState:
+  def _old_cache_fn(req: Tuple[CacheState, int]) -> CacheState:
     """This function is called if the cache must not be refreshed."""
-    return state
+    return req[0]
 
   # Necessary, because cond is replaced by select under vmap, but the cond
   # branches have side effects.
   @stop_vmap.stop_vmap
-  def _data_state_helper(data_state):
+  def _data_state_helper(data_state, device_count):
     return lax.cond(data_state.current_line == data_state.cached_batches_count,
                     _new_cache_fn,
                     _old_cache_fn,
-                    data_state)
+                    (data_state, device_count))
 
   def batch_fn(data_state: CacheState,
-               information: bool = False
+               information: bool = False,
+               device_count: int = 1
                ) -> Batch:
     """Draws a new random batch (hides data transfer between devices).
 
     Args:
       data_state: State with cached samples
       information: Whether to return batch information
+      device_count: Number of parallel programs calling the batch function
 
     Returns:
       Returns the new data state and the next batch. Optionally an additional
       struct containing information about the batch can be returned.
 
     """
+    if device_count > jax.device_count():
+      raise ValueError(f"The value of device_count cannot exceed the true "
+                       f"device count. Expecting device_count (given: "
+                       f"{device_count}) <= {jax.device_count()}.")
+    if device_count != 1:
+      warnings.warn("Changing the device count can cause memory accumulation. "
+                    "Continue only if you know what you are doing.")
+
     # Refresh the cache if necessary, after all cached batches have been used.
-    data_state = _data_state_helper(data_state)
+    data_state = _data_state_helper(data_state, device_count)
     current_line = jnp.mod(data_state.current_line,
                            data_state.cached_batches_count)
 
@@ -985,7 +1031,8 @@ def full_data_mapper(data_loader: DataLoader = None,
                 carry: PyTree,
                 masking: bool = False,
                 information: bool = False,
-                batched: bool = True) -> PyTree:
+                batched: bool = True,
+                device_count: int = 1) -> PyTree:
     data_state = _get_state()
 
     # Batch the function if it is not batched.
@@ -1022,7 +1069,8 @@ def full_data_mapper(data_loader: DataLoader = None,
           return results, state
 
     (new_data_state, results) = _helper.get_map_fn(
-      batched_fun, data_state, carry, masking=masking, information=information)
+      batched_fun, data_state, carry,
+      masking=masking, information=information, device_count=device_count)
     results = _free_cache_state(new_data_state, results)
     return results
 

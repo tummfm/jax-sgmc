@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import functools
 
 import numpy as onp
 
@@ -700,7 +701,7 @@ class TestRandomDataAccess:
   def test_pmap_random_data(self, data_loader, example_problem, dataset):
     _, _, obs_count = dataset
 
-    pmap_size = 2
+    pmap_size = jax.device_count()
 
     cache_size = 2
     batch_size = 3
@@ -739,12 +740,29 @@ class TestFullDataMapper:
       return batch["ordered_indices"], None
     return test_update_fn
 
+  @pytest.fixture
+  def example_problem_pmap(self):
+    @jax.pmap
+    def identity_fn(x):
+      return x
+
+    def test_update_fn(batch, _):
+      original_shape = jax.tree_map(jnp.shape, batch)
+      pmap_batch = jax.tree_map(
+        functools.partial(jnp.reshape, newshape=(jax.device_count(), -1)),
+        batch)
+      pmap_identity = identity_fn(pmap_batch)
+      identity = jax.tree_map(jnp.reshape, pmap_identity, original_shape)
+      return identity, None
+
+    return test_update_fn
+
   def test_full_data_map_mask(self, dataset, data_loader, example_problem_mask):
     _, _, obs_count = dataset
 
     mapper, release = full_data_mapper(cached_batches_count=3,
-                              mb_size=2,
-                              data_loader=data_loader)
+                                       mb_size=2,
+                                       data_loader=data_loader)
 
     results, _ = mapper(example_problem_mask, None, masking=True)
     sum_mask, samples, masks = results
@@ -766,8 +784,8 @@ class TestFullDataMapper:
     _, _, obs_count = dataset
 
     mapper, release = full_data_mapper(cached_batches_count=3,
-                              mb_size=2,
-                              data_loader=data_loader)
+                                       mb_size=2,
+                                       data_loader=data_loader)
 
     jit_mapped = jax.jit(lambda: mapper(example_problem_mask, None, masking=True))
     results, _ = jit_mapped()
@@ -789,8 +807,8 @@ class TestFullDataMapper:
     _, _, obs_count = dataset
 
     mapper, release = full_data_mapper(cached_batches_count=3,
-                              mb_size=2,
-                              data_loader=data_loader)
+                                       mb_size=2,
+                                       data_loader=data_loader)
 
     samples, _ = mapper(example_problem_no_mask, None, masking=False)
 
@@ -805,14 +823,35 @@ class TestFullDataMapper:
     _, _, obs_count = dataset
 
     mapper, release = full_data_mapper(cached_batches_count=3,
-                              mb_size=2,
-                              data_loader=data_loader)
+                                       mb_size=2,
+                                       data_loader=data_loader)
 
     jit_mapped = jax.jit(lambda: mapper(example_problem_no_mask, None, masking=False))
     samples, _ = jit_mapped()
 
     # Every element must appear exactly once
     _, count = onp.unique(samples, return_counts=True)
+
+    assert onp.sum(count == 1) == obs_count
+
+  @pytest.mark.pmap
+  def test_pmap_full_data_map_no_mask(self, dataset, data_loader,
+                                     example_problem_pmap):
+    _, _, obs_count = dataset
+
+    mapper, release = full_data_mapper(cached_batches_count=2,
+                                       mb_size=jax.device_count(),
+                                       data_loader=data_loader)
+
+    map_fn = functools.partial(mapper, example_problem_pmap)
+
+    assert jax.device_count() != 1
+
+    # Mapping should work when jitted
+    results, _ = jax.jit(map_fn)(None)
+
+    # Every element must appear exactly once
+    _, count = onp.unique(results["ordered_indices"], return_counts=True)
 
     assert onp.sum(count == 1) == obs_count
 

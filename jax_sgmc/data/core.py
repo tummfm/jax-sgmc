@@ -257,6 +257,7 @@ class CacheState(NamedTuple):
   chain_id: Array = None
   state: PyTree = None
   valid: Array = None
+  token: JaxUUID = None
 
 random_data_state = CacheState
 
@@ -395,11 +396,46 @@ class FullDataMapperFunction(Protocol):
 RandomBatch = Tuple[Any, GetBatchFunction, Callable[[], None]]
 OrderedBatch = Tuple[Any, FullDataMapFunction, Callable[[], None]]
 
-_host_data_loaders: Dict[JaxUUID, HostDataLoader] = {}
+class _Requests:
+
+  def __init__(self):
+    self._requests: Dict[Any, Dict[int, CacheState]] = {}
+    self._lock = threading.Lock()
+
+  def __call__(self,
+               chain_id: int,
+               token: JaxUUID,
+               device: jax.xla.Device,
+               callback_uuid: JaxUUID,
+               strict: bool = False):
+    with self._lock:
+      if callback_uuid.as_uuid not in self._requests.keys():
+        self._requests[callback_uuid.as_uuid] = {}
+
+      current_token = self._requests[callback_uuid.as_uuid].get(int(chain_id))
+
+      # Check if token is valid or if this is the first request
+      if current_token != token.as_uuid and current_token is not None:
+        warnings.warn(f"Device {device} made an invalid request for chain "
+                      f"{chain_id}. This might be due to using a pmap in a "
+                      f"jitted function.")
+        # Return results in the wrong shape to stop computation
+        if strict:
+          return jnp.zeros(12345)
+
+      # Issue a new token and request data
+      new_token = JaxUUID()
+      self._requests[callback_uuid.as_uuid][int(chain_id)] = new_token.as_uuid
+    return _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id), new_token
+
+
+_host_data_loaders: Dict[Any, HostDataLoader] = {}
+_data_requests = _Requests()
 
 def random_reference_data(data_loader: DataLoader,
                           cached_batches_count: int,
                           mb_size: int,
+                          verify_calls: bool = False
                           ) -> RandomBatch:
   """Initializes reference data access in jit-compiled functions.
 
@@ -410,6 +446,8 @@ def random_reference_data(data_loader: DataLoader,
     cached_batches_count: Number of batches in the cache. A larger number is
       faster, but requires more memory.
     mb_size: Size of the data batch.
+    verify_calls: Verify calls to the host when using pmap. This might not be
+      necessary if batches are assembles randomly without extra conditions.
 
   Returns:
     Returns a tuple of functions to initialize a new reference data state, get
@@ -428,7 +466,8 @@ def random_reference_data(data_loader: DataLoader,
 
   if isinstance(data_loader, HostDataLoader):
     return _random_reference_data_host(
-      data_loader, cached_batches_count, mb_size)
+      data_loader, cached_batches_count, mb_size,
+      verify_calls=verify_calls)
   elif isinstance(data_loader, DeviceDataLoader):
     if not cached_batches_count == 1:
       raise ValueError("No caching on device.")
@@ -577,7 +616,9 @@ def tree_index(pytree: PyTree, index):
 # Callback is independent of assembling of the batches
 def _hcb_wrapper(data_loader: HostDataLoader,
                  cached_batches_count: int,
-                 mb_size: int) -> Tuple[GetBatchFunction, MiniBatchInformation]:
+                 mb_size: int,
+                 verify_calls: bool = False
+                 ) -> Tuple[GetBatchFunction, MiniBatchInformation]:
   # These are helper function which keep a reference to the stateful data object
   # and can be called via the host_callback.call function
   # The format of the mini batch is static.
@@ -590,29 +631,34 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # of the returned data must be known before the first call. The chain id
   # determines whether the data is collected randomly or sequentially.
 
-  def get_data(req):
-    chain_id, callback_uuid = req
-    new_data, mask = _host_data_loaders[callback_uuid.as_uuid].get_batches(chain_id)
+  def get_data(req, device):
+    chain_id, callback_uuid, token = req
+    (new_data, mask), new_token = _data_requests(
+      chain_id, token, device, callback_uuid,
+      strict=verify_calls)
     if mask is None:
       # Assume all samples to be valid
       mask = jnp.ones(mask_shape, dtype=jnp.bool_)
-    return new_data, mask
+    return new_data, mask, new_token
 
   def _new_cache_fn(state: CacheState) -> CacheState:
     """This function is called if the cache must be refreshed."""
-    new_data, masks = hcb.call(
+    new_data, masks, token = hcb.call(
       get_data,
-      (state.chain_id, state.callback_uuid),
+      (state.chain_id, state.callback_uuid, state.token),
       result_shape=(
         hcb_format,
-        jax.ShapeDtypeStruct(shape=mask_shape, dtype=jnp.bool_)))
+        jax.ShapeDtypeStruct(shape=mask_shape, dtype=jnp.bool_),
+        JaxUUID()),
+      call_with_device=True)
     new_state = CacheState(
       cached_batches_count=state.cached_batches_count,
       cached_batches=new_data,
       current_line=jnp.array(0),
       chain_id=state.chain_id,
       valid=masks,
-      callback_uuid=state.callback_uuid)
+      callback_uuid=state.callback_uuid,
+      token=token)
     return new_state
 
   def _old_cache_fn(state: CacheState) -> CacheState:
@@ -629,7 +675,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
                     data_state)
 
   def batch_fn(data_state: CacheState,
-               information: bool = False
+               information: bool = False,
                ) -> Batch:
     """Draws a new random batch (hides data transfer between devices).
 
@@ -660,7 +706,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
       current_line=current_line,
       chain_id=data_state.chain_id,
       valid=data_state.valid,
-      callback_uuid=data_state.callback_uuid)
+      callback_uuid=data_state.callback_uuid,
+      token=data_state.token)
 
     info = MiniBatchInformation(
       observation_count = mb_information.observation_count,
@@ -678,7 +725,7 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 def _random_reference_data_host(data_loader: HostDataLoader,
                                 cached_batches_count: int = 100,
                                 mb_size: int = 1,
-                                ) -> RandomBatch:
+                                verify_calls: bool = False) -> RandomBatch:
   """Random reference data access via host-callback. """
   # Warn if cached_batches are bigger than total dataset
   observation_count = data_loader.static_information["observation_count"]
@@ -686,7 +733,9 @@ def _random_reference_data_host(data_loader: HostDataLoader,
     warnings.warn("Cached batches are bigger than the total dataset. Consider "
                   "using a DeviceDataLoader.")
 
-  batch_fn, _ = _hcb_wrapper(data_loader, cached_batches_count, mb_size)
+  batch_fn, _ = _hcb_wrapper(
+    data_loader, cached_batches_count, mb_size,
+    verify_calls=verify_calls)
 
   callback_uuid = JaxUUID()
   _host_data_loaders[callback_uuid.as_uuid] = data_loader
@@ -707,7 +756,8 @@ def _random_reference_data_host(data_loader: HostDataLoader,
       current_line=jnp.array(0),
       chain_id=jnp.array(chain_id),
       valid=initial_mask,
-      callback_uuid=callback_uuid)
+      callback_uuid=callback_uuid,
+      token=JaxUUID())
     return inital_cache_state
 
   def release():
@@ -757,7 +807,8 @@ def _full_reference_data_host(data_loader: HostDataLoader,
   batch_fn = _hcb_wrapper(
     data_loader,
     cached_batches_count,
-    mb_size)
+    mb_size,
+    verify_calls=True)
 
   # Register the data loader
   callback_uuid = JaxUUID()
@@ -779,7 +830,8 @@ def _full_reference_data_host(data_loader: HostDataLoader,
       current_line=jnp.array(0),
       chain_id=jnp.array(chain_id),
       valid=initial_mask,
-      callback_uuid=callback_uuid)
+      callback_uuid=callback_uuid,
+      token=JaxUUID())
     return inital_cache_state
 
   def release():
@@ -886,7 +938,7 @@ class _FullDataHelper:
 
 def full_data_mapper(data_loader: DataLoader = None,
                      cached_batches_count: int = 1,
-                     mb_size: int = 1
+                     mb_size: int = 1,
                      ) -> Tuple[FullDataMapperFunction, Callable]:
   """Initializes a functional to map a function over a complete dataset.
 

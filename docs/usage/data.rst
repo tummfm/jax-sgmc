@@ -1,11 +1,8 @@
 Data Loading
 =============
 
-Basics
--------
-
 Steps for Setting up a Data Chain
-__________________________________
+---------------------------------
 
 Access of (random) data in **JaxSGMC** consists of two steps:
 
@@ -29,8 +26,11 @@ data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
     the last computation. After this, the reference to the Data Loader hs been
     discarded and the Data Loader can be deleted.
 
-Shape and dtype of the Data
-____________________________
+Important Notes
+----------------
+
+Getting shape and dtype of the data
+____________________________________
 
 Some models needs to now the shape and dtype of the reference data. Therefore,
 an all-zero batch can be drawn from every Data Loader.
@@ -49,6 +49,37 @@ shapes are reduced by the first axis).
 
     print(data_loader.initializer_batch())
     {'x_r': DeviceArray(0, dtype=int32), 'y_r': DeviceArray([0., 0.], dtype=float32)}
+
+Combining ``pmap`` and ``jit``
+______________________________
+
+.. warning::
+   Jit-compiling a function including pmap requires adjustments of the Callback
+   Wrapper functions, which can lead to memory leaks if not done correctly.
+
+   Additionally, combining ``jit`` and ``pmap`` can lead to inefficient data
+   movement. See `<https://github.com/google/jax/issues/2926>`_.
+
+When jitting a function f including a pmap function g, also the parts of f
+outside of g are run on all involved devices. This causes all devices to request
+the same cache state (verified by a token) from a single chain.
+
+For example, if g is pmapped to 5 devices, f is also going to run on 5 devices
+and hence 5 times the same cache state is requested from a chain.
+
+JaxSGMC resolved this issue by caching all requested states on the host for a
+specified number of requests.
+
+In the above example, the Callback Wrapper used in f should be called like:
+
+  ::
+
+  ... = full_data_map(to_map_fn, data_state, carry, device_count=5)
+
+
+It is important to note that providing a device count larger than the actual
+number of calling devices causes a memory leak, as all requested cache states
+will remain on the host until the program has finished.
 
 Numpy Data Loader
 ------------------

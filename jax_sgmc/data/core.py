@@ -441,10 +441,12 @@ class _Requests:
         if strict:
           raise RuntimeError(f"Device {device} made an invalid request for "
                              f"chain {chain_id}. This might be due to using a "
-                             f"pmap in a jitted function.")
+                             f"pmap in a jitted function. See "
+                             f"usage/data.html#combining-pmap-and-jit in the "
+                             f"docs.")
         warnings.warn(f"Device {device} made an invalid request for chain "
                       f"{chain_id}. This might be due to using a pmap in a "
-                      f"jitted function.")
+                      f"jitted function. If the preservation ")
 
       # The request is valid and the first request, so the results have to be
       # stored in the cache
@@ -465,7 +467,6 @@ class _Requests:
     state = self.__dict__.copy()
     # The lock should always be reinitialized
     del state['_lock']
-    print(f"State to save: {state}")
     return state
 
   def __setstate__(self, state):

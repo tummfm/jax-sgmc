@@ -34,9 +34,9 @@ _____________________
 The stochastic potential is an estimation of the true potential. It is
 calculated over a small dataset and rescaled to the full dataset.
 
-  >>> batch_init, batch_get = data.random_reference_data(data_loader,
-  ...                                                    cached_batches_count=50,
-  ...                                                    mb_size=5)
+  >>> batch_init, batch_get, _ = data.random_reference_data(data_loader,
+  ...                                                       cached_batches_count=50,
+  ...                                                       mb_size=5)
   >>> random_data_state = batch_init()
 
 
@@ -49,9 +49,9 @@ If we specify a batch size of 3, then the likelihood will be sequentially
 calculated over batches with the size 3.
 
 
-  >>> init_fun, fmap_fun = data.full_reference_data(data_loader,
-  ...                                               cached_batches_count=50,
-  ...                                               mb_size=3)
+  >>> init_fun, fmap_fun, _ = data.full_reference_data(data_loader,
+  ...                                                  cached_batches_count=50,
+  ...                                                  mb_size=3)
   >>> data_state = init_fun()
 
 

@@ -318,7 +318,7 @@ def amagold(integrator_fn,
   """
 
   init_integrator, update_integrator, get_integrator = integrator_fn
-  init_full_data, full_data_map_fn = full_data_map
+  init_full_data, full_data_map_fn, _ = full_data_map
   if mass_adaption:
     init_mass, update_mass, get_mass = mass_adaption
 
@@ -455,7 +455,7 @@ def sggmc(integrator_fn,
   """
 
   init_integrator, update_integrator, get_integrator = integrator_fn
-  init_full_data, full_data_map_fn = full_data_map
+  init_full_data, full_data_map_fn, _ = full_data_map
   if mass_adaption:
     init_mass, update_mass, get_mass = mass_adaption
 

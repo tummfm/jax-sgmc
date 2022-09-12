@@ -38,7 +38,7 @@ PyTree = Any
 
 class NumpyBase(DataLoader):
 
-  def __init__(self, on_device: bool = True, **reference_data):
+  def __init__(self, on_device: bool = True, copy=True, **reference_data):
     super().__init__()
 
     observation_counts = []
@@ -47,9 +47,9 @@ class NumpyBase(DataLoader):
       observation_counts.append(len(array))
       # Transform to jax arrays if on device
       if on_device:
-        self._reference_data[name] = jnp.array(array)
+        self._reference_data[name] = jnp.array(array, copy=copy)
       else:
-        self._reference_data[name] = onp.array(array)
+        self._reference_data[name] = onp.array(array, copy=copy)
 
     if len(observation_counts) != 0:
       # Check same number of observations
@@ -106,11 +106,13 @@ class DeviceNumpyDataLoader(NumpyBase, DeviceDataLoader):
 
   Args:
     reference_data: Each kwarg-pair is an entry in the returned data-dict.
+    copy: Whether to copy the reference data (default True) or only create a
+      reference.
 
   """
 
-  def __init__(self, **reference_data):
-    super().__init__(on_device=True, **reference_data)
+  def __init__(self, copy=True, **reference_data):
+    super().__init__(on_device=True, copy=copy, **reference_data)
 
   def init_random_data(self, *args, **kwargs) -> PyTree:
     del args
@@ -162,15 +164,17 @@ class NumpyDataLoader(NumpyBase, HostDataLoader):
 
   Args:
     reference_data: Each kwarg-pair is an entry in the returned data-dict.
-    shuffle: Whether to batch by shuffling the dataset or by drawing
-      observations independently (applies only to random data).
+    copy: Whether to copy the reference data (default True) or only create a
+      reference.
 
   """
 
   def __init__(self,
+               copy=True,
                **reference_data):
     super().__init__(
       on_device=False,
+      copy=copy,
       **reference_data)
     self._chains: List = []
 

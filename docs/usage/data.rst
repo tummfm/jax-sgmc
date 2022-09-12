@@ -1,11 +1,8 @@
 Data Loading
 =============
 
-Basics
--------
-
 Steps for Setting up a Data Chain
-__________________________________
+---------------------------------
 
 Access of (random) data in **JaxSGMC** consists of two steps:
 
@@ -23,8 +20,17 @@ The combination of a Data Loader and Callback Wrappers determines how the data i
 passed to the computation. Therefore, this guide presents different methods of
 data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
 
-Shape and dtype of the Data
-____________________________
+.. note::
+    When using multiple Data Loaders sequentially in a single script, the
+    release function should be called after the Callback Wrapper has been used in
+    the last computation. After this, the reference to the Data Loader hs been
+    discarded and the Data Loader can be deleted.
+
+Important Notes
+----------------
+
+Getting shape and dtype of the data
+____________________________________
 
 Some models needs to now the shape and dtype of the reference data. Therefore,
 an all-zero batch can be drawn from every Data Loader.
@@ -43,6 +49,37 @@ shapes are reduced by the first axis).
 
     print(data_loader.initializer_batch())
     {'x_r': DeviceArray(0, dtype=int32), 'y_r': DeviceArray([0., 0.], dtype=float32)}
+
+Combining ``pmap`` and ``jit``
+______________________________
+
+.. warning::
+   Jit-compiling a function including pmap requires adjustments of the Callback
+   Wrapper functions, which can lead to memory leaks if not done correctly.
+
+   Additionally, combining ``jit`` and ``pmap`` can lead to inefficient data
+   movement. See `<https://github.com/google/jax/issues/2926>`_.
+
+When jitting a function f including a pmap function g, also the parts of f
+outside of g are run on all involved devices. This causes all devices to request
+the same cache state (verified by a token) from a single chain.
+
+For example, if g is pmapped to 5 devices, f is also going to run on 5 devices
+and hence 5 times the same cache state is requested from a chain.
+
+JaxSGMC resolved this issue by caching all requested states on the host for a
+specified number of requests.
+
+In the above example, the Callback Wrapper used in f should be called like:
+
+  ::
+
+  ... = full_data_map(to_map_fn, data_state, carry, device_count=5)
+
+
+It is important to note that providing a device count larger than the actual
+number of calling devices causes a memory leak, as all requested cache states
+will remain on the host until the program has finished.
 
 Numpy Data Loader
 ------------------
@@ -69,7 +106,7 @@ number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
 has an increased device memory consumption.
 
-  >>> rd_init, rd_batch = data.random_reference_data(data_loader, 100, 2)
+  >>> rd_init, rd_batch, _ = data.random_reference_data(data_loader, 100, 2)
 
 The Numpy Data Loader accepts keyword arguments in
 the init function to determine the starting points of the chains.
@@ -107,7 +144,7 @@ multiplicity of the batch size:
 
   >>> x = onp.arange(10)
   >>> data_loader = NumpyDataLoader(x=x)
-  >>> init_fn, batch_fn = data.random_reference_data(data_loader, 2, 3)
+  >>> init_fn, batch_fn, _ = data.random_reference_data(data_loader, 2, 3)
 
 The preferred method has to be passed when initializing the different chains:
 
@@ -172,9 +209,9 @@ in the function signature.
   ...   sum = jnp.sum(mask * jnp.power(data['base'], exp))
   ...   return sum, unused_state
   >>>
-  >>> init_fun, map_fun = data.full_reference_data(data_loader,
-  ...                                              cached_batches_count=3,
-  ...                                              mb_size=4)
+  >>> init_fun, map_fun, _ = data.full_reference_data(data_loader,
+  ...                                                 cached_batches_count=3,
+  ...                                                 mb_size=4)
 
 The results per batch must be post-processed. If ``masking=False``, a result for
 each observation is returned. Therefore, using the masking option improves the
@@ -218,14 +255,17 @@ it is not necessary to carry the ``data state`` through all function calls.
 The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
 its usage is a little bit simpler:
 
-  >>> mapper_fn = data.full_data_mapper(data_loader,
-  ...                                   cached_batches_count=3,
-  ...                                   mb_size=4)
+  >>> mapper_fn, release_fn = data.full_data_mapper(data_loader,
+  ...                                               cached_batches_count=3,
+  ...                                               mb_size=4)
   >>>
   >>> results, _ = mapper_fn(partial(sum_potentials, 2), None, masking=True)
   >>>
   >>> print(f"Result with exp = 2: {jnp.sum(results) : d}")
   Result with exp = 2:  285
+  >>>
+  >>> # Delete the reference to the Data Loader (optional)
+  >>> release_fn()
 
 
 Tensorflow Data Loader
@@ -280,7 +320,7 @@ number of calls to the host. The cache size equals the number of batches stored
 on the device. A bigger cache size is more effective in computation time, but
 has an increased device memory consumption.
 
-  >>> data_init, data_batch = data.random_reference_data(data_loader, 100, 1000)
+  >>> data_init, data_batch, _ = data.random_reference_data(data_loader, 100, 1000)
   >>>
   >>> init_state = data_init()
   >>> new_state, batch = data_batch(init_state)

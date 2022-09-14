@@ -43,11 +43,14 @@ class HDF5Loader(NumpyDataLoader):
 
    """
 
-  def __init__(self, file, subdir, sample):
+  def __init__(self, file, subdir="/chain~0/variables/", sample=None):
     # The sample is necessary to return the observations in the correct format.
     super().__init__()
 
-    self._dataset = h5py.File(name=file, mode="r")
+    if isinstance(file, h5py.File):
+      self._dataset = file
+    else:
+      self._dataset = h5py.File(name=file, mode="r")
     self._reference_data = ["/".join(itertools.chain([subdir], key_tuple))
                             for key_tuple in pytree_dict_keys(sample)]
     self._pytree_structure = jax.tree_structure(sample)

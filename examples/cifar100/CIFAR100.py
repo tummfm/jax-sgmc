@@ -176,24 +176,20 @@ import h5py
 from jax_sgmc import io
 import h5py
 
-file = h5py.File('results_small', "w")
+# file = h5py.File('results_small', "w")
+with h5py.File('results_small_debug', "w") as file:
+    data_collector = io.HDF5Collector(file)
+    saving = io.save(data_collector)
 
-data_collector = io.HDF5Collector(file)
-saving = io.save(data_collector)
+    rms_sgld = solver.sgmc(rms_integrator)
+    rms_run = solver.mcmc(rms_sgld,
+                          rms_scheduler,
+                          saving=saving)
+    rms_integ = rms_integrator[0](sample,
+                                  init_model_state=init_resnet_state)
 
-rms_sgld = solver.sgmc(rms_integrator)
-rms_run = solver.mcmc(rms_sgld,
-                      rms_scheduler,
-                      saving=saving)
-rms_integ = rms_integrator[0](sample,
-                              init_model_state=init_resnet_state)
-
-start = time.time()
-rms_results = rms_run(rms_integ,
-                      iterations=iterations)
-
-print(f"Run completed in {time.time() - start} seconds")
-if file:
-    file.close()
+    start = time.time()
+    rms_results = rms_run(rms_integ,
+                          iterations=iterations)
 
 print("Finished")

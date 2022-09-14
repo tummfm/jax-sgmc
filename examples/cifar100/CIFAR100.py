@@ -3,7 +3,8 @@ import time
 
 import sys
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = str('2')  # needs to stay before importing jax
+
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 
 from jax import nn, tree_leaves, random, numpy as jnp
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
@@ -14,6 +15,7 @@ import numpy as onp
 from jax.scipy import stats as stats
 from jax import lax, tree_map, tree_leaves, numpy as jnp
 from jax import scipy as jscipy
+
 # import tensorflow as tf
 # from tensorflow.python.framework.ops import disable_eager_execution
 #
@@ -40,33 +42,39 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 ## Configuration parameters
 
 batch_size = 64
-cached_batches = 512
-num_classes = 100
+cached_batches = 1
+num_classes = 10
 weight_decay = 5.e-4
 
 ## Load dataset
 
 (train_images, train_labels), (test_images, test_labels) = \
-    tf.keras.datasets.cifar100.load_data(label_mode='fine')
+    tf.keras.datasets.cifar10.load_data()
+    # tf.keras.datasets.cifar100.load_data(label_mode='fine')
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
-train_dataset, train_info = tensorflow_datasets.load('Cifar100',
-                                                     split='train',
-                                                     with_info=True)
-train_loader = data.TensorflowDataLoader(train_dataset,
-                                         shuffle_cache=1000,
-                                         exclude_keys=['id'])
+import tensorflow_datasets as tfds
+from jax_sgmc import data
+from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 
-test_loader = data.NumpyDataLoader(image=test_images, label=test_labels)
+train_dataset, train_info = tfds.load('Cifar10',
+                                      split='train',
+                                      with_info=True)
+train_loader = TensorflowDataLoader(train_dataset,
+                                    shuffle_cache=1000,
+                                    exclude_keys=['id'])
+
+from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
+test_loader = DeviceNumpyDataLoader(image=test_images, label=test_labels)
 
 train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
 
-test_batch_init, test_batch_get = data.random_reference_data(test_loader, cached_batches, batch_size)
+test_batch_init, test_batch_get, test_release = data.core.random_reference_data(test_loader, cached_batches, batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
-batch_init, batch_get = train_batch_fn
+batch_init, batch_get, batch_release = train_batch_fn
 
 # This method returns a batch with correct shape but all zero values. The batch
 # contains 16 (batch_size) images.
@@ -84,7 +92,9 @@ def init_resnet():
         resnet50 = hk.nets.ResNet50(num_classes)
         logits = resnet50(images, is_training=is_training)
         return logits
+
     return resnet.init, resnet.apply
+
 
 init, apply_resnet = init_resnet()
 init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
@@ -93,6 +103,8 @@ init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
 logits, _ = apply_resnet(init_params, init_resnet_state, None, init_batch)
 
 print(jnp.sum(logits))
+
+
 # I don't think this should give plain 0, otherwise gradients will be 0
 
 
@@ -105,7 +117,7 @@ def likelihood(model_state, sample, observations):
     softmax_xent /= labels.shape[0]
     likelihood = jnp.zeros(64, dtype=jnp.float32)
     if 'image' in observations.keys():  # if-condition probably not even necessary here
-        likelihood += jscipy.stats.norm.logpdf(observations['label']-softmax_xent, scale=sample['std'])
+        likelihood += jscipy.stats.norm.logpdf(observations['label'] - softmax_xent, scale=sample['std'])
     return likelihood, new_state
 
 
@@ -118,6 +130,7 @@ def likelihood(model_state, sample, observations):
 def prior(sample):
     # return jscipy.stats.expon.pdf(sample['w'])
     return jnp.array(1.0, dtype=jnp.float32)
+
 
 # The likelihood accepts a batch of data, so no batching strategy is required,
 # instead, is_batched must be set to true.
@@ -140,7 +153,7 @@ _, (returned_likelihoods, _) = potential_fn(sample, batch_data, likelihoods=True
 # Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
 # iterations = 100000
-iterations = 4000
+iterations =2000
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
@@ -149,44 +162,38 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
 
 # Schedulers
 rms_step_size = scheduler.polynomial_step_size_first_last(first=1e-6,
-                                                          last=5e-7)  # try smaller ones
+                                                          last=5e-7)
 # burn_in = scheduler.initial_burn_in(5000)
-burn_in = scheduler.initial_burn_in(500) # try burn-in = 0
+burn_in = scheduler.initial_burn_in(10)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 500)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 50)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
                                          thinning=rms_random_thinning)
 
-# tf = "results"
 import h5py
 from jax_sgmc import io
 import h5py
-file = h5py.File('results', "w")
-# f = h5py.File("mytestfile.hdf5", "w")
-# data_collector = io.MemoryCollector(file)
+
+file = h5py.File('results_small', "w")
+
 data_collector = io.HDF5Collector(file)
 saving = io.save(data_collector)
-# data_collector = io.MemoryCollector()
-# saving = io.save(data_collector)
 
-# dc = io.MemoryCollector(save_dir="results")
-# saving = io.save(dc)
 rms_sgld = solver.sgmc(rms_integrator)
 rms_run = solver.mcmc(rms_sgld,
                       rms_scheduler,
                       saving=saving)
-
 rms_integ = rms_integrator[0](sample,
                               init_model_state=init_resnet_state)
+
 start = time.time()
 rms_results = rms_run(rms_integ,
-                      iterations=iterations)  #["samples"]["variables"]
-# file.create_dataset('samples', data=rms_results[0]['samples'])
+                      iterations=iterations)
+
 print(f"Run completed in {time.time() - start} seconds")
 if file:
     file.close()
-# file.close()
 
 print("Finished")

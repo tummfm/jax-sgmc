@@ -19,7 +19,7 @@ flexibility can be complicated. Therefore, this file contains some popular
 solvers with preset properties, which can be applied directly to the problem or
 used as a guide to set up a custom solver.
 """
-
+import warnings
 from functools import partial
 from typing import Any, Union
 
@@ -222,7 +222,7 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
             speed_constant: float = 0.05,
             target_acceptance_rate: float = 0.25,
             burn_in: int = 0,
-            accepted_samples: Union[int, None] = None,
+            accepted_samples: int = 1000,
             mass: Pytree = None,
             save_to_numpy: bool = True,
             progress_bar: bool = True):
@@ -293,8 +293,8 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
       speed_constant=speed_constant,
       target_acceptance_rate=target_acceptance_rate)
     random_thinning_schedule = None
-    assert accepted_samples is None, ('Thinning currently not supported for'
-                                      ' adaptive step size.')
+    warnings.warn('Ignoring "accepted_samples". Thinning currently not'
+                  ' supported for adaptive step size.')
   else:
     step_size_schedule = scheduler.polynomial_step_size_first_last(
       first=first_step_size,
@@ -338,7 +338,7 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
           speed_constant: float = 0.05,
           target_acceptance_rate: float = 0.25,
           burn_in: int = 0,
-          accepted_samples: Union[int, None] = None,
+          accepted_samples: int = 1000,
           mass: Pytree = None,
           save_to_numpy: bool = True,
           progress_bar: bool = True):
@@ -412,8 +412,8 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
       speed_constant=speed_constant,
       target_acceptance_rate=target_acceptance_rate)
     random_thinning_schedule = None
-    assert accepted_samples is None, ('Thinning currently not supported for'
-                                      ' adaptive step size.')
+    warnings.warn('Ignoring "accepted_samples". Thinning currently not'
+                  ' supported for adaptive step size.')
   else:
     step_size_schedule = scheduler.polynomial_step_size_first_last(
       first=first_step_size,

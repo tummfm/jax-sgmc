@@ -525,8 +525,8 @@ def polynomial_step_size_first_last(first: Array = 1.0,
               ) -> Array:
     # Check for valid parameters
     assert gamma > 0, f"Gamma must be bigger than 0, is {gamma}"
-    assert first > last, f"The first step size must be larger than the last: " \
-                         f"{first} !> {last}"
+    assert first >= last, f"The first step size must be larger than the last:" \
+                         f" {first} !>= {last}"
     a, b = find_ab(iterations, gamma, first, last)
     init_fn, _, _ = polynomial_step_size(a=a, b=b, gamma=gamma)
     return init_fn(iterations)

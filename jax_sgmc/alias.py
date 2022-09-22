@@ -222,7 +222,7 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
             speed_constant: float = 0.05,
             target_acceptance_rate: float = 0.25,
             burn_in: int = 0,
-            accepted_samples: int = 1000,
+            accepted_samples: Union[int, None] = None,
             mass: Pytree = None,
             save_to_numpy: bool = True,
             progress_bar: bool = True):
@@ -264,7 +264,8 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
     target_acceptance_rate: Target of the adption of the step sizes
     burn_in: Number of samples to skip before collecting samples
     accepted_samples: Total number of samples to collect, will be determined by
-      random thinning if accepted samples < iterations - burn_in
+      random thinning if accepted samples < iterations - burn_in.
+      If None, no thinning wil be applied.
     mass: Diagonal mass for HMC-dynamics
     save_to_numpy: Save on host in numpy array instead of in device memory
     progress_bar: Print the progress of the solver
@@ -293,14 +294,17 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
       speed_constant=speed_constant,
       target_acceptance_rate=target_acceptance_rate)
     random_thinning_schedule = None
-    warnings.warn('Ignoring "accepted_samples". Thinning currently not'
-                  ' supported for adaptive step size.')
+    assert accepted_samples is None, ('Thinning currently not supported for'
+                                      ' adaptive step size.')
   else:
     step_size_schedule = scheduler.polynomial_step_size_first_last(
       first=first_step_size,
       last=last_step_size)
-    random_thinning_schedule = scheduler.random_thinning(
-      step_size_schedule, burn_in_schedule, selections=accepted_samples)
+    if accepted_samples is None:
+      random_thinning_schedule = None
+    else:
+      random_thinning_schedule = scheduler.random_thinning(
+        step_size_schedule, burn_in_schedule, selections=accepted_samples)
   schedule = scheduler.init_scheduler(
     step_size=step_size_schedule,
     burn_in=burn_in_schedule,
@@ -338,7 +342,7 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
           speed_constant: float = 0.05,
           target_acceptance_rate: float = 0.25,
           burn_in: int = 0,
-          accepted_samples: int = 1000,
+          accepted_samples: Union[int, None] = None,
           mass: Pytree = None,
           save_to_numpy: bool = True,
           progress_bar: bool = True):
@@ -382,7 +386,8 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
     target_acceptance_rate: Target of the adption of the step sizes
     burn_in: Number of samples to skip before collecting samples
     accepted_samples: Total number of samples to collect, will be determined by
-      random thinning if accepted samples < iterations - burn_in
+      random thinning if accepted samples < iterations - burn_in.
+      If None, no thinning wil be applied.
     mass: Diagonal mass for HMC-dynamics
     save_to_numpy: Save on host in numpy array instead of in device memory
     progress_bar: Print the progress of the solver
@@ -412,14 +417,17 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
       speed_constant=speed_constant,
       target_acceptance_rate=target_acceptance_rate)
     random_thinning_schedule = None
-    warnings.warn('Ignoring "accepted_samples". Thinning currently not'
-                  ' supported for adaptive step size.')
+    assert accepted_samples is None, ('Thinning currently not supported for'
+                                      ' adaptive step size.')
   else:
     step_size_schedule = scheduler.polynomial_step_size_first_last(
       first=first_step_size,
       last=last_step_size)
-    random_thinning_schedule = scheduler.random_thinning(
-      step_size_schedule, burn_in_schedule, selections=accepted_samples)
+    if accepted_samples is None:
+      random_thinning_schedule = None
+    else:
+      random_thinning_schedule = scheduler.random_thinning(
+        step_size_schedule, burn_in_schedule, selections=accepted_samples)
   schedule = scheduler.init_scheduler(
     step_size=step_size_schedule,
     burn_in=burn_in_schedule,

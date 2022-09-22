@@ -491,9 +491,9 @@ def polynomial_step_size(a: Array = 1.0,
   return specific_scheduler(init_fn, update_fn, get_fn)
 
 
-def polynomial_step_size_first_last(first: Array = 1.0,
-                                    last: Array = 1.0,
-                                    gamma: Array = 0.33
+def polynomial_step_size_first_last(first: [float, Array] = 1.0,
+                                    last: [float, Array] = 1.0,
+                                    gamma: [float, Array] = 0.33
                                     ) -> specific_scheduler:
   """Initializes polynomial step size schedule via first and last step.
 
@@ -519,14 +519,14 @@ def polynomial_step_size_first_last(first: Array = 1.0,
     return a, b
 
   def init_fn(iterations: int,
-              first: Array = first,
-              last: Array = last,
-              gamma: Array = gamma
+              first: [float, Array] = first,
+              last: [float, Array] = last,
+              gamma: [float, Array] = gamma
               ) -> Array:
     # Check for valid parameters
     assert gamma > 0, f"Gamma must be bigger than 0, is {gamma}"
-    assert first > last, f"The first step size must be larger than the last: " \
-                         f"{first} !> {last}"
+    assert first >= last, f"The first step size must be larger than the last:" \
+                         f" {first} !>= {last}"
     a, b = find_ab(iterations, gamma, first, last)
     init_fn, _, _ = polynomial_step_size(a=a, b=b, gamma=gamma)
     return init_fn(iterations)
@@ -598,7 +598,7 @@ def initial_burn_in(n: Array = 0) -> specific_scheduler:
 
 def random_thinning(step_size_schedule: specific_scheduler,
                     burn_in_schedule: specific_scheduler,
-                    selections: Array,
+                    selections: int,
                     key: Array = None
                     ) -> specific_scheduler:
   """Random thinning weighted by the step size.
@@ -621,7 +621,7 @@ def random_thinning(step_size_schedule: specific_scheduler,
   def init_fn(iterations: int,
               step_size_schedule: specific_scheduler = step_size_schedule,
               burn_in_schedule: specific_scheduler = burn_in_schedule,
-              selections: Array = selections,
+              selections: int = selections,
               key: Array = key
               ) -> Tuple[Array, Array]:
     if key is None:

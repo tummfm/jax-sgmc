@@ -271,8 +271,13 @@ def full_potential(prior: Callable[[PyTree], Array],
                               full_data_map_fn: Callable,
                               state: PyTree = None):
     body_fn = partial(batch_evaluation, sample)
-    data_state, (results, new_state) = full_data_map_fn(
-      body_fn, data_state, state, masking=True, information=True)
+
+    if data_state is None:  # quick fix to let it run with full_data_mapper
+      results, new_state = full_data_map_fn(
+        body_fn, state, masking=True, information=True)
+    else:
+      data_state, (results, new_state) = full_data_map_fn(
+        body_fn, data_state, state, masking=True, information=True)
 
     # The prior needs just a single evaluation
     prior_eval = prior(sample)

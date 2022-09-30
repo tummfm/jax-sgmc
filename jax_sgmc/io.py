@@ -91,7 +91,7 @@ def register_dictionize_rule(type: Type) -> Callable[[Callable], None]:
   def register_function(rule: Callable):
     global _dictionize_rules
     assert type not in _dictionize_rules.keys(), f"Rule for {type.__name__} is " \
-                                                f"already defined."
+                                                 f"already defined."
     _dictionize_rules[type] = rule
   return register_function
 
@@ -109,8 +109,8 @@ def _dictionize(node):
   for node_type, node_rule in _dictionize_rules.items():
     if isinstance(node, node_type):
       return node_rule(node)
-    else:
-      return _default_dictionize(node)
+
+  return _default_dictionize(node)
 
 def pytree_to_dict(tree: PyTree):
   """Constructs a dictionary from a pytree.

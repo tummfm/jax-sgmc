@@ -91,9 +91,14 @@ def register_dictionize_rule(type: Type) -> Callable[[Callable], None]:
   def register_function(rule: Callable):
     global _dictionize_rules
     assert type not in _dictionize_rules.keys(), f"Rule for {type.__name__} is " \
-                                                f"already defined."
+                                                 f"already defined."
     _dictionize_rules[type] = rule
   return register_function
+
+def _default_dictionize(node):
+  leaves = tree_util.tree_leaves(node)
+  leaf_names = [f"unknown~pytree~leaf~{idx}" for idx in range(len(leaves))]
+  return zip(leaf_names, leaves)
 
 def _dictionize(node):
   """Apply the registered rules to a pytree node."""
@@ -104,8 +109,8 @@ def _dictionize(node):
   for node_type, node_rule in _dictionize_rules.items():
     if isinstance(node, node_type):
       return node_rule(node)
-  raise NotImplementedError(f"Node type {type(node).__name__} cannot be "
-                            f"transformed to dict, please register a rule.")
+
+  return _default_dictionize(node)
 
 def pytree_to_dict(tree: PyTree):
   """Constructs a dictionary from a pytree.
@@ -170,7 +175,9 @@ def pytree_dict_keys(tree: PyTree):
   idx_tree = tree_util.tree_unflatten(treedef, list(range(len(leaves))))
   key_list = [None] * len(leaves)
   def _recurse(node, path):
-    if isinstance(node, int):
+    if node is None:
+      return
+    elif isinstance(node, int):
       key_list[node] = path
     else:
       for key, value in node.items():
@@ -471,7 +478,7 @@ class HDF5Collector(DataCollector):
 
     """
     # Is called after all host callback calls have been processed
-    self._finished[chain_id].wait()
+    # self._finished[chain_id].wait()
 
   def checkpoint(self, chain_id: int, state):
     """Called every nth step. """
@@ -490,7 +497,7 @@ class HDF5Collector(DataCollector):
       chain_id: ID of chain requesting continuation of normal program flow.
 
     """
-    self._finished[chain_id].wait()
+    # self._finished[chain_id].wait()
 
 class MemoryCollector(DataCollector):
   """Stores samples entirely in RAM (numpy arrays).

@@ -34,6 +34,7 @@ limitations under the License.
 ```{code-cell} ipython3
 :tags: [hide-cell]
 
+import h5py
 import matplotlib.pyplot as plt
 import numpy as onp
 import jax.numpy as jnp
@@ -42,6 +43,7 @@ from jax.scipy.stats import norm
 
 from jax_sgmc import data, potential, scheduler, adaption, integrator, solver, io
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
+from jax_sgmc.data.hdf5_loader import HDF5Loader
 ```
 
 # Setup Custom Solver
@@ -257,7 +259,7 @@ schedule = scheduler.init_scheduler(step_size=step_size_schedule,
                                     thinning=thinning_schedule)
 ```
 
-## Save Samples in Numpy Arrays
+## Save samples in numpy Arrays
 
 By default, **JaxSGMC** save accepted samples in the device memory.
 However, for some models the required memory rapidly exceeds the available 
@@ -272,6 +274,15 @@ In this example, the data is simply passed to (real) numpy arrays in the host
 memory.
 
 ```{code-cell} ipython3
+data_collector = io.MemoryCollector()
+save_fn = io.save(data_collector=data_collector)
+```
+
+### Save samples in hdf5
+
+```{code-cell} ipython3
+import h5py
+
 data_collector = io.MemoryCollector()
 save_fn = io.save(data_collector=data_collector)
 ```
@@ -333,4 +344,53 @@ p34d = onp.vstack([W3d.ravel(), W4d.ravel()])
 plt.figure()
 plt.title("w_3 vs w_4 (rms)")
 plt.plot(w_rms[:, 2], w_rms[:, 3], 'o', alpha=0.5, markersize=0.5, zorder=-1)
+```
+
+## Large Models: Save Data to HDF5
+
+```{code-cell} ipython3
+# Open a HDF5 file to store data in
+with h5py.File("sgld_rms.hdf5", "w") as file:
+
+    data_collector = io.HDF5Collector(file)
+    save_fn = io.save(data_collector=data_collector)
+
+    mcmc = solver.mcmc(solver=rms_prop_solver,
+                   scheduler=schedule,
+                   saving=save_fn)
+
+    # The solver has to be reinitialized, as the data loader has to be reinitialized
+    init_state = rms_prop_solver[0](init_sample,
+                                    adaption_kwargs=adaption_kwargs,
+                                    batch_kwargs=data_loader_kwargs)
+    results = mcmc(init_state, iterations=10000)[0]
+
+print(f"Collected {results['sample_count']} samples")
+```
+
+```{code-cell} ipython3
+# Sum up and count all values
+def map_fn(batch, mask, count):
+    return jnp.sum(batch["w"].T * mask, axis=1), count + jnp.sum(mask)
+
+# Load only the samples from the file
+with h5py.File("sgld_rms.hdf5", "r") as file:
+    postprocess_loader = HDF5Loader(file, subdir="/chain~0/variables", sample=init_sample)
+
+    full_data_mapper, _ = data.full_data_mapper(postprocess_loader, 128, 128)
+    w_sums, count = full_data_mapper(map_fn, 0, masking=True)
+
+    # Sum up the sums from the individual batches
+    w_means = jnp.sum(w_sums, axis=0) / count
+
+print(f"Collected {count} samples with means:")
+for idx, (w, w_old) in enumerate(zip(w_means, onp.mean(w_rms, axis=0))):
+  print(f"  w_{idx}: new = {w}, old = {w_old})")
+```
+
+```{code-cell} ipython3
+:tags: [hide-cell]
+
+import os
+os.remove("sgld_rms.hdf5")
 ```

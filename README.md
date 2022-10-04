@@ -6,6 +6,9 @@
 [Contributing](#contributing)**
 
 [![CI](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml)
+[![Documentation Status](https://readthedocs.org/projects/jax-sgmc/badge/?version=latest)](https://jax-sgmc.readthedocs.io/en/latest/?badge=latest)
+[![PyPI version](https://badge.fury.io/py/jax-sgmc.svg)](https://badge.fury.io/py/jax-sgmc)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## Introduction
 

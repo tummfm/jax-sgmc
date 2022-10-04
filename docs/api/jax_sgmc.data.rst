@@ -84,3 +84,10 @@ jax_sgmc.data.tensorflow_loader
 
 .. autoclass:: jax_sgmc.data.tensorflow_loader.TensorflowDataLoader
    :members:
+
+jax_sgmc.data.hdf5_loader
+--------------------------
+
+.. automodule:: jax_sgmc.data.hdf5_loader
+
+.. autoclass:: jax_sgmc.data.hdf5_loader.HDF5Loader

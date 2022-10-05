@@ -11,7 +11,7 @@ kernelspec:
   display_name: Python 3
   name: python3
 mystnb:
-  execution_timeout: 600:
+  execution_timeout: 600
 ---
 
 ```{raw-cell}
@@ -68,7 +68,7 @@ For demonstration purposes we look at the simple problem
 y^{(i)} \sim \mathcal{N}\left(\sum_{j=1}^d w_jx_j^{(i)}, \sigma^2\right)
 ```
 
-where ```{math}d \ll N``` such that we have large amounts of reference data.
+where $d \ll N$ such that we have large amounts of reference data.
 
 The reference data is generated such that the weights are correlated:
 
@@ -82,7 +82,7 @@ and
 \boldsymbol{x} = \left(\begin{array}{c} u_1 + u_2 \\ u_2 \\ 0.1u_3 -0.5u_4 \\ u_4 \end{array} \right).
 ```
 
-The correct solution ```{math}w``` is drawn randomly from
+The correct solution $w$ is drawn randomly from
 
 ```{math}
 w_j \sim \mathcal{U}\left(-1, 1\right)

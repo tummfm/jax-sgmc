@@ -10,6 +10,8 @@ jupytext:
 kernelspec:
   display_name: Python 3
   name: python3
+mystnb:
+  execution_timeout: 600
 ---
 
 ```{raw-cell}

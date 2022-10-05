@@ -39,7 +39,7 @@ jobs:
     - name: Install requirements
       run: |
         python -m pip install --upgrade pip
-        pip install .[docs,tensorflow]
+        pip install .[docs]
     - name: Build documentation
       run: |
         make -C docs html

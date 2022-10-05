@@ -13,7 +13,7 @@
 ## Introduction
 
 **JaxSGMC** brings Stochastic Gradient Markov chain Monte Carlo (SGMCMC)
-samplers to JAX. Insired by [optax](https://github.com/deepmind/optax),
+samplers to JAX. Inspired by [optax](https://github.com/deepmind/optax),
 **JaxSGMC** is built on a modular concept to increase reusability and
 accelerate research of new SGMCMC solvers. Additionally, **JaxSGMC** aims to
 promote probabilistic machine learning by removing obstacles in switching

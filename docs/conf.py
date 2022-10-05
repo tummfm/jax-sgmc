@@ -57,9 +57,6 @@ source_suffix = ['.rst', '.ipynb']
 exclude_patterns = ['build']
 
 autosummary_generate = True
-autodoc_mock_imports = ['tensorflow', 'tensorflow_datasets']
-
-
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),

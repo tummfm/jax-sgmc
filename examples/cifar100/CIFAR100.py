@@ -59,8 +59,9 @@ from jax_sgmc import data
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 
 train_dataset, train_info = tfds.load('Cifar10',
-                                      split='train',
+                                      split=['train[:70%]', 'test[70%:]'],
                                       with_info=True)
+train_dataset, validation_dataset = train_dataset
 train_loader = TensorflowDataLoader(train_dataset,
                                     shuffle_cache=1000,
                                     exclude_keys=['id'])
@@ -152,8 +153,8 @@ _, (returned_likelihoods, _) = potential_fn(sample, batch_data, likelihoods=True
 
 # Setup Integrator
 # Number of iterations: Ca. 0.035 seconds per iteration (including saving)
-# iterations = 100000
-iterations =2000
+iterations = 100000
+# iterations = 2000
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
@@ -164,9 +165,9 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
 rms_step_size = scheduler.polynomial_step_size_first_last(first=1e-6,
                                                           last=5e-7)
 # burn_in = scheduler.initial_burn_in(5000)
-burn_in = scheduler.initial_burn_in(10)
+burn_in = scheduler.initial_burn_in(500)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 50)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 200)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
@@ -177,7 +178,7 @@ from jax_sgmc import io
 import h5py
 
 # file = h5py.File('results_small', "w")
-with h5py.File('results_small_debug', "w") as file:
+with h5py.File('results', "w") as file:
     data_collector = io.HDF5Collector(file)
     saving = io.save(data_collector)
 

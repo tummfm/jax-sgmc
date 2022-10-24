@@ -4,7 +4,7 @@ import time
 import sys
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
 
 from jax import nn, tree_leaves, random, numpy as jnp
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
@@ -41,7 +41,7 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 ## Configuration parameters
 
-batch_size = 64
+batch_size = 128
 cached_batches = 1
 num_classes = 10
 weight_decay = 5.e-4
@@ -50,7 +50,7 @@ weight_decay = 5.e-4
 
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
-    # tf.keras.datasets.cifar100.load_data(label_mode='fine')
+# tf.keras.datasets.cifar100.load_data(label_mode='fine')
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
@@ -67,6 +67,7 @@ train_loader = TensorflowDataLoader(train_dataset,
                                     exclude_keys=['id'])
 
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
+
 test_loader = DeviceNumpyDataLoader(image=test_images, label=test_labels)
 
 train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
@@ -116,21 +117,21 @@ def likelihood(model_state, sample, observations):
     softmax_xent = labels * jnp.log(nn.softmax(logits))
     softmax_xent = jnp.mean(softmax_xent, axis=1)
     softmax_xent /= labels.shape[0]
-    likelihood = jnp.zeros(64, dtype=jnp.float32)
+    likelihood = jnp.zeros(batch_size, dtype=jnp.float32)
     if 'image' in observations.keys():  # if-condition probably not even necessary here
         likelihood += jscipy.stats.norm.logpdf(observations['label'] - softmax_xent, scale=sample['std'])
     return likelihood, new_state
 
 
-# def prior(sample):
-#     # Implement weight decay, corresponds to Gaussian prior over weights
-#     weights = sample["w"]
-#     l2_loss = 0.5 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(weights))
-#     return weight_decay * l2_loss
-
 def prior(sample):
-    # return jscipy.stats.expon.pdf(sample['w'])
-    return jnp.array(1.0, dtype=jnp.float32)
+    # Implement weight decay, corresponds to Gaussian prior over weights
+    weights = sample["w"]
+    l2_loss = 0.5 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(weights))
+    return weight_decay * l2_loss
+
+# def prior(sample):
+#     # return jscipy.stats.expon.pdf(sample['w'])
+#     return jnp.array(1.0, dtype=jnp.float32)
 
 
 # The likelihood accepts a batch of data, so no batching strategy is required,
@@ -162,12 +163,12 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
                                                rms_prop)
 
 # Schedulers
-rms_step_size = scheduler.polynomial_step_size_first_last(first=1e-6,
-                                                          last=5e-7)
+rms_step_size = scheduler.polynomial_step_size_first_last(first=5e-7,
+                                                          last=5e-8)
 # burn_in = scheduler.initial_burn_in(5000)
-burn_in = scheduler.initial_burn_in(500)
+burn_in = scheduler.initial_burn_in(10000)
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
-rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 200)
+rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 250)
 
 rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
@@ -178,7 +179,7 @@ from jax_sgmc import io
 import h5py
 
 # file = h5py.File('results_small', "w")
-with h5py.File('results', "w") as file:
+with h5py.File('results_iterations_100k_burn_in_10k_lr_5e7_prior_weight_decay_bs_128', "w") as file:
     data_collector = io.HDF5Collector(file)
     saving = io.save(data_collector)
 

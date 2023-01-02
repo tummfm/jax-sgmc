@@ -38,7 +38,7 @@ pre-built samplers in [alias.py](jax_sgmc/alias.py):
 **JaxSGMC** aims to increase reusability of SGMCMC components via a toolbox of
 helper functions and a modular concept:
 
-![Structure of JaxSGMC](/jax-sgmc-structure.svg)
+![Structure of JaxSGMC](https://github.com/tummfm/jax-sgmc/blob/main/jax-sgmc-structure.svg)
 
 In the simplest case of employing a pre-built sampler from
 [alias.py](jax_sgmc/alias.py), the user only needs to provide the computational

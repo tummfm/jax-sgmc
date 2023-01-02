@@ -14,13 +14,13 @@
 
 import jax.numpy as jnp
 from jax import random
-from jax import test_util
 from jax import flatten_util
 
 import pytest
 
 from jax_sgmc import adaption
 from jax_sgmc import util
+from jax_sgmc.util import testing
 
 class TestDecorator:
   """Test that the decorator transforms array adaption to tree adaption."""
@@ -58,21 +58,21 @@ class TestDecorator:
 
     # Assert that parameters are passed correctly
 
-    test_util.check_close(init_state.ravel_fn(random_tree), init_state.state[0])
+    testing.assert_equal(init_state.ravel_fn(random_tree), init_state.state[0])
     assert init_state.state[1] == test_arg
     assert init_state.state[2] == test_kwarg
 
-    test_util.check_close(update_state.ravel_fn(random_tree), update_state.state[1])
-    test_util.check_close(update_state.ravel_fn(random_tree), update_state.state[2])
+    testing.assert_equal(update_state.ravel_fn(random_tree), update_state.state[1])
+    testing.assert_equal(update_state.ravel_fn(random_tree), update_state.state[2])
     assert update_state.state[3] == test_arg
     assert update_state.state[4] == test_kwarg
 
     assert manifold.g_inv.ndim == 1
     assert manifold.sqrt_g_inv.ndim == 1
     assert manifold.gamma.ndim == 1
-    test_util.check_close(manifold.g_inv.tensor, util.tree_scale(test_arg, random_tree))
-    test_util.check_close(manifold.sqrt_g_inv.tensor, util.tree_scale(test_kwarg, random_tree))
-    test_util.check_close(manifold.gamma.tensor, util.tree_scale(0.0, random_tree))
+    testing.assert_equal(manifold.g_inv.tensor, util.tree_scale(test_arg, random_tree))
+    testing.assert_equal(manifold.sqrt_g_inv.tensor, util.tree_scale(test_kwarg, random_tree))
+    testing.assert_equal(manifold.gamma.tensor, util.tree_scale(0.0, random_tree))
 
   @pytest.mark.parametrize("diag", [True, False])
   def test_diag_full(self, diag, random_tree):
@@ -96,7 +96,7 @@ class TestDecorator:
     # Assert correctness of diagonal / full manifold
     if diag:
       assert manifold.g_inv.ndim == 1
-      test_util.check_close(util.tree_multiply(manifold.g_inv.tensor, random_tree), random_tree)
+      testing.assert_equal(util.tree_multiply(manifold.g_inv.tensor, random_tree), random_tree)
     else:
       assert manifold.g_inv.ndim == 2
-      test_util.check_close(util.tree_matmul(manifold.g_inv.tensor, random_tree), random_tree)
+      testing.assert_equal(util.tree_matmul(manifold.g_inv.tensor, random_tree), random_tree)

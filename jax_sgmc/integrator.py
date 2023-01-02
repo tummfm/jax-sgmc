@@ -106,7 +106,7 @@ def init_mass(mass) -> MassMatrix:
     Returns a diagonal mass matrix.
   """
   inv_mass = tree_util.tree_map(
-    partial(jnp.power, x2=-1.0),
+    lambda x: jnp.power(x, -1.0),
     mass)
   sqrt_mass = tree_util.tree_map(
     jnp.sqrt,

@@ -15,7 +15,6 @@
 import itertools
 
 import jax.numpy as jnp
-from jax import test_util
 from jax import random
 
 import numpy as onp
@@ -23,6 +22,7 @@ import numpy as onp
 import pytest
 
 from jax_sgmc import scheduler
+from jax_sgmc.util import testing
 
 
 class TestScheduler:
@@ -98,8 +98,8 @@ class TestStepSize():
 
     state = schedule.init(iterations)
 
-    test_util.check_close(schedule.get(state, 0), first)
-    test_util.check_close(schedule.get(state, iterations-1), last)
+    testing.assert_close(schedule.get(state, 0), first)
+    testing.assert_close(schedule.get(state, iterations-1), last)
 
 
 class TestBurnIn():

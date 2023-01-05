@@ -25,12 +25,13 @@ except ModuleNotFoundError:
 import jax
 import jax.numpy as jnp
 from jax import ShapeDtypeStruct
-from jax import test_util
+
 from jax import random
 from jax import lax
 
 from jax_sgmc.data.core import random_reference_data, full_reference_data, full_data_mapper
 from jax_sgmc.data.numpy_loader import NumpyDataLoader, DeviceNumpyDataLoader
+from jax_sgmc.util import testing
 
 try:
   from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
@@ -248,7 +249,7 @@ class TestNumpyDataLoader:
 
         # Check that expected indices correspond to actual indices for all valid
         # samples
-        test_util.check_eq(indices[mask],
+        testing.assert_equal(indices[mask],
                            onp.squeeze(expected_idx[mask]))
 
   def test_seeding(self, data_loader, dataset):
@@ -293,7 +294,7 @@ class TestNumpyDataLoader:
 
     for key in small_batch.keys():
       for idx in range(cs_small):
-        test_util.check_eq(small_batch[key][idx], big_batch[key][idx])
+        testing.assert_equal(small_batch[key][idx], big_batch[key][idx])
 
   @pytest.mark.parametrize("shuffle, in_epochs", [(False, False),
                                                   (True, False),
@@ -345,8 +346,8 @@ class TestNumpyDataLoader:
     new_batches_b = data_loader.get_batches(new_chain_b)
 
     # The old and the new chains should have returned the same samples
-    test_util.check_eq(batches_a, new_batches_a)
-    test_util.check_eq(batches_b, new_batches_b)
+    testing.assert_equal(batches_a, new_batches_a)
+    testing.assert_equal(batches_b, new_batches_b)
 
   def test_checkpoint_full_data(self, data_loader, dataset):
     _, _, obs_count = dataset
@@ -387,8 +388,8 @@ class TestNumpyDataLoader:
     new_batches_b = data_loader.get_batches(new_chain_b)
 
     # The old and the new chains should have returned the same samples
-    test_util.check_eq(batches_a, new_batches_a)
-    test_util.check_eq(batches_b, new_batches_b)
+    testing.assert_equal(batches_a, new_batches_a)
+    testing.assert_equal(batches_b, new_batches_b)
 
   @pytest.mark.parametrize("data",
                            [{"x": [0, 1, 2], "y": [[0, 1], [0, 2], [0, 3]]},
@@ -974,7 +975,7 @@ class TestFullDataAccess:
 
       assert onp.sum(count == 1) == obs_count
       assert count.size == obs_count
-      test_util.check_eq(samples, onp.arange(obs_count))
+      testing.assert_equal(samples, onp.arange(obs_count))
 
   def test_jit_full_data_map_no_mask(self, dataset, data_loader, example_problem_no_mask):
     _, _, obs_count = dataset

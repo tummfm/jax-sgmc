@@ -304,7 +304,7 @@ via the keyword argument `exclude_keys`.
   FeaturesDict({
       'id': Text(shape=(), dtype=tf.string),
       'image': Image(shape=(32, 32, 3), dtype=tf.uint8),
-      'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
+      'label': ClassLabel(shape=(), dtype=int64, num_classes=10),
   })
   >>>
   >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])

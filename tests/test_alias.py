@@ -18,7 +18,6 @@ import jax
 from jax import random
 import jax.numpy as jnp
 from jax.scipy.stats import norm
-from jax import test_util
 
 import pytest
 

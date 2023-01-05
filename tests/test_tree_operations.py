@@ -5,11 +5,11 @@ import jax
 import jax.numpy as jnp
 from jax import random
 from jax import flatten_util
-from jax import test_util
 from jax import tree_util
 
 from jax_sgmc import util
 from jax_sgmc import data
+from jax_sgmc.util import testing
 
 # Todo: Test vmap on custom host_callback
 
@@ -39,7 +39,7 @@ class TestTree:
     true_result = unravel_fn(alpha * flat_tree)
     treemap_result = util.tree_scale(alpha, tree)
 
-    test_util.check_close(true_result, treemap_result)
+    testing.assert_equal(true_result, treemap_result)
 
   def test_tree_multiply(self, random_tree):
     (tree, flat_tree), (ravel_fn, unravel_fn) = random_tree
@@ -48,7 +48,7 @@ class TestTree:
     true_result = unravel_fn(jnp.multiply(rnd, flat_tree))
     treemap_result = util.tree_multiply(unravel_fn(rnd), tree)
 
-    test_util.check_close(true_result, treemap_result)
+    testing.assert_equal(true_result, treemap_result)
 
   def test_tree_add(self, random_tree):
     (tree, flat_tree), (ravel_fn, unravel_fn) = random_tree
@@ -57,7 +57,7 @@ class TestTree:
     true_result = unravel_fn(jnp.add(rnd, flat_tree))
     treemap_result = util.tree_add(unravel_fn(rnd), tree)
 
-    test_util.check_close(true_result, treemap_result)
+    testing.assert_equal(true_result, treemap_result)
 
   def test_tree_matmul(self, random_tree):
     (tree, flat_tree), (ravel_fn, unravel_fn) = random_tree
@@ -66,7 +66,7 @@ class TestTree:
     true_result = unravel_fn(jnp.matmul(rnd, flat_tree))
     treemap_result = util.tree_matmul(rnd, tree)
 
-    test_util.check_close(true_result, treemap_result)
+    testing.assert_equal(true_result, treemap_result)
 
   def test_tree_dot(self, random_tree):
     (tree, flat_tree), (ravel_fn, unravel_fn) = random_tree
@@ -74,7 +74,7 @@ class TestTree:
     true_result = jnp.dot(flat_tree, flat_tree)
     treemap_result = util.tree_dot(tree, tree)
 
-    test_util.check_close(true_result, treemap_result)
+    testing.assert_equal(true_result, treemap_result)
 
 class TestTreeMap():
 
@@ -92,8 +92,8 @@ class TestTreeMap():
 
     one, zero = test_substract(random_tree, modified_tree)
 
-    test_util.check_close(zero, zero_tree)
-    test_util.check_close(one, one_tree)
+    testing.assert_close(zero, zero_tree)
+    testing.assert_close(one, one_tree)
 
   @pytest.mark.pmap
   def test_pmap(self, random_tree):
@@ -110,5 +110,5 @@ class TestTreeMap():
 
     one, zero = test_substract(random_tree, modified_tree)
 
-    test_util.check_close(zero, zero_tree)
-    test_util.check_close(one, one_tree)
+    testing.assert_close(zero, zero_tree)
+    testing.assert_close(one, one_tree)

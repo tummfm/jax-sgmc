@@ -662,7 +662,7 @@ def save(data_collector: DataCollector = None,
       >>>
       >>> saved_samples = postprocess_save(final_state, None)
       >>> print(saved_samples)
-      {'sample_count': DeviceArray(3, dtype=int32, weak_type=True), 'samples': {'iteration': array([0, 2, 4], dtype=int32)}}
+      {'sample_count': Array(3, dtype=int32, weak_type=True), 'samples': {'iteration': array([0, 2, 4], dtype=int32)}}
 
 
   Args:
@@ -802,7 +802,7 @@ def no_save() -> Saving:
     >>>
     >>> saved_samples = postprocess_save(final_state, None)
     >>> print(saved_samples)
-    {'sample_count': DeviceArray(3, dtype=int32, weak_type=True), 'samples': {'iteration': DeviceArray([0, 2, 4], dtype=int32)}}
+    {'sample_count': Array(3, dtype=int32, weak_type=True), 'samples': {'iteration': Array([0, 2, 4], dtype=int32)}}
 
   Returns:
     Returns a saving strategy, which keeps the samples entirely in the

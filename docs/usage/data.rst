@@ -302,9 +302,9 @@ via the keyword argument `exclude_keys`.
   ...   pipeline, info = tfds.load("cifar10", split="train", with_info=True)
   >>> print(info.features)
   FeaturesDict({
-      'id': Text(shape=(), dtype=tf.string),
-      'image': Image(shape=(32, 32, 3), dtype=tf.uint8),
-      'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
+      'id': Text(shape=(), dtype=string),
+      'image': Image(shape=(32, 32, 3), dtype=uint8),
+      'label': ClassLabel(shape=(), dtype=int64, num_classes=10),
   })
   >>>
   >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])

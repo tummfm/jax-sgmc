@@ -19,7 +19,7 @@ flexibility can be complicated. Therefore, this file contains some popular
 solvers with preset properties, which can be applied directly to the problem or
 used as a guide to set up a custom solver.
 """
-
+import warnings
 from functools import partial
 from typing import Any, Union
 
@@ -214,7 +214,7 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
             batch_size: int = 32,
             integration_steps: int = 10,
             friction: float = 0.25,
-            first_step_size: float = 0.05,
+            first_step_size: float = 0.001,
             last_step_size: float = 0.001,
             adaptive_step_size: bool = False,
             stabilization_constant: int = 10,
@@ -222,6 +222,7 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
             speed_constant: float = 0.05,
             target_acceptance_rate: float = 0.25,
             burn_in: int = 0,
+            accepted_samples: Union[int, None] = None,
             mass: Pytree = None,
             save_to_numpy: bool = True,
             progress_bar: bool = True):
@@ -262,6 +263,9 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
     speed_constant: Speed of adaption of the step size
     target_acceptance_rate: Target of the adption of the step sizes
     burn_in: Number of samples to skip before collecting samples
+    accepted_samples: Total number of samples to collect, will be determined by
+      random thinning if accepted samples < iterations - burn_in.
+      If None, no thinning wil be applied.
     mass: Diagonal mass for HMC-dynamics
     save_to_numpy: Save on host in numpy array instead of in device memory
     progress_bar: Print the progress of the solver
@@ -280,6 +284,7 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
   amagold_solver = solver.amagold(
     reversible_leapfrog, full_potential_fn, full_data_map)
 
+  burn_in_schedule = scheduler.initial_burn_in(burn_in)
   if adaptive_step_size:
     step_size_schedule = scheduler.adaptive_step_size(
       burn_in=burn_in,
@@ -288,14 +293,22 @@ def amagold(stochastic_potential_fn: potential.StochasticPotential,
       decay_constant=decay_constant,
       speed_constant=speed_constant,
       target_acceptance_rate=target_acceptance_rate)
+    random_thinning_schedule = None
+    assert accepted_samples is None, ('Thinning currently not supported for'
+                                      ' adaptive step size.')
   else:
     step_size_schedule = scheduler.polynomial_step_size_first_last(
       first=first_step_size,
       last=last_step_size)
-  burn_in_schedule = scheduler.initial_burn_in(burn_in)
+    if accepted_samples is None:
+      random_thinning_schedule = None
+    else:
+      random_thinning_schedule = scheduler.random_thinning(
+        step_size_schedule, burn_in_schedule, selections=accepted_samples)
   schedule = scheduler.init_scheduler(
     step_size=step_size_schedule,
     burn_in=burn_in_schedule,
+    thinning=random_thinning_schedule,
     progress_bar=progress_bar)
 
   if save_to_numpy:
@@ -321,7 +334,7 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
           batch_size: int = 32,
           integration_steps: int = 10,
           friction_coefficient: float = 1.0,
-          first_step_size: float = 0.05,
+          first_step_size: float = 0.001,
           last_step_size: float = 0.001,
           adaptive_step_size: bool = False,
           stabilization_constant: int = 10,
@@ -329,6 +342,7 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
           speed_constant: float = 0.05,
           target_acceptance_rate: float = 0.25,
           burn_in: int = 0,
+          accepted_samples: Union[int, None] = None,
           mass: Pytree = None,
           save_to_numpy: bool = True,
           progress_bar: bool = True):
@@ -371,6 +385,9 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
     speed_constant: Speed of adaption of the step size
     target_acceptance_rate: Target of the adption of the step sizes
     burn_in: Number of samples to skip before collecting samples
+    accepted_samples: Total number of samples to collect, will be determined by
+      random thinning if accepted samples < iterations - burn_in.
+      If None, no thinning wil be applied.
     mass: Diagonal mass for HMC-dynamics
     save_to_numpy: Save on host in numpy array instead of in device memory
     progress_bar: Print the progress of the solver
@@ -390,6 +407,7 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
   sggmc_solver = solver.sggmc(
     obabo, full_potential_fn, full_data_map)
 
+  burn_in_schedule = scheduler.initial_burn_in(burn_in)
   if adaptive_step_size:
     step_size_schedule = scheduler.adaptive_step_size(
       burn_in=burn_in,
@@ -398,14 +416,22 @@ def sggmc(stochastic_potential_fn: potential.StochasticPotential,
       decay_constant=decay_constant,
       speed_constant=speed_constant,
       target_acceptance_rate=target_acceptance_rate)
+    random_thinning_schedule = None
+    assert accepted_samples is None, ('Thinning currently not supported for'
+                                      ' adaptive step size.')
   else:
     step_size_schedule = scheduler.polynomial_step_size_first_last(
       first=first_step_size,
       last=last_step_size)
-  burn_in_schedule = scheduler.initial_burn_in(burn_in)
+    if accepted_samples is None:
+      random_thinning_schedule = None
+    else:
+      random_thinning_schedule = scheduler.random_thinning(
+        step_size_schedule, burn_in_schedule, selections=accepted_samples)
   schedule = scheduler.init_scheduler(
     step_size=step_size_schedule,
     burn_in=burn_in_schedule,
+    thinning=random_thinning_schedule,
     progress_bar=progress_bar)
 
   if save_to_numpy:
@@ -432,6 +458,7 @@ def sghmc(potential_fn: potential.minibatch_potential,
           first_step_size: float = 0.05,
           last_step_size: float = 0.001,
           burn_in: int = 0,
+          accepted_samples: int = 1000,
           adapt_noise_model: bool = False,
           diagonal_noise: bool = True,
           save_to_numpy: bool = True,
@@ -461,6 +488,8 @@ def sghmc(potential_fn: potential.minibatch_potential,
     first_step_size: First step size
     last_step_size: Final step size
     burn_in: Number of samples to skip before collecting samples
+    accepted_samples: Total number of samples to collect, will be determined by
+      random thinning if accepted samples < iterations - burn_in
     adapt_noise_model: Estimate the gradient noise to speed up the convergence.
     diagonal_noise: Restrict the noise estimate to be diagonal.
     save_to_numpy: Save on host in numpy array instead of in device memory
@@ -487,9 +516,12 @@ def sghmc(potential_fn: potential.minibatch_potential,
   step_size_schedule = scheduler.polynomial_step_size_first_last(
     first=first_step_size, last=last_step_size)
   burn_in_schedule = scheduler.initial_burn_in(burn_in)
+  random_thinning_schedule = scheduler.random_thinning(
+    step_size_schedule, burn_in_schedule, selections=accepted_samples)
   schedule = scheduler.init_scheduler(
     step_size=step_size_schedule,
     burn_in=burn_in_schedule,
+    thinning=random_thinning_schedule,
     progress_bar=progress_bar)
 
   if save_to_numpy:
@@ -517,6 +549,7 @@ def obabo(potential_fn: potential.minibatch_potential,
           first_step_size: float = 0.05,
           last_step_size: float = 0.001,
           burn_in: int = 0,
+          accepted_samples: int = 1000,
           save_to_numpy: bool = True,
           progress_bar: bool = True):
   """Langevin Monte Carlo with partial momentum refreshment.
@@ -541,6 +574,8 @@ def obabo(potential_fn: potential.minibatch_potential,
     first_step_size: First step size
     last_step_size: Final step size
     burn_in: Number of samples to skip before collecting samples
+    accepted_samples: Total number of samples to collect, will be determined by
+      random thinning if accepted samples < iterations - burn_in
     save_to_numpy: Save on host in numpy array instead of in device memory
     progress_bar: Print the progress of the solver
 
@@ -560,9 +595,12 @@ def obabo(potential_fn: potential.minibatch_potential,
   step_size_schedule = scheduler.polynomial_step_size_first_last(
     first=first_step_size, last=last_step_size)
   burn_in_schedule = scheduler.initial_burn_in(burn_in)
+  random_thinning_schedule = scheduler.random_thinning(
+    step_size_schedule, burn_in_schedule, selections=accepted_samples)
   schedule = scheduler.init_scheduler(
     step_size=step_size_schedule,
     burn_in=burn_in_schedule,
+    thinning=random_thinning_schedule,
     progress_bar=progress_bar)
 
   if save_to_numpy:

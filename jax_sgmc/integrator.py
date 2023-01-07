@@ -349,7 +349,7 @@ def obabo(potential_fn: StochasticPotential,
 def reversible_leapfrog(potential_fn: StochasticPotential,
                         batch_fn: RandomBatch,
                         steps: int = 10,
-                        friction: Array = 0.25,
+                        friction: [float, Array] = 0.25,
                         const_mass: PyTree = None
                         ) -> Tuple[Callable, Callable, Callable]:
   """Initializes a reversible leapfrog integrator.

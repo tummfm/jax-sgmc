@@ -96,21 +96,19 @@ logits, state = apply_resnet(init_params, init_resnet_state, None, init_batch)
 
 
 # Initialize potential with log-likelihood
+# TODO logits are zeros everywhere, this does not seem correct, because input
+#  batch is a proper image. Make sure this is not the case any more  after
+#  switching to MobileNet
+
+# TODO the likelihood had to process a batch of data before due to batchnorm.
+#  Without batchnorm, we could also go the standard way and only run the model
+#  for a single input, and let jax-sgmc deal with the batching.
 def likelihood(model_state, sample, observations):
-    labels = nn.one_hot(observations["label"], num_classes)
     logits, model_state = apply_resnet(sample["w"], model_state, None, observations)
-    softmax_xent = jnp.multiply(labels, jnp.log(nn.softmax(logits)))
-
-    # TODO ask Stephan: Is the rest of this necessary?
-    softmax_xent = jnp.sum(softmax_xent, axis=1)
-    softmax_xent /= labels.shape[0]
-    likelihood = jnp.zeros(batch_size, dtype=jnp.float32)
-    if 'image' in observations.keys():  # if-condition probably not even necessary here
-        # check the distribution that corresponds to a softmax -> it does
-        likelihood += jscipy.stats.norm.logpdf(observations['label'] - softmax_xent, scale=sample['std'])
-        # TODO check if the scale is a random-walk (if yes - sample there, if no - more burn-in)
-
-    return likelihood, model_state
+    # log-likelihood is negative cross entropy
+    log_likelihood = -optax.softmax_cross_entropy_with_integer_labels(
+        logits, observations["label"])
+    return log_likelihood, model_state
 
 
 # def prior(sample):

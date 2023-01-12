@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 
 from jax import nn, tree_leaves, random, numpy as jnp
 import tensorflow as tf
@@ -84,17 +84,17 @@ def map_fn(batch, mask, carry):
     logits, _ = apply_resnet(params, init_resnet_state, None, first_batch)
     target_labels = jnp.array(first_batch['label'])
     mini_batch_state = first_batch_state
-    for i in range(validation_loader.static_information['observation_count'] // batch_size):
-    # for i in range(4):
+    # for i in range(validation_loader.static_information['observation_count'] // batch_size):
+    for i in range(6):
         mini_batch_state, mini_batch = val_batch_get(mini_batch_state)
         target_labels = jnp.concatenate([target_labels, jnp.array(mini_batch['label'])], axis=0)
         logits = jnp.concatenate([logits, apply_resnet(params, init_resnet_state, None, mini_batch)[0]], axis=0)
     return [logits, target_labels], carry + 1
 
 
-with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/results_iterations_100k_burn_in_10k_lr_5e7_prior_weight_decay', "r") as file:
+with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/results_small', "r") as file:
     postprocess_loader = HDF5Loader(
-        '/home/student/ana/jax-sgmc/examples/cifar100/results_iterations_100k_burn_in_10k_lr_5e7_prior_weight_decay',
+        '/home/student/ana/jax-sgmc/examples/cifar100/results_small',
         subdir="/chain~0/variables",
         sample=sample)
 
@@ -106,23 +106,29 @@ with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/results_iterations_
     import matplotlib.pyplot as plt
 
     results_np_array = onp.array(result[:, 1, :])
-    correct_count = 0
-    incorrect_count = 0
-    for i in range(250):
-        sliced_results = (onp.array(result[:, i, :]))
-        argmax_results = onp.argmax(sliced_results, axis=-1)
-        argmax_probabilities = scipy.special.softmax(sliced_results)
-        mean = onp.mean(result[:, i, :], axis=0)
-        # count, np_bins = np.histogram(argmax_results)
-        correct_count += onp.sum(argmax_results==target_labels_array[i])
-        incorrect_count += onp.sum(argmax_results!=target_labels_array[i])
-        # plt.hist(argmax_results, bins=np.arange(0, 10, 1))
-        # plt.show()
 
-    print("correct predictions: ", correct_count)
-    print("incorrect predictions: ", incorrect_count)
-    print("accuracy: ", correct_count/(correct_count+incorrect_count))
-    i = 0
+    accuracy = []
+    for i in range(result.shape[0]):
+        for j in range(result.shape[1]):
+            correct_count = 0
+            incorrect_count = 0
+            sliced_results = (onp.array(result[:, j, :]))
+            argmax_results = onp.argmax(sliced_results, axis=-1)
+            argmax_probabilities = scipy.special.softmax(sliced_results)
+            mean = onp.mean(result[:, j, :], axis=0)
+            correct_count += onp.sum(argmax_results==target_labels_array[i])
+            incorrect_count += onp.sum(argmax_results!=target_labels_array[i])
+            # plt.hist(argmax_results, bins=np.arange(0, 10, 1))
+            # plt.show()
+        accuracy.append(correct_count / (correct_count + incorrect_count))
+
+    plt.plot(accuracy)
+    plt.xlabel("num of sampled params")
+    plt.ylabel("accuracy")
+    plt.show()
+    # print("correct predictions: ", correct_count)
+    # print("incorrect predictions: ", incorrect_count)
+    # print("accuracy: ", correct_count/(correct_count+incorrect_count))
     # my_full_data_mapper, release = data.full_data_mapper(postprocess_loader, cached_batches_count=1, mb_size=1)
 
     # logits, _ = my_full_data_mapper(apply_resnet, (init_resnet_state, None, init_batch))

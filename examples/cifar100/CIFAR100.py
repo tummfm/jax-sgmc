@@ -22,6 +22,7 @@ import numpy as onp
 import optax
 import jax
 import jmp
+import tree_math
 import h5py
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
@@ -122,6 +123,13 @@ def likelihood(model_state, sample, observations):
 #     prior += jscipy.stats.norm.logpdf([p for ((mod_name, _), p) in tree_flatten(weights)
 #          if 'batchnorm' not in mod_name], 0, weight_decay)
 #     return prior
+
+prior_scale = 1.
+def gaussian_prior(sample):
+    params = tree_math.Vector(sample["w"])
+    log_pdf = tree_math.unwrap(jscipy.stats.norm.logpdf, vector_argnums=0)(
+        params, loc=0., scale=prior_scale)
+    return log_pdf.sum()
 
 
 def prior(sample):

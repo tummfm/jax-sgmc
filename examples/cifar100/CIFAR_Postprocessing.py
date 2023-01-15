@@ -6,12 +6,12 @@ import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 
-from jax import nn, tree_leaves, random, numpy as jnp
+from jax import nn, tree_leaves, random
 import tensorflow as tf
 import tensorflow_datasets
 import haiku as hk
 import numpy as onp
-from jax import lax, tree_map, tree_leaves, numpy as jnp
+from jax import lax, tree_map, tree_leaves, tree_flatten, numpy as jnp
 
 from jax_sgmc.data.hdf5_loader import HDF5Loader
 
@@ -40,27 +40,34 @@ validation_images, validation_labels = train_images[-10000:, :, :, :], train_lab
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
 
 validation_loader = DeviceNumpyDataLoader(image=validation_images, label=validation_labels)
+training_loader = DeviceNumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
+
 
 
 def init_resnet():
-    @hk.transform_with_state
-    def resnet(batch, is_training=True):
+    @hk.transform
+    def mobilenetv1(batch, is_training=True):
         images = batch["image"].astype(jnp.float32) / 255.
-        resnet50 = hk.nets.ResNet50(num_classes)
-        logits = resnet50(images, is_training=is_training)
+        # resnet50 = hk.nets.ResNet50(num_classes)
+        mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
+        # logits = resnet50(images, is_training=is_training)
+        logits = mobilenet(images, is_training=True)
         return logits
 
-    return resnet.init, resnet.apply
+    return mobilenetv1.init, mobilenetv1.apply
 
 
 validation_batch_fn = data.random_reference_data(validation_loader, cached_batches, batch_size)
+train_batch_fn = data.random_reference_data(training_loader, cached_batches, batch_size)
 
-batch_init, batch_get, batch_release = validation_batch_fn
-zeros_init_batch = validation_loader.initializer_batch(batch_size)
+# batch_init, batch_get, batch_release = validation_batch_fn
+batch_init, batch_get, batch_release = train_batch_fn
+# zeros_init_batch = validation_loader.initializer_batch(batch_size)
+zeros_init_batch = training_loader.initializer_batch(batch_size)
 _, batch_data = batch_get(batch_init(), information=True)
 init_batch, info_batch = batch_data
 init, apply_resnet = init_resnet()
-init_params, init_resnet_state = init(random.PRNGKey(0), init_batch)
+init_params = init(random.PRNGKey(0), init_batch)
 sample = {"w": init_params}
 
 # from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
@@ -70,10 +77,13 @@ sample = {"w": init_params}
 #                                          exclude_keys=['id'])
 
 
-val_batch_init, val_batch_get, val_release = data.random_reference_data(validation_loader, cached_batches, batch_size)
+# val_batch_init, val_batch_get, val_release = data.random_reference_data(validation_loader, cached_batches, batch_size)
+train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches, batch_size)
 
-temp = val_batch_init(shuffle=False, in_epochs=True)
-first_batch_state, first_batch_data = val_batch_get(temp, information=True)
+# temp = val_batch_init(shuffle=False, in_epochs=True)
+# first_batch_state, first_batch_data = val_batch_get(temp, information=True)
+temp = train_batch_init(shuffle=False, in_epochs=True)
+first_batch_state, first_batch_data = train_batch_get(temp, information=True)
 first_batch, first_info_batch = first_batch_data
 target_labels = np.empty([0, 0])
 
@@ -81,57 +91,56 @@ target_labels = np.empty([0, 0])
 def map_fn(batch, mask, carry):
     params = batch["w"]
     params = tree_map(lambda x: jnp.array(x[0]), params)
-    logits, _ = apply_resnet(params, init_resnet_state, None, first_batch)
+    logits = apply_resnet(params, None, first_batch)
     target_labels = jnp.array(first_batch['label'])
     mini_batch_state = first_batch_state
     # for i in range(validation_loader.static_information['observation_count'] // batch_size):
     for i in range(6):
-        mini_batch_state, mini_batch = val_batch_get(mini_batch_state)
+        mini_batch_state, mini_batch = train_batch_get(mini_batch_state)
         target_labels = jnp.concatenate([target_labels, jnp.array(mini_batch['label'])], axis=0)
-        logits = jnp.concatenate([logits, apply_resnet(params, init_resnet_state, None, mini_batch)[0]], axis=0)
+        logits = jnp.concatenate([logits, apply_resnet(params, None, mini_batch)], axis=0)
     return [logits, target_labels], carry + 1
 
+def view_samples_fn(batch, mask, carry):
+    params = batch["w"]
+    params = tree_flatten(params)
+    samples = params[0]
+    return samples, carry + 1
 
-with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/results_small', "r") as file:
+
+with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_50_samples', "r") as file:
     postprocess_loader = HDF5Loader(
-        '/home/student/ana/jax-sgmc/examples/cifar100/results_small',
+        '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_50_samples',
         subdir="/chain~0/variables",
         sample=sample)
 
     my_parameter_mapper, _ = data.full_data_mapper(postprocess_loader, 1, 1)
     out, _ = my_parameter_mapper(map_fn, 0, masking=True)
+    # weight_samples, _ = my_parameter_mapper(view_samples_fn, 0, masking=True) # not mapping correctly; obtaining only one set of weights here
+    # exit()
     result, target = out
     target_labels_array = onp.array(jnp.mean(target, axis=0))
-    import scipy
     import matplotlib.pyplot as plt
 
     results_np_array = onp.array(result[:, 1, :])
 
     accuracy = []
+
+    correct_count = 0
+    incorrect_count = 0
     for i in range(result.shape[0]):
-        for j in range(result.shape[1]):
-            correct_count = 0
-            incorrect_count = 0
-            sliced_results = (onp.array(result[:, j, :]))
-            argmax_results = onp.argmax(sliced_results, axis=-1)
-            argmax_probabilities = scipy.special.softmax(sliced_results)
-            mean = onp.mean(result[:, j, :], axis=0)
-            correct_count += onp.sum(argmax_results==target_labels_array[i])
-            incorrect_count += onp.sum(argmax_results!=target_labels_array[i])
-            # plt.hist(argmax_results, bins=np.arange(0, 10, 1))
-            # plt.show()
+        sliced_results = (onp.array(result[:i+1, :, :]))
+        argmax_results = onp.argmax(sliced_results, axis=-1)
+        for j in range(argmax_results.shape[1]):
+            correct_count += argmax_results[i][j]==int(target_labels_array[j])
+            incorrect_count += argmax_results[i][j]!=int(target_labels_array[j])
         accuracy.append(correct_count / (correct_count + incorrect_count))
 
     plt.plot(accuracy)
     plt.xlabel("num of sampled params")
     plt.ylabel("accuracy")
     plt.show()
-    # print("correct predictions: ", correct_count)
-    # print("incorrect predictions: ", incorrect_count)
-    # print("accuracy: ", correct_count/(correct_count+incorrect_count))
-    # my_full_data_mapper, release = data.full_data_mapper(postprocess_loader, cached_batches_count=1, mb_size=1)
-
-    # logits, _ = my_full_data_mapper(apply_resnet, (init_resnet_state, None, init_batch))
+    plt.savefig("accuracy_plot.png")
 
 exit()
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader

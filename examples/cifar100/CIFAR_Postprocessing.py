@@ -19,6 +19,9 @@ physical_devices = tf.config.experimental.list_physical_devices('GPU')
 assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
 config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
+CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
+CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
+
 batch_size = 64
 cached_batches = 1
 num_classes = 10
@@ -47,7 +50,7 @@ training_loader = DeviceNumpyDataLoader(image=train_images[:-10000, :, :, :], la
 def init_resnet():
     @hk.transform
     def mobilenetv1(batch, is_training=True):
-        images = batch["image"].astype(jnp.float32) / 255.
+        images = (batch["image"].astype(jnp.float32) - CIFAR10_MEAN) / CIFAR10_STD
         # resnet50 = hk.nets.ResNet50(num_classes)
         mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
         # logits = resnet50(images, is_training=is_training)
@@ -102,7 +105,7 @@ def map_fn(batch, mask, carry):
         logits = jnp.concatenate([logits, apply_resnet(params, None, mini_batch)], axis=0)
     return [logits, target_labels], carry + 1
 
-filepath = '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_4'
+filepath = '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_5'
 with h5py.File(filepath, "r") as file:
     postprocess_loader = HDF5Loader(
         filepath,
@@ -133,7 +136,7 @@ with h5py.File(filepath, "r") as file:
     plt.xlabel("num of sampled params")
     plt.ylabel("accuracy")
     plt.show()
-    plt.savefig("accuracy_plot_mobilenet_2.png")
+    plt.savefig("accuracy_plot_mobilenet_5.png")
 
 exit()
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader

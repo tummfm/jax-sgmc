@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
 
 from jax import nn, tree_leaves, random
 import tensorflow as tf
@@ -95,29 +95,22 @@ def map_fn(batch, mask, carry):
     target_labels = jnp.array(first_batch['label'])
     mini_batch_state = first_batch_state
     # for i in range(validation_loader.static_information['observation_count'] // batch_size):
-    for i in range(6):
+    for i in range(training_loader.static_information['observation_count'] // batch_size):
+    # for i in range(6):
         mini_batch_state, mini_batch = train_batch_get(mini_batch_state)
         target_labels = jnp.concatenate([target_labels, jnp.array(mini_batch['label'])], axis=0)
         logits = jnp.concatenate([logits, apply_resnet(params, None, mini_batch)], axis=0)
     return [logits, target_labels], carry + 1
 
-def view_samples_fn(batch, mask, carry):
-    params = batch["w"]
-    params = tree_flatten(params)
-    samples = params[0]
-    return samples, carry + 1
-
-
-with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_50_samples', "r") as file:
+filepath = '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_4'
+with h5py.File(filepath, "r") as file:
     postprocess_loader = HDF5Loader(
-        '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_50_samples',
+        filepath,
         subdir="/chain~0/variables",
         sample=sample)
 
     my_parameter_mapper, _ = data.full_data_mapper(postprocess_loader, 1, 1)
     out, _ = my_parameter_mapper(map_fn, 0, masking=True)
-    # weight_samples, _ = my_parameter_mapper(view_samples_fn, 0, masking=True) # not mapping correctly; obtaining only one set of weights here
-    # exit()
     result, target = out
     target_labels_array = onp.array(jnp.mean(target, axis=0))
     import matplotlib.pyplot as plt
@@ -140,7 +133,7 @@ with h5py.File('/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_50_sample
     plt.xlabel("num of sampled params")
     plt.ylabel("accuracy")
     plt.show()
-    plt.savefig("accuracy_plot.png")
+    plt.savefig("accuracy_plot_mobilenet_2.png")
 
 exit()
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader

@@ -10,7 +10,7 @@ from typing import Iterable, Mapping, NamedTuple, Tuple
 
 import tree
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 
 from jax import jit, nn, pmap, grad, tree_util, tree_leaves, tree_flatten, tree_map, lax, random, numpy as jnp, \
     scipy as jscipy
@@ -37,14 +37,20 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 # os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)  # controls on which gpu the program runs
 
 ## Configuration parameters
-batch_size = 128
+
 cached_batches = 1
 num_classes = 10
 weight_decay = 5.e-4
-deterministic_weight_decay = 1e-4
-train_smoothing = 0.1
-eval_batch_size = 1000
-train_epochs = 90
+
+# parameters
+iterations = int(1e+6)
+batch_size = 128
+burn_in_size = int(1e+5)
+lr_first = 5e-7
+lr_last = 5e-8
+
+CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
+CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
 
 ## Load dataset
 (train_images, train_labels), (test_images, test_labels) = \
@@ -79,7 +85,8 @@ test_init_state, test_init_batch = test_batch_get(test_batch_init(), information
 def init_mobilenet():
     @hk.transform
     def mobilenetv1(batch, is_training=True):
-        images = batch["image"].astype(jnp.float32) / 255.
+        # images = batch["image"].astype(jnp.float32) / 255.
+        images = (batch["image"].astype(jnp.float32) - CIFAR10_MEAN) / CIFAR10_STD
         mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
         logits = mobilenet(images, is_training=True)
         return logits
@@ -95,13 +102,6 @@ logits = apply_mobilenet(init_params, None, init_batch)
 
 
 # Initialize potential with log-likelihood
-# TODO logits are zeros everywhere, this does not seem correct, because input
-#  batch is a proper image. Make sure this is not the case any more  after
-#  switching to MobileNet
-
-# TODO the likelihood had to process a batch of data before due to batchnorm.
-#  Without batchnorm, we could also go the standard way and only run the model
-#  for a single input, and let jax-sgmc deal with the batching.
 def likelihood(sample, observations):
     logits = apply_mobilenet(sample["w"], None, observations)
     # log-likelihood is negative cross entropy
@@ -134,9 +134,7 @@ _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
 
 
-# Setup Integrator
-# Number of iterations: Ca. 0.035 seconds per iteration (including saving)
-iterations = 10000
+
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
@@ -144,12 +142,12 @@ rms_integrator = integrator.langevin_diffusion(potential_fn,
                                                rms_prop)
 
 # Schedulers
-rms_step_size = scheduler.polynomial_step_size_first_last(first=5e-7,
+rms_step_size = scheduler.polynomial_step_size_first_last(first=lr_first,
                                                           # a good starting point is 1e-3, start sampling at 1e-6
-                                                          last=5e-8)
+                                                          last=lr_last)
 
 burn_in = scheduler.initial_burn_in(
-    5000)  # large burn-in: if you need 100k for deterministic training, then 200k burn-in
+    burn_in_size)  # large burn-in: if you need 100k for deterministic training, then 200k burn-in
 
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
 rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 50)
@@ -158,7 +156,7 @@ rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
                                          thinning=rms_random_thinning)
 
-with h5py.File('mobilenet_50_samples', "w") as file:
+with h5py.File('mobilenet_5', "w") as file:
     data_collector = io.HDF5Collector(file)
     saving = io.save(data_collector)
 

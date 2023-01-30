@@ -10,7 +10,7 @@ from typing import Iterable, Mapping, NamedTuple, Tuple
 
 import tree
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 
 from jax import jit, nn, pmap, grad, tree_util, tree_leaves, tree_flatten, tree_map, lax, random, numpy as jnp, \
     scipy as jscipy
@@ -46,6 +46,9 @@ train_smoothing = 0.1
 eval_batch_size = 1000
 train_epochs = 90
 
+CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
+CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
+
 ## Load dataset
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
@@ -80,9 +83,9 @@ test_init_state, test_init_batch = test_batch_get(test_batch_init(), information
 def init_resnet():
     @hk.transform_with_state
     def resnet(batch, is_training=True):
-        images = batch["image"].astype(jnp.float32) / 255.
+        # images = batch["image"].astype(jnp.float32) / 255.
+        images = (batch["image"].astype(jnp.float32) - CIFAR10_MEAN) / CIFAR10_STD
         resnet50 = hk.nets.ResNet50(num_classes)
-        # resnet50 = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
         logits = resnet50(images, is_training=is_training)
         return logits
 

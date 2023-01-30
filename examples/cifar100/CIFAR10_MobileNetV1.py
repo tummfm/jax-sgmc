@@ -128,13 +128,10 @@ def prior(sample):
 potential_fn = potential.minibatch_potential(prior=prior,
                                              likelihood=likelihood,
                                              is_batched=True,
-                                             strategy='vmap')  # or change to pmap
+                                             strategy='vmap', # or change to pmap
+                                             temperature=0.01)
 sample = {"w": init_params, "std": jnp.array([1.0])}
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
-
-
-
-
 
 rms_prop = adaption.rms_prop()
 rms_integrator = integrator.langevin_diffusion(potential_fn,
@@ -146,8 +143,7 @@ rms_step_size = scheduler.polynomial_step_size_first_last(first=lr_first,
                                                           # a good starting point is 1e-3, start sampling at 1e-6
                                                           last=lr_last)
 
-burn_in = scheduler.initial_burn_in(
-    burn_in_size)  # large burn-in: if you need 100k for deterministic training, then 200k burn-in
+burn_in = scheduler.initial_burn_in(burn_in_size)  # large burn-in: if you need 100k for deterministic training, then 200k burn-in
 
 # Has ca. 23.000.000 parameters, so not more than 500 samples fit into RAM
 rms_random_thinning = scheduler.random_thinning(rms_step_size, burn_in, 50)
@@ -156,7 +152,7 @@ rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
                                          thinning=rms_random_thinning)
 
-with h5py.File('mobilenet_5', "w") as file:
+with h5py.File('mobilenet_6', "w") as file:
     data_collector = io.HDF5Collector(file)
     saving = io.save(data_collector)
 

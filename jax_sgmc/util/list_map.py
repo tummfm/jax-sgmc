@@ -34,8 +34,8 @@ def pytree_list_to_leaves(pytrees):
     >>>
     >>> concat_tree = lm.pytree_list_to_leaves([tree_a, tree_b])
     >>> print(concat_tree)
-    {'a': DeviceArray([0., 1.], dtype=float32, weak_type=True), 'b': DeviceArray([[0., 0.],
-                 [1., 1.]], dtype=float32)}
+    {'a': Array([0., 1.], dtype=float32, weak_type=True), 'b': Array([[0., 0.],
+           [1., 1.]], dtype=float32)}
 
 
   Args:
@@ -73,7 +73,7 @@ def pytree_leaves_to_list(pytree):
     >>>
     >>> tree_list = lm.pytree_leaves_to_list(tree)
     >>> print(tree_list)
-    [{'a': DeviceArray(0., dtype=float32), 'b': DeviceArray([0., 0.], dtype=float32)}, {'a': DeviceArray(1., dtype=float32), 'b': DeviceArray([0., 0.], dtype=float32)}]
+    [{'a': Array(0., dtype=float32), 'b': Array([0., 0.], dtype=float32)}, {'a': Array(1., dtype=float32), 'b': Array([0., 0.], dtype=float32)}]
 
 
   Args:
@@ -109,7 +109,7 @@ def list_vmap(fun):
     ...   return tree_map(jnp.subtract, pytree, tree_b)
     >>>
     >>> print(tree_add(tree_a, tree_b))
-    [{'a': DeviceArray(-1., dtype=float32, weak_type=True), 'b': DeviceArray([-1., -1.], dtype=float32)}, {'a': DeviceArray(0., dtype=float32, weak_type=True), 'b': DeviceArray([0., 0.], dtype=float32)}]
+    [{'a': Array(-1., dtype=float32, weak_type=True), 'b': Array([-1., -1.], dtype=float32)}, {'a': Array(0., dtype=float32, weak_type=True), 'b': Array([0., 0.], dtype=float32)}]
 
   Args:
     fun: Function accepting a single pytree as first argument.

@@ -1,33 +1,20 @@
-import contextlib
-import logging
+import sys
 import time
-import timeit
-
-import functools
 import os
 
-from typing import Iterable, Mapping, NamedTuple, Tuple
-
-import tree
-# os.environ["XLA_FLAGS"] = '--xla_gpu_strict_conv_algorithm_picker=false'
 os.environ["CUDA_VISIBLE_DEVICES"] = str('3')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
-from jax import jit, nn, pmap, grad, tree_util, tree_map, lax, random, numpy as jnp, \
-    scipy as jscipy, value_and_grad
-from jax.tree_util import tree_leaves, tree_flatten
+from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import haiku as hk
-import numpy as onp
 import optax
-import jax
-import jmp
 import tree_math
 import h5py
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
-from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
+from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
@@ -38,9 +25,9 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 #     visible_device = 3
 # os.environ["CUDA_VISIBLE_DEVICES"] = str(visible_device)  # controls on which gpu the program runs
 
-## Configuration parameters
+# Configuration parameters
 
-cached_batches = 1
+cached_batches = 10
 num_classes = 10
 weight_decay = 5.e-4
 
@@ -67,11 +54,12 @@ train_dataset, test_dataset = dataset
 train_loader = TensorflowDataLoader(train_dataset,
                                     shuffle_cache=1000,
                                     exclude_keys=['id'])
+train_batch_fn = data.random_reference_data(train_loader, cached_batches,
+                                            batch_size)
 
 # ana: test data not needed here, but keeping the code nonetheless
-test_loader = DeviceNumpyDataLoader(image=test_images, label=test_labels)
-train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
-test_batch_init, test_batch_get, test_release = data.core.random_reference_data(test_loader, cached_batches, batch_size)
+test_loader = NumpyDataLoader(image=test_images, label=test_labels)
+test_batch_init, test_batch_get, test_release = data.random_reference_data(test_loader, cached_batches, batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
@@ -79,7 +67,7 @@ train_batch_init, train_batch_get, _ = train_batch_fn
 
 init_train_data_state = train_batch_init()
 
-zeros_init_batch = train_loader.initializer_batch(batch_size)  # ana: it doesn't help if I change this to ones
+# zeros_init_batch = train_loader.initializer_batch(batch_size)
 batch_state, batch_data = train_batch_get(init_train_data_state, information=True)
 init_batch, info_batch = batch_data
 test_init_state, test_init_batch = test_batch_get(test_batch_init(), information=True)
@@ -145,7 +133,7 @@ if max_likelihood:
 
         if i % 1 == 0:
             print(f'Loss at iteration {i}: {loss}')
-
+    sys.exit()
 
 prior_scale = 1.
 def gaussian_prior(sample):

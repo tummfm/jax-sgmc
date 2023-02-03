@@ -9,11 +9,13 @@ import os
 from typing import Iterable, Mapping, NamedTuple, Tuple
 
 import tree
+# os.environ["XLA_FLAGS"] = '--xla_gpu_strict_conv_algorithm_picker=false'
+os.environ["CUDA_VISIBLE_DEVICES"] = str('3')  # needs to stay before importing jax
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
-
-from jax import jit, nn, pmap, grad, tree_util, tree_leaves, tree_flatten, tree_map, lax, random, numpy as jnp, \
-    scipy as jscipy
+from jax import jit, nn, pmap, grad, tree_util, tree_map, lax, random, numpy as jnp, \
+    scipy as jscipy, value_and_grad
+from jax.tree_util import tree_leaves, tree_flatten
 from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -52,16 +54,16 @@ lr_last = 5e-8
 CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
 CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
 
-## Load dataset
+# Load dataset
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
-train_dataset, train_info = tfds.load('Cifar10',
-                                      split=['train[:70%]', 'test[70%:]'],
-                                      with_info=True)
-train_dataset, validation_dataset = train_dataset
+dataset, train_info = tfds.load('Cifar10',
+                                split=['train[:70%]', 'test[70%:]'],
+                                with_info=True)
+train_dataset, test_dataset = dataset
 train_loader = TensorflowDataLoader(train_dataset,
                                     shuffle_cache=1000,
                                     exclude_keys=['id'])
@@ -73,20 +75,23 @@ test_batch_init, test_batch_get, test_release = data.core.random_reference_data(
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
-batch_init, batch_get, batch_release = train_batch_fn
+train_batch_init, train_batch_get, _ = train_batch_fn
+
+init_train_data_state = train_batch_init()
 
 zeros_init_batch = train_loader.initializer_batch(batch_size)  # ana: it doesn't help if I change this to ones
-batch_state, batch_data = batch_get(batch_init(), information=True)
+batch_state, batch_data = train_batch_get(init_train_data_state, information=True)
 init_batch, info_batch = batch_data
 test_init_state, test_init_batch = test_batch_get(test_batch_init(), information=True)
 
 
 # MobileNet Model
 def init_mobilenet():
+    @hk.without_apply_rng
     @hk.transform
-    def mobilenetv1(batch, is_training=True):
-        # images = batch["image"].astype(jnp.float32) / 255.
-        images = (batch["image"].astype(jnp.float32) - CIFAR10_MEAN) / CIFAR10_STD
+    def mobilenetv1(batch):
+        # images = batch["image"].astype(jnp.float32) / 255.  # TODO dont we need to still divide by 255?
+        images = (batch["image"].astype(jnp.float32) / 255. - CIFAR10_MEAN) / CIFAR10_STD
         mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
         logits = mobilenet(images, is_training=True)
         return logits
@@ -95,19 +100,52 @@ def init_mobilenet():
 
 
 init, apply_mobilenet = init_mobilenet()
+apply_mobilenet = jit(apply_mobilenet)
 init_params = init(random.PRNGKey(0), init_batch)
 
 # sanity-check prediction
-logits = apply_mobilenet(init_params, None, init_batch)
+logits = apply_mobilenet(init_params, init_batch)
 
 
 # Initialize potential with log-likelihood
 def likelihood(sample, observations):
-    logits = apply_mobilenet(sample["w"], None, observations)
+    logits = apply_mobilenet(sample["w"], observations)
     # log-likelihood is negative cross entropy
     log_likelihood = -optax.softmax_cross_entropy_with_integer_labels(
         logits, observations["label"])
     return log_likelihood
+
+
+max_likelihood = True
+if max_likelihood:
+    # loss is negative log_likelihood
+    def loss_fn(params, batch):
+        logits = apply_mobilenet(params, batch)
+        cross_entropies = optax.softmax_cross_entropy_with_integer_labels(
+            logits, batch["label"])
+        return jnp.mean(cross_entropies)
+
+
+    lr_schedule = optax.exponential_decay(-0.001, iterations, 0.1)
+    optimizer = optax.chain(
+        optax.scale_by_adam(),
+        optax.scale_by_schedule(lr_schedule)
+    )
+
+    params = init_params
+    train_data_state = init_train_data_state
+    opt_state = optimizer.init(init_params)
+    for i in range(iterations):
+        train_data_state, batch = train_batch_get(train_data_state,
+                                                  information=False)
+
+        loss, grad = value_and_grad(loss_fn)(params, batch)
+        scaled_grad, opt_state = optimizer.update(grad, opt_state)
+        params = optax.apply_updates(params, scaled_grad)
+
+        if i % 1 == 0:
+            print(f'Loss at iteration {i}: {loss}')
+
 
 prior_scale = 1.
 def gaussian_prior(sample):

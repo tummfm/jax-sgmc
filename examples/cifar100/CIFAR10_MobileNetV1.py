@@ -2,7 +2,7 @@ import sys
 import time
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('3')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad
@@ -17,8 +17,9 @@ from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
-assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
+# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+# config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
+
 # if len(sys.argv) > 1:
 #     visible_device = str(sys.argv[1])
 # else:

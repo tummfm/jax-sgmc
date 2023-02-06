@@ -249,14 +249,14 @@ class CacheState(NamedTuple):
     state: Additional information
     valid: Array containing information about the validity of individual samples
   """
-  callback_uuid: Array = None
+  callback_uuid: JaxUUID = None
   cached_batches: PyTree = None
   cached_batches_count: Array = None
   current_line: Array = None
   chain_id: Array = None
   state: PyTree = None
   valid: Array = None
-  token: Array = None
+  token: JaxUUID = None
 
 random_data_state = CacheState
 

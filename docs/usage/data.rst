@@ -38,7 +38,7 @@ an all-zero batch can be drawn from every Data Loader.
   ::
 
     print(data_loader.initializer_batch(3))
-    {'x_r': DeviceArray([0, 0, 0], dtype=int32), 'y_r': DeviceArray([[0., 0.],
+    {'x_r': Array([0, 0, 0], dtype=int32), 'y_r': Array([[0., 0.],
                  [0., 0.],
                  [0., 0.]], dtype=float32)}
 
@@ -48,7 +48,7 @@ shapes are reduced by the first axis).
   ::
 
     print(data_loader.initializer_batch())
-    {'x_r': DeviceArray(0, dtype=int32), 'y_r': DeviceArray([0., 0.], dtype=float32)}
+    {'x_r': Array(0, dtype=int32), 'y_r': Array([0., 0.], dtype=float32)}
 
 Combining ``pmap`` and ``jit``
 ______________________________
@@ -114,11 +114,11 @@ the init function to determine the starting points of the chains.
   >>> rd_state = rd_init(seed=0)
   >>> new_state, (rd_batch, info) = rd_batch(rd_state, information=True)
   >>> print(rd_batch)
-  {'x_r': DeviceArray([8, 9], dtype=int32), 'y_r': DeviceArray([[0., 0.],
-               [0., 0.]], dtype=float32)}
+  {'x_r': Array([8, 9], dtype=int32), 'y_r': Array([[0., 0.],
+         [0., 0.]], dtype=float32)}
   >>> # If necessary, information about the total sample count can be passed
   >>> print(info)
-  MiniBatchInformation(observation_count=10, mask=DeviceArray([ True,  True], dtype=bool), batch_size=2)
+  MiniBatchInformation(observation_count=10, mask=Array([ True,  True], dtype=bool), batch_size=2)
 
 
 Random Data Access
@@ -160,11 +160,11 @@ In the fourth draw, the epoch chain should return a mask with invalid samples:
   ...   print(batch)
   >>>
   >>> eval_fn(random_chain)
-  ({'x': DeviceArray([4, 6, 6], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True,  True,  True], dtype=bool), batch_size=3))
+  ({'x': Array([4, 6, 6], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=Array([ True,  True,  True], dtype=bool), batch_size=3))
   >>> eval_fn(shuffle_chain)
-  ({'x': DeviceArray([0, 4, 7], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True,  True,  True], dtype=bool), batch_size=3))
+  ({'x': Array([0, 4, 7], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=Array([ True,  True,  True], dtype=bool), batch_size=3))
   >>> eval_fn(epoch_chain)
-  ({'x': DeviceArray([5, 0, 0], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=DeviceArray([ True, False, False], dtype=bool), batch_size=3))
+  ({'x': Array([5, 0, 0], dtype=int32)}, MiniBatchInformation(observation_count=10, mask=Array([ True, False, False], dtype=bool), batch_size=3))
 
 
 Mapping over Full Dataset
@@ -302,9 +302,9 @@ via the keyword argument `exclude_keys`.
   ...   pipeline, info = tfds.load("cifar10", split="train", with_info=True)
   >>> print(info.features)
   FeaturesDict({
-      'id': Text(shape=(), dtype=tf.string),
-      'image': Image(shape=(32, 32, 3), dtype=tf.uint8),
-      'label': ClassLabel(shape=(), dtype=tf.int64, num_classes=10),
+      'id': Text(shape=(), dtype=string),
+      'image': Image(shape=(32, 32, 3), dtype=uint8),
+      'label': ClassLabel(shape=(), dtype=int64, num_classes=10),
   })
   >>>
   >>> data_loader = TensorflowDataLoader(pipeline, shuffle_cache=10, exclude_keys=['id'])

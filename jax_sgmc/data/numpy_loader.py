@@ -51,12 +51,15 @@ class NumpyBase(DataLoader):
       else:
         self._reference_data[name] = onp.array(array, copy=copy)
 
-    # Check same number of observations
-    if onp.any(onp.array(observation_counts) != observation_counts[0]):
-      raise ValueError("All reference_data arrays must have the same length "
-                       "in the first dimension.")
+    if len(observation_counts) != 0:
+      # Check same number of observations
+      if onp.any(onp.array(observation_counts) != observation_counts[0]):
+        raise ValueError("All reference_data arrays must have the same length "
+                         "in the first dimension.")
 
-    self._observation_count = observation_counts[0]
+      self._observation_count = observation_counts[0]
+    else:
+      self._observation_count = 0
 
   @property
   def _format(self):

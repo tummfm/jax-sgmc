@@ -6,7 +6,7 @@ import itertools
 import jax
 import jax.numpy as jnp
 
-from jax import random, jit, test_util, lax
+from jax import random, jit, lax
 
 import pytest
 
@@ -14,6 +14,7 @@ import pytest
 from jax_sgmc.potential import minibatch_potential, full_potential
 from jax_sgmc.data import MiniBatchInformation, full_reference_data
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
+from jax_sgmc.util import testing
 
 # Todo: Test the potential evaluation function on arbitrary pytrees.
 
@@ -86,8 +87,8 @@ class TestPotential():
     vmap_result, _ = vmap_pot(sample, reference_data)
     # pmap_result, _ = pmap_pot(sample, reference_data)
 
-    test_util.check_close(scan_result, true_result)
-    test_util.check_close(vmap_result, true_result)
+    testing.assert_close(scan_result, true_result)
+    testing.assert_close(vmap_result, true_result)
     # test_util.check_close(pmap_result, true_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
@@ -116,8 +117,8 @@ class TestPotential():
     vmap_result, _ = vmap_pot(sample, reference_data)
     # pmap_result, _ = pmap_pot(sample, reference_data)
 
-    test_util.check_close(scan_result, zero_array)
-    test_util.check_close(vmap_result, zero_array)
+    testing.assert_equal(scan_result, zero_array)
+    testing.assert_equal(vmap_result, zero_array)
     # test_util.check_close(pmap_result, zero_array)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
@@ -147,8 +148,8 @@ class TestPotential():
     vmap_result, _ = vmap_pot(sample, reference_data)
     # pmap_result, _ = pmap_pot(sample, reference_data)
 
-    test_util.check_close(scan_result, zero_array)
-    test_util.check_close(vmap_result, zero_array)
+    testing.assert_equal(scan_result, zero_array)
+    testing.assert_equal(vmap_result, zero_array)
     # test_util.check_close(pmap_result, zero_array)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
@@ -176,7 +177,7 @@ class TestPotential():
     vmap_result, _ = vmap_pot(sample, reference_data)
     # pmap_result, _ = pmap_pot(sample, reference_data)
 
-    test_util.check_close(scan_result, vmap_result)
+    testing.assert_close(scan_result, vmap_result)
     # test_util.check_close(scan_result, pmap_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
@@ -213,7 +214,7 @@ class TestPotential():
     vmap_result, _ = vmap_grad(sample, reference_data)
     # pmap_result, _ = pmap_grad(sample, reference_data)
 
-    test_util.check_close(scan_result, vmap_result)
+    testing.assert_close(scan_result, vmap_result)
     # test_util.check_close(scan_result, pmap_result)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
@@ -257,8 +258,8 @@ class TestPotential():
     print(vmap_result)
     # print(pmap_result)
 
-    test_util.check_close(scan_result, zero_gradient)
-    test_util.check_close(vmap_result, zero_gradient)
+    testing.assert_equal(scan_result, zero_gradient)
+    testing.assert_equal(vmap_result, zero_gradient)
     # test_util.check_close(pmap_result, zero_gradient)
 
   @pytest.mark.parametrize("obs, dim", itertools.product([7, 11], [3, 5]))
@@ -290,8 +291,8 @@ class TestPotential():
     print(init_state)
     print(new_state_map)
 
-    test_util.check_close(new_state_map, sample)
-    test_util.check_close(new_state_vmap, sample)
+    testing.assert_close(new_state_map, sample)
+    testing.assert_close(new_state_vmap, sample)
     # test_util.check_close(new_state_pmap, sample)
 
   @pytest.mark.parametrize("obs, dim, mbsize", itertools.product([7, 11], [3, 5], [2, 3]))
@@ -328,8 +329,8 @@ class TestPotential():
     map_sol, _ = map_pot(sample, map_data_state, full_data_map[1])
     vmap_sol, _ = vmap_pot(sample, vmap_data_state, full_data_map[1])
 
-    test_util.check_close(reference_sol, map_sol)
-    test_util.check_close(reference_sol, vmap_sol)
+    testing.assert_close(reference_sol, map_sol)
+    testing.assert_close(reference_sol, vmap_sol)
 
   @pytest.mark.parametrize("obs, dim, mbsize", itertools.product([7, 11], [3, 5], [2, 3]))
   def test_variance(self, potential, obs, dim, mbsize):
@@ -363,4 +364,4 @@ class TestPotential():
     _, (lkls, _) = scan_pot(sample, reference_data, likelihoods=True)
     variance = jnp.var(lkls)
 
-    test_util.check_close(variance, true_variance)
+    testing.assert_close(variance, true_variance)

@@ -211,7 +211,7 @@ def sgmc(integrator) -> Tuple[Callable, Callable, Callable]:
     # No statistics such as acceptance ratio
     return update_integrator(state, schedule), None
 
-  def get(state):
+  def get(state) -> Dict[str, PyTree]:
     return get_integrator(state)
 
   return init, update, get
@@ -293,7 +293,7 @@ def parallel_tempering(integrator,
     return (normal_chain, hot_chain, ssq_estimate, F, step, key), None
 
   # Return only the results of the normally tempered chain
-  def get(state):
+  def get(state) -> Dict[str, PyTree]:
     return get_integrator(state[0])
 
   return init, update, get
@@ -423,7 +423,7 @@ def amagold(integrator_fn,
 
     return new_state, stats
 
-  def get(state: AMAGOLDState) -> Dict:
+  def get(state: AMAGOLDState) -> Dict[str, PyTree]:
     int_dict = get_integrator(state.integrator_state)
     int_dict['acceptance_ratio'] = state.acceptance_ratio[0]
     int_dict['step_size'] = state.acceptance_ratio[1]
@@ -566,7 +566,7 @@ def sggmc(integrator_fn,
 
     return new_state, stats
 
-  def get(state: SGGMCState) -> Dict:
+  def get(state: SGGMCState) -> Dict[str, PyTree]:
     int_dict = get_integrator(state.integrator_state)
     int_dict['acceptance_ratio'] = state.acceptance_ratio[0]
     int_dict['step_size'] = state.acceptance_ratio[1]

@@ -1,12 +1,13 @@
 """Test io module. """
 from functools import partial
 
-from jax import random, jit, pmap, vmap, lax, tree_map, test_util
+from jax import random, jit, pmap, vmap, lax, tree_map
 import jax.numpy as jnp
 
 import pytest
 
 from jax_sgmc import io, scheduler, util
+from jax_sgmc.util import testing
 
 class TestDictTransformation:
   pass
@@ -96,7 +97,7 @@ class TestSaving:
 
     # Check close
 
-    test_util.check_close(no_save_results, reference_solution)
+    testing.assert_equal(no_save_results, reference_solution)
 
   def test_save(self, test_function):
     """Test saving by running save against no_save and direct output on random
@@ -130,7 +131,7 @@ class TestSaving:
 
     # Check close
 
-    test_util.check_close(save_results, reference_solution)
+    testing.assert_equal(save_results, reference_solution)
 
   @pytest.mark.skip
   def test_save_vmap(self, test_function):
@@ -176,4 +177,4 @@ class TestSaving:
 
     # Check close
 
-    test_util.check_close(save_results, reference_solution)
+    testing.assert_equal(save_results, reference_solution)

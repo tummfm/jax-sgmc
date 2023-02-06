@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61"]   # PEP 508 specifications.
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax-sgmc"
+version = "0.1.1"
+authors = [
+    {name = "Paul Fuchs", email = "paul.fuchs@tum.de"},
+    {name = "Stephan Thaler", email = "stephan.thaler@tum.de"},
+]
+description = "Stochastic Gradient Monte Carlo in Jax"
+readme = "README.md"
+license = {"text" = "Apache-2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers"
+]
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "jax >= 0.1.73",
+    "jaxlib >= 0.1.52",
+    "dataclasses",
+]
+
+[project.urls]
+"Documentation" = "https://jax-sgmc.readthedocs.io/en/latest/"
+"Source" = "https://github.com/tummfm/jax-sgmc"
+"Bug Tracker" = "https://github.com/tummfm/jax-sgmc/issues"
+
+[project.optional-dependencies]
+"tensorflow" = [
+    "tensorflow",
+    "tensorflow_datasets",
+]
+"test" = [
+    "pylint",
+    "pytest",
+    "pytest-mock",
+]
+"docs" = [
+    "sphinx >= 3",
+    "sphinx_rtd_theme",
+    "sphinx-autodoc-typehints == 1.11.1",
+    "myst-nb",
+    "numpyro",
+    "matplotlib",
+    "h5py",
+    "tensorflow",
+    "tensorflow_datasets"
+]
+
+[tool.setuptools.packages]
+find = {namespaces = false}

@@ -95,7 +95,8 @@ def minibatch_potential(prior: Prior,
                         likelihood: Callable,
                         strategy: AnyStr = "map",
                         has_state: bool = False,
-                        is_batched: bool = False) -> StochasticPotential:
+                        is_batched: bool = False,
+                        temperature: float = 1.) -> StochasticPotential:
   """Initializes the potential function for a minibatch of data.
 
   Args:
@@ -115,6 +116,7 @@ def minibatch_potential(prior: Prior,
     is_batched: If likelihood expects a batch of observations instead of a
       single observation. If the likelihood is batched, choosing the strategy
       has no influence on the computation.
+    temperature: Posterior temperature. T = 1 is the Bayesian posterior.
 
   Returns:
     Returns a function which evaluates the stochastic potential for a mini-batch
@@ -205,10 +207,11 @@ def minibatch_potential(prior: Prior,
 
     if likelihoods:
       return (
-        jnp.squeeze(batch_likelihood - prior_value),
+        jnp.squeeze(batch_likelihood - prior_value) / temperature,
         (observation_likelihoods, new_state))
     else:
-      return jnp.squeeze(batch_likelihood - prior_value), new_state
+      return (jnp.squeeze(batch_likelihood - prior_value) / temperature,
+              new_state)
 
   return potential_function
 
@@ -216,8 +219,9 @@ def minibatch_potential(prior: Prior,
 def full_potential(prior: Callable[[PyTree], Array],
                    likelihood: Callable[[PyTree, PyTree], Array],
                    strategy: AnyStr = "map",
-                   has_state = False,
-                   is_batched = False
+                   has_state: bool = False,
+                   is_batched: bool = False,
+                   temperature: float = 1.,
                    ) -> FullPotential:
   """Transforms a pdf to compute the full potential over all reference data.
 
@@ -240,6 +244,7 @@ def full_potential(prior: Callable[[PyTree], Array],
       has no influence on the computation. In this case, the last argument of
       the likelihood should be an optional mask. The mask is an arrays with ones
       for valid observations and zeros for non-valid observations.
+    temperature: Posterior temperature. T = 1 is the Bayesian posterior.
 
   Returns:
     Returns a function which evaluates the potential over the full dataset via
@@ -282,6 +287,7 @@ def full_potential(prior: Callable[[PyTree], Array],
     # The prior needs just a single evaluation
     prior_eval = prior(sample)
 
-    return jnp.squeeze(jnp.sum(results) - prior_eval), (data_state, new_state)
+    return (jnp.squeeze(jnp.sum(results) - prior_eval) / temperature,
+            (data_state, new_state))
 
   return sum_batched_evaluations

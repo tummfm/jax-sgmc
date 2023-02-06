@@ -13,6 +13,7 @@ import haiku as hk
 import optax
 import tree_math
 import h5py
+import matplotlib.pyplot as plt
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
@@ -45,6 +46,11 @@ CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
 # Load dataset
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
+
+import numpy as np
+train_images = np.true_divide(train_images, 255, dtype=np.float32)
+train_mean = np.mean(train_images, axis=(0,1,2))
+train_std = np.std(train_images, axis=(0,1,2))
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
@@ -79,8 +85,7 @@ def init_mobilenet():
     @hk.without_apply_rng
     @hk.transform
     def mobilenetv1(batch):
-        # images = batch["image"].astype(jnp.float32) / 255.  # TODO dont we need to still divide by 255?
-        images = (batch["image"].astype(jnp.float32) / 255. - CIFAR10_MEAN) / CIFAR10_STD
+        images = jnp.true_divide((batch["image"].astype(jnp.float32) - train_mean), train_std)
         mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
         logits = mobilenet(images, is_training=True)
         return logits
@@ -124,7 +129,8 @@ if max_likelihood:
     params = init_params
     train_data_state = init_train_data_state
     opt_state = optimizer.init(init_params)
-    for i in range(iterations):
+    loss_list = []
+    for i in range(2000):
         train_data_state, batch = train_batch_get(train_data_state,
                                                   information=False)
 
@@ -133,7 +139,11 @@ if max_likelihood:
         params = optax.apply_updates(params, scaled_grad)
 
         if i % 1 == 0:
+            loss_list.append(loss)
             print(f'Loss at iteration {i}: {loss}')
+    plt.plot(loss_list)
+    plt.savefig('mobilenet_adam_1.png')
+    plt.show()
     sys.exit()
 
 prior_scale = 1.

@@ -27,13 +27,13 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 # Configuration parameters
 
-cached_batches = 10
+cached_batches = 5
 num_classes = 10
 weight_decay = 5.e-4
 
 # parameters
 iterations = int(1e+6)
-batch_size = 128
+batch_size = 1024
 burn_in_size = int(1e+5)
 lr_first = 5e-7
 lr_last = 5e-8
@@ -42,24 +42,34 @@ CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
 CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
 
 # Load dataset
-(train_images, train_labels), (test_images, test_labels) = \
-    tf.keras.datasets.cifar10.load_data()
+# (train_images, train_labels), (test_images, test_labels) = \
+#     tf.keras.datasets.cifar10.load_data()
+# test_loader = NumpyDataLoader(image=test_images, label=test_labels)
+
+def train_process_sample(x):
+    image = tf.image.convert_image_dtype(x['image'], dtype=tf.float32)
+    image = (image - CIFAR10_MEAN) / CIFAR10_STD
+    return {'image': image, 'label': x['label']}
+
+
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
-dataset, train_info = tfds.load('Cifar10',
+(train_dataset, test_dataset), train_info = tfds.load('cifar10',
                                 split=['train[:70%]', 'test[70%:]'],
                                 with_info=True)
-train_dataset, test_dataset = dataset
+
+train_dataset = train_dataset.map(train_process_sample)
+
 train_loader = TensorflowDataLoader(train_dataset,
                                     shuffle_cache=1000,
-                                    exclude_keys=['id'])
+                                    exclude_keys=[])
 train_batch_fn = data.random_reference_data(train_loader, cached_batches,
                                             batch_size)
 
 # ana: test data not needed here, but keeping the code nonetheless
-test_loader = NumpyDataLoader(image=test_images, label=test_labels)
-test_batch_init, test_batch_get, test_release = data.random_reference_data(test_loader, cached_batches, batch_size)
+
+# test_batch_init, test_batch_get, test_release = data.random_reference_data(test_loader, cached_batches, batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
@@ -70,18 +80,16 @@ init_train_data_state = train_batch_init()
 # zeros_init_batch = train_loader.initializer_batch(batch_size)
 batch_state, batch_data = train_batch_get(init_train_data_state, information=True)
 init_batch, info_batch = batch_data
-test_init_state, test_init_batch = test_batch_get(test_batch_init(), information=True)
+# test_init_state, test_init_batch = test_batch_get(test_batch_init(), information=True)
 
 
 # MobileNet Model
 def init_mobilenet():
     @hk.without_apply_rng
-    @hk.transform
+    @hk.transform_with_state
     def mobilenetv1(batch):
-        # images = batch["image"].astype(jnp.float32) / 255.  # TODO dont we need to still divide by 255?
-        images = (batch["image"].astype(jnp.float32) / 255. - CIFAR10_MEAN) / CIFAR10_STD
-        mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
-        logits = mobilenet(images, is_training=True)
+        mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=True)
+        logits = mobilenet(batch["image"], is_training=True)
         return logits
 
     return mobilenetv1.init, mobilenetv1.apply
@@ -89,10 +97,10 @@ def init_mobilenet():
 
 init, apply_mobilenet = init_mobilenet()
 apply_mobilenet = jit(apply_mobilenet)
-init_params = init(random.PRNGKey(0), init_batch)
+init_params, bn_state = init(random.PRNGKey(0), init_batch)
 
 # sanity-check prediction
-logits = apply_mobilenet(init_params, init_batch)
+logits = apply_mobilenet(init_params, bn_state, init_batch)
 
 
 # Initialize potential with log-likelihood
@@ -107,11 +115,11 @@ def likelihood(sample, observations):
 max_likelihood = True
 if max_likelihood:
     # loss is negative log_likelihood
-    def loss_fn(params, batch):
-        logits = apply_mobilenet(params, batch)
+    def loss_fn(params, bn_state, batch):
+        logits, bn_state = apply_mobilenet(params, bn_state, batch)
         cross_entropies = optax.softmax_cross_entropy_with_integer_labels(
             logits, batch["label"])
-        return jnp.mean(cross_entropies)
+        return jnp.mean(cross_entropies), bn_state
 
 
     lr_schedule = optax.exponential_decay(-0.001, iterations, 0.1)
@@ -127,11 +135,11 @@ if max_likelihood:
         train_data_state, batch = train_batch_get(train_data_state,
                                                   information=False)
 
-        loss, grad = value_and_grad(loss_fn)(params, batch)
+        (loss, bn_state), grad = value_and_grad(loss_fn, has_aux=True)(params, bn_state, batch)
         scaled_grad, opt_state = optimizer.update(grad, opt_state)
         params = optax.apply_updates(params, scaled_grad)
 
-        if i % 1 == 0:
+        if i % 100 == 0:
             print(f'Loss at iteration {i}: {loss}')
     sys.exit()
 

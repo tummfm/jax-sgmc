@@ -14,6 +14,8 @@
 
 import uuid
 
+import numpy as onp
+
 import jax.numpy as jnp
 from jax import tree_util
 
@@ -26,7 +28,7 @@ class JaxUUID:
     if ints is None:
       uuid_int = uuid.uuid4().int
       ints = [(uuid_int >> bits) & 0xFFFFFFFF for bits in range(0, 128, 32)]
-      ints = jnp.array(ints, dtype=jnp.int32)
+      ints = onp.array(ints, dtype=jnp.int32)
 
     self._uuid_int = ints
 

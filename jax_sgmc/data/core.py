@@ -681,12 +681,15 @@ def _hcb_wrapper(data_loader: HostDataLoader,
 
   def get_data(req, device):
     chain_id, callback_uuid, token, device_count = req
+    # The data request class takes care of assigning the request to the right
+    # data loader and verifies it.
     (new_data, mask), new_token = _data_requests(
       chain_id, token, device, callback_uuid, device_count,
       strict=verify_calls)
     if mask is None:
-      # Assume all samples to be valid
-      mask = jnp.ones(mask_shape, dtype=jnp.bool_)
+      # Assume all samples to be valid. It is important to perform the creation
+      # of the array on the host, as otherwise a deadlock will occur.
+      mask = onp.ones(mask_shape, dtype=jnp.bool_)
     return new_data, mask, new_token
 
   def _new_cache_fn(req: Tuple[CacheState, int]) -> CacheState:

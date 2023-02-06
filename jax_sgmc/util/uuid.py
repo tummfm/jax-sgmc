@@ -14,17 +14,21 @@
 
 import uuid
 
+import numpy as onp
+
 import jax.numpy as jnp
 from jax import tree_util
+
+from jax import Array
 
 @tree_util.register_pytree_node_class
 class JaxUUID:
 
-  def __init__(self, ints: jnp.array = None):
+  def __init__(self, ints: Array = None):
     if ints is None:
       uuid_int = uuid.uuid4().int
       ints = [(uuid_int >> bits) & 0xFFFFFFFF for bits in range(0, 128, 32)]
-      ints = jnp.array(ints, dtype=jnp.int32)
+      ints = onp.array(ints, dtype=jnp.int32)
 
     self._uuid_int = ints
 
@@ -47,8 +51,12 @@ class JaxUUID:
     return self._uuid_int
 
   def tree_flatten(self):
-    return (self._uuid_int, None)
+    # Wrapping the ints in a tuple ensures that they remain a single array of
+    # length 4.
+    children = (self._uuid_int,)
+    return (children, None)
 
   @classmethod
   def tree_unflatten(cls, _, children):
-    return cls(ints=children)
+    ints, = children
+    return cls(ints=ints)

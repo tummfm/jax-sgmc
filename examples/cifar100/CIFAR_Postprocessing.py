@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 
 from jax import nn, tree_leaves, random
 import tensorflow as tf
@@ -22,13 +22,18 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
 CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
 
-batch_size = 64
+batch_size = 32
 cached_batches = 1
 num_classes = 10
 weight_decay = 5.e-4
 
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
+
+import numpy as np
+train_images = np.true_divide(train_images, 255, dtype=np.float32)
+train_mean = np.mean(train_images, axis=(0,1,2))
+train_std = np.std(train_images, axis=(0,1,2))
 
 import tensorflow_datasets as tfds
 from jax_sgmc import data
@@ -47,13 +52,11 @@ training_loader = DeviceNumpyDataLoader(image=train_images[:-10000, :, :, :], la
 
 
 
-def init_resnet():
+def init_mobilenet():
     @hk.transform
     def mobilenetv1(batch, is_training=True):
-        images = (batch["image"].astype(jnp.float32) - CIFAR10_MEAN) / CIFAR10_STD
-        # resnet50 = hk.nets.ResNet50(num_classes)
+        images = jnp.true_divide((batch["image"].astype(jnp.float32) - train_mean), train_std)
         mobilenet = hk.nets.MobileNetV1(num_classes=num_classes, use_bn=False)
-        # logits = resnet50(images, is_training=is_training)
         logits = mobilenet(images, is_training=True)
         return logits
 
@@ -69,7 +72,7 @@ batch_init, batch_get, batch_release = train_batch_fn
 zeros_init_batch = training_loader.initializer_batch(batch_size)
 _, batch_data = batch_get(batch_init(), information=True)
 init_batch, info_batch = batch_data
-init, apply_resnet = init_resnet()
+init, apply_resnet = init_mobilenet()
 init_params = init(random.PRNGKey(0), init_batch)
 sample = {"w": init_params}
 
@@ -105,7 +108,7 @@ def map_fn(batch, mask, carry):
         logits = jnp.concatenate([logits, apply_resnet(params, None, mini_batch)], axis=0)
     return [logits, target_labels], carry + 1
 
-filepath = '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_5'
+filepath = '/home/student/ana/jax-sgmc/examples/cifar100/mobilenet_1'
 with h5py.File(filepath, "r") as file:
     postprocess_loader = HDF5Loader(
         filepath,
@@ -135,8 +138,8 @@ with h5py.File(filepath, "r") as file:
     plt.plot(accuracy)
     plt.xlabel("num of sampled params")
     plt.ylabel("accuracy")
+    plt.savefig("accuracy_plot_mobilenet_1.png")
     plt.show()
-    plt.savefig("accuracy_plot_mobilenet_5.png")
 
 exit()
 from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader

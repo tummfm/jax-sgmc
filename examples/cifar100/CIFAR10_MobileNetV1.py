@@ -2,7 +2,7 @@ import sys
 import time
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('3')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad
@@ -36,7 +36,7 @@ weight_decay = 5.e-4
 iterations = int(1e+6)
 batch_size = 128
 burn_in_size = int(1e+5)
-lr_first = 5e-7
+lr_first = 1e-4
 lr_last = 5e-8
 
 CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
@@ -188,7 +188,7 @@ rms_scheduler = scheduler.init_scheduler(step_size=rms_step_size,
                                          burn_in=burn_in,
                                          thinning=rms_random_thinning)
 
-with h5py.File('mobilenet_6', "w") as file:
+with h5py.File('mobilenet_1', "w") as file:
     data_collector = io.HDF5Collector(file)
     saving = io.save(data_collector)
 

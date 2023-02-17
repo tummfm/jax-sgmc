@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath('..'))
 
+from jax_sgmc.version import __version__ as jax_sgmc_version
 
 # -- Project information -----------------------------------------------------
 
@@ -24,7 +25,7 @@ copyright = '2021, Multiscale Modeling of Fluid Materials, TU Munich'
 author = 'Multiscale Modeling of Fluid Materials'
 
 # The full version, including alpha/beta/rc tags
-release = '0.0.1'
+release = jax_sgmc_version
 
 
 # -- General configuration ---------------------------------------------------

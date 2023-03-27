@@ -2,8 +2,10 @@ import itertools
 import sys
 import time
 import os
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad, tree_map, numpy as onp
@@ -18,6 +20,13 @@ import matplotlib.pyplot as plt
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
 import jax
+
+import numpy as np
+
+np.random.seed(123)
+tf.random.set_seed(123)
+
+key = random.PRNGKey(0)
 
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
@@ -35,9 +44,9 @@ num_classes = 10
 weight_decay = 5.e-4
 
 # parameters
-iterations = int(1e+5)
+iterations = int(5e+6)
 batch_size = 1024
-burn_in_size = int(5e+3)
+burn_in_size = int(4e+6)
 lr_first = 0.001
 lr_last = 5e-8
 temperature_param = 0.01
@@ -50,7 +59,6 @@ CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
 
-import numpy as np
 
 # train_images = np.true_divide(train_images, 255, dtype=np.float32)
 train_mean = np.mean(np.true_divide(train_images, 255, dtype=np.float32), axis=(0, 1, 2))
@@ -102,7 +110,7 @@ def init_mobilenet():
 
 init, apply_mobilenet = init_mobilenet()
 # apply_mobilenet = jit(apply_mobilenet)
-init_params = init(random.PRNGKey(0), init_batch)
+init_params = init(key, init_batch)
 
 # sanity-check prediction
 logits = apply_mobilenet(init_params, None, init_batch)
@@ -161,7 +169,7 @@ if max_likelihood:
     _, batch_data = batch_get(batch_init(), information=True)
     init_batch, info_batch = batch_data
     init, apply_resnet = init_mobilenet()
-    init_params = init(random.PRNGKey(0), init_batch)
+    init_params = init(key, init_batch)
     sample = {"w": init_params}
     train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches,
                                                                                   batch_size)
@@ -243,7 +251,7 @@ if use_alias:
     _, batch_data = batch_get(batch_init(), information=True)
     init_batch, info_batch = batch_data
     init, apply_resnet = init_mobilenet()
-    init_params = init(random.PRNGKey(0), init_batch)
+    init_params = init(key, init_batch)
     sample = {"w": init_params}
     train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches,
                                                                                   batch_size)
@@ -254,7 +262,7 @@ if use_alias:
     target_labels = onp.array(init_batch['label'])
     mini_batch_state = first_batch_state
 
-    pytree_structure = jax.tree_structure(sample)
+    pytree_structure = jax.tree_util.tree_structure(sample)
     reference_data = [key_tuple for key_tuple in io.pytree_dict_keys(sample)]
     sample_format = tree_map(
         lambda leaf: jax.ShapeDtypeStruct(shape=leaf.shape, dtype=leaf.dtype),
@@ -294,7 +302,7 @@ if use_alias:
     plt.plot(onp.arange(1, len(accuracy) + 1, step=1), accuracy)
     plt.xlabel("num of sampled params")
     plt.ylabel("accuracy")
-    plt.savefig("accuracy_plot_mobilenet_100000iters.png")
+    plt.savefig("accuracy_plot_mobilenet_5e+6iters.png")
     plt.show()
     exit()
 

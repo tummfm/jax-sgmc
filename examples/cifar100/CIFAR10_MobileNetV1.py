@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
 import jax
+from functools import partial
 
 import numpy as np
 
@@ -195,14 +196,14 @@ if max_likelihood:
     print(accuracy)
     sys.exit()
 
-prior_scale = 1.
+prior_scale = 10.
 
 
 def gaussian_prior(sample):
-    params = tree_math.Vector(sample["w"])
-    log_pdf = tree_math.unwrap(jscipy.stats.norm.logpdf, vector_argnums=0)(
-        params, loc=0., scale=prior_scale)
-    return log_pdf.sum()
+    prior_params = sample["w"]
+    gaussian = partial(jscipy.stats.norm.logpdf, loc=0., scale=prior_scale)
+    priors = tree_map(gaussian, prior_params)
+    return tree_math.Vector(priors).sum()
 
 
 def prior(sample):
@@ -220,6 +221,9 @@ potential_fn = potential.minibatch_potential(prior=prior,
                                              temperature=temperature_param)
 
 sample = {"w": init_params, "std": jnp.array([1.0])}
+
+test_prior = gaussian_prior(sample)
+
 # batch_data[0]['label'] = jnp.squeeze(batch_data[0]['label'])
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 

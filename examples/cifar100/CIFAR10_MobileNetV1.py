@@ -5,7 +5,7 @@ import os
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('2')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad, tree_map, numpy as onp
@@ -44,12 +44,12 @@ num_classes = 10
 weight_decay = 5.e-4
 
 # parameters
-iterations = int(5e+6)
+iterations = int(1e+4)
 batch_size = 1024
-burn_in_size = int(4e+6)
+burn_in_size = int(8e+3)
 lr_first = 0.001
 lr_last = 5e-8
-temperature_param = 0.01
+temperature_param = 1
 accepted_samples = 40
 
 CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
@@ -78,8 +78,10 @@ train_batch_fn = data.random_reference_data(train_loader, cached_batches,
                                             batch_size)
 
 # ana: test data not needed here, but keeping the code nonetheless
-test_loader = NumpyDataLoader(image=test_images, label=test_labels)
+test_loader = NumpyDataLoader(image=test_images[:5000, :,:,:], label=test_labels[:5000, :])
+val_loader = NumpyDataLoader(image=test_images[5000:, :,:,:], label=test_labels[5000:, :])
 test_batch_init, test_batch_get, test_release = data.random_reference_data(test_loader, cached_batches, batch_size)
+val_batch_init, val_batch_get, val_release = data.random_reference_data(val_loader, cached_batches, batch_size)
 
 # get first batch to init NN
 # TODO: Maybe write convenience function for this common usecase?
@@ -91,6 +93,7 @@ init_train_data_state = train_batch_init()
 batch_state, batch_data = train_batch_get(init_train_data_state, information=True)
 init_batch, info_batch = batch_data
 test_init_state, test_init_batch = test_batch_get(test_batch_init(), information=True)
+val_init_state, val_init_batch = test_batch_get(val_batch_init(), information=True)
 
 
 # MobileNet Model
@@ -145,7 +148,7 @@ if max_likelihood:
     train_data_state = init_train_data_state
     opt_state = optimizer.init(init_params)
     loss_list = []
-    for i in range(2000):
+    for i in range(1000):
         train_data_state, batch = train_batch_get(train_data_state,
                                                   information=False)
 
@@ -160,11 +163,12 @@ if max_likelihood:
     plt.savefig('mobilenet_adam_1.png')
     plt.show()
     from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
-
+    #
     training_loader = DeviceNumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
+    # training_loader = DeviceNumpyDataLoader(image=test_images[5000:, :, :, :],
+    #                                         label=test_labels[5000:, :])  # in practice it's a validation loader
     train_batch_fn = data.random_reference_data(training_loader, cached_batches, batch_size)
     batch_init, batch_get, batch_release = train_batch_fn
-    # zeros_init_batch = validation_loader.initializer_batch(batch_size)
     zeros_init_batch = training_loader.initializer_batch(batch_size)
     _, batch_data = batch_get(batch_init(), information=True)
     init_batch, info_batch = batch_data
@@ -192,21 +196,54 @@ if max_likelihood:
         correct_count += sum(argmax_results == onp.squeeze(temp_labels))
         incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
     accuracy.append(np.true_divide(correct_count, (correct_count + incorrect_count)))
-    print(accuracy)
+    print("Training accuracy="+str(accuracy[0]) )
+    training_loader = DeviceNumpyDataLoader(image=test_images[5000:, :, :, :],
+                                            label=test_labels[5000:, :])  # in practice it's a validation loader
+    train_batch_fn = data.random_reference_data(training_loader, cached_batches, batch_size)
+    batch_init, batch_get, batch_release = train_batch_fn
+    zeros_init_batch = training_loader.initializer_batch(batch_size)
+    _, batch_data = batch_get(batch_init(), information=True)
+    init_batch, info_batch = batch_data
+    init, apply_resnet = init_mobilenet()
+    init_params = init(key, init_batch)
+    sample = {"w": init_params}
+    train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches,
+                                                                                  batch_size)
+    temp = train_batch_init(shuffle=False, in_epochs=True)
+    first_batch_state, first_batch_data = train_batch_get(temp, information=True)
+    first_batch, first_info_batch = first_batch_data
+    logits = apply_mobilenet(params, None, init_batch)
+    target_labels = onp.array(init_batch['label'])
+    mini_batch_state = first_batch_state
+    accuracy = []
+    correct_count = 0
+    incorrect_count = 0
+    for i in range(train_images.shape[0] // batch_size):  # go over minibatch of training data
+        mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
+        temp_labels = onp.array(mini_batch['label'])
+        # target_labels = onp.concatenate([target_labels, onp.array(mini_batch['label'])], axis=0)
+        temp_logits = apply_mobilenet(params, None, mini_batch)
+        # logits = onp.concatenate([logits, temp_logits], axis=0)
+        argmax_results = onp.argmax(temp_logits, axis=-1)
+        correct_count += sum(argmax_results == onp.squeeze(temp_labels))
+        incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
+    accuracy.append(np.true_divide(correct_count, (correct_count + incorrect_count)))
+    print("Validation accuracy="+str(accuracy[0]) )
     sys.exit()
 
 prior_scale = 1.
 
 
-def gaussian_prior(sample):
-    params = tree_math.Vector(sample["w"])
-    log_pdf = tree_math.unwrap(jscipy.stats.norm.logpdf, vector_argnums=0)(
-        params, loc=0., scale=prior_scale)
-    return log_pdf.sum()
-
-
 def prior(sample):
-    return jnp.array(1.0, dtype=jnp.float32)
+    # params = tree_math.Vector(sample["w"])
+    # log_pdf = tree_math.unwrap(jscipy.stats.norm.logpdf, vector_argnums=0)(
+    #     params, loc=0., scale=prior_scale)
+    logpdf = tree_map(jscipy.stats.norm.logpdf,sample['w'])
+    result = tree_map(sum, logpdf)
+    return result
+
+# def prior(sample):
+#     return jnp.array(1.0, dtype=jnp.float32)
 
 
 # The likelihood accepts a batch of data, so no batching strategy is required, instead, is_batched must be set to true.
@@ -242,6 +279,7 @@ if use_alias:
     results = results['samples']['variables']
     params = tree_map(lambda x: onp.array(x[0]), results['w'])
     from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
+
 
     training_loader = DeviceNumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
     train_batch_fn = data.random_reference_data(training_loader, cached_batches, batch_size)
@@ -301,8 +339,71 @@ if use_alias:
 
     plt.plot(onp.arange(1, len(accuracy) + 1, step=1), accuracy)
     plt.xlabel("num of sampled params")
-    plt.ylabel("accuracy")
-    plt.savefig("accuracy_plot_mobilenet_5e+6iters.png")
+    plt.ylabel("accuracy training")
+    plt.savefig("accuracy_training.png")
+    plt.show()
+
+    training_loader = DeviceNumpyDataLoader(image=test_images[5000:, :, :, :],
+                                            label=test_labels[5000:, :])  # in practice it's a validation loader
+    train_batch_fn = data.random_reference_data(training_loader, cached_batches, batch_size)
+    batch_init, batch_get, batch_release = train_batch_fn
+    # zeros_init_batch = validation_loader.initializer_batch(batch_size)
+    zeros_init_batch = training_loader.initializer_batch(batch_size)
+    _, batch_data = batch_get(batch_init(), information=True)
+    init_batch, info_batch = batch_data
+    init, apply_resnet = init_mobilenet()
+    init_params = init(key, init_batch)
+    sample = {"w": init_params}
+    train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches,
+                                                                                  batch_size)
+    temp = train_batch_init(shuffle=False, in_epochs=True)
+    first_batch_state, first_batch_data = train_batch_get(temp, information=True)
+    first_batch, first_info_batch = first_batch_data
+    logits = apply_mobilenet(params, None, init_batch)
+    target_labels = onp.array(init_batch['label'])
+    mini_batch_state = first_batch_state
+
+    pytree_structure = jax.tree_util.tree_structure(sample)
+    reference_data = [key_tuple for key_tuple in io.pytree_dict_keys(sample)]
+    sample_format = tree_map(
+        lambda leaf: jax.ShapeDtypeStruct(shape=leaf.shape, dtype=leaf.dtype),
+        sample)
+    observations_counts = [len(results[leaf_name[0]][leaf_name[1]][leaf_name[2]])
+                           for leaf_name in reference_data]
+    observation_count = observations_counts[0]
+    selected_observations = []
+
+    accuracy = []
+    correct_count = 0
+    incorrect_count = 0
+    for j in range(accepted_samples):  # go over parameter samples
+        params = tree_map(lambda x: onp.array(x[j]), results['w'])
+        logits = onp.empty(shape=(0, 10))
+        target_labels = onp.empty(shape=(0, 1))
+        for i in range(train_images.shape[0] // batch_size):  # go over minibatch of training data
+            mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
+            temp_labels = onp.array(mini_batch['label'])
+            target_labels = onp.concatenate([target_labels, onp.array(mini_batch['label'])], axis=0)
+            temp_logits = apply_mobilenet(params, None, mini_batch)
+            logits = onp.concatenate([logits, temp_logits], axis=0)
+            argmax_results = onp.argmax(temp_logits, axis=-1)
+            correct_count += sum(argmax_results == onp.squeeze(temp_labels))
+            incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
+        if (j == 0):
+            logits_full = onp.expand_dims(logits, axis=0)
+            target_labels_full = onp.expand_dims(target_labels, axis=0)
+        else:
+            logits_full = onp.concatenate([onp.expand_dims(logits, axis=0), logits_full], axis=0)
+            target_labels_full = onp.concatenate([onp.expand_dims(target_labels, axis=0), target_labels_full], axis=0)
+        accuracy.append(correct_count / (correct_count + incorrect_count))
+    pred_result, target = logits_full, target_labels_full
+    # target_labels_array = onp.array(onp.mean(target, axis=0))
+    import matplotlib.pyplot as plt
+
+    plt.plot(onp.arange(1, len(accuracy) + 1, step=1), accuracy)
+    plt.xlabel("num of sampled params")
+    plt.ylabel("accuracy validation")
+    plt.savefig("accuracy_validation.png")
     plt.show()
     exit()
 

@@ -5,7 +5,7 @@ import os
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('2')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('1')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad, tree_map, numpy as onp
@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from jax_sgmc.data.tensorflow_loader import TensorflowDataLoader
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
 import jax
+from functools import partial
 
 import numpy as np
 
@@ -231,19 +232,18 @@ if max_likelihood:
     print("Validation accuracy="+str(accuracy[0]) )
     sys.exit()
 
-prior_scale = 1.
+prior_scale = 10.
+
+
+def gaussian_prior(sample):
+    prior_params = sample["w"]
+    gaussian = partial(jscipy.stats.norm.logpdf, loc=0., scale=prior_scale)
+    priors = tree_map(gaussian, prior_params)
+    return tree_math.Vector(priors).sum()
 
 
 def prior(sample):
-    # params = tree_math.Vector(sample["w"])
-    # log_pdf = tree_math.unwrap(jscipy.stats.norm.logpdf, vector_argnums=0)(
-    #     params, loc=0., scale=prior_scale)
-    logpdf = tree_map(jscipy.stats.norm.logpdf,sample['w'])
-    result = tree_map(sum, logpdf)
-    return result
-
-# def prior(sample):
-#     return jnp.array(1.0, dtype=jnp.float32)
+    return jnp.array(1.0, dtype=jnp.float32)
 
 
 # The likelihood accepts a batch of data, so no batching strategy is required, instead, is_batched must be set to true.
@@ -257,6 +257,9 @@ potential_fn = potential.minibatch_potential(prior=prior,
                                              temperature=temperature_param)
 
 sample = {"w": init_params, "std": jnp.array([1.0])}
+
+test_prior = gaussian_prior(sample)
+
 # batch_data[0]['label'] = jnp.squeeze(batch_data[0]['label'])
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
@@ -279,7 +282,6 @@ if use_alias:
     results = results['samples']['variables']
     params = tree_map(lambda x: onp.array(x[0]), results['w'])
     from jax_sgmc.data.numpy_loader import DeviceNumpyDataLoader
-
 
     training_loader = DeviceNumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
     train_batch_fn = data.random_reference_data(training_loader, cached_batches, batch_size)

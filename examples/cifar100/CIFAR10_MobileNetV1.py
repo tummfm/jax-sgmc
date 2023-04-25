@@ -36,10 +36,10 @@ num_classes = 10
 weight_decay = 5.e-4
 
 # parameters
-iterations = int(1e+2)
+iterations = int(1e+4)
 adam_iterations = 900
 batch_size = 2048 * 2
-burn_in_size = int(5e+1)
+burn_in_size = int(7e+3)
 lr_first = 0.001
 lr_last = 5e-8
 temperature_param = 1
@@ -231,50 +231,63 @@ test_prior = gaussian_prior(sample)
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
 def evaluate_model(results, loader, model="SGLD", validation=True, plot=True, fig_name="model1e+5iters"):
-    train_batch_init, train_batch_get, train_release = data.random_reference_data(loader, cached_batches,
-                                                                                  batch_size)
-    if (validation):
-        temp = train_batch_init(shuffle=True, in_epochs=True)
-    else:
-        if (model=="SGLD"):
-            temp = train_batch_init(shuffle=False, in_epochs=False)
-        else:
-            temp = train_batch_init(shuffle=True, in_epochs=False)
+    my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
 
-    first_batch_state, first_batch_data = train_batch_get(temp, information=True)
-    mini_batch_state = first_batch_state
 
+    # train_batch_init, train_batch_get, train_release = data.random_reference_data(loader, cached_batches,
+    #                                                                               batch_size)
+    # if (validation):
+    #     temp = train_batch_init(shuffle=True, in_epochs=True)
+    # else:
+    #     if (model=="SGLD"):
+    #         temp = train_batch_init(shuffle=False, in_epochs=False)
+    #     else:
+    #         temp = train_batch_init(shuffle=True, in_epochs=False)
+    #
+    # first_batch_state, first_batch_data = train_batch_get(temp, information=True)
+    # mini_batch_state = first_batch_state
     accuracy = []
-    correct_count = 0
-    incorrect_count = 0
+
+    @jit
+    def calculate_accuracy(batch, mask, carry):
+        temp_labels = onp.array(batch['label'])
+        temp_logits = apply_mobilenet(params, None, batch, is_training=False)
+        argmax_results = onp.argmax(temp_logits, axis=-1)
+        correct_count = sum(argmax_results == onp.squeeze(temp_labels))
+        incorrect_count = sum(argmax_results != onp.squeeze(temp_labels))
+        return [correct_count, incorrect_count], carry+1
+
     for j in range(accepted_samples):  # go over parameter samples
         params = tree_map(lambda x: onp.array(x[j]), results['w'])
-        logits = onp.empty(shape=(0, 10))
-        target_labels = onp.empty(shape=(0, 1))
-        for i in range(train_images.shape[0] // batch_size):  # go over minibatch of training data
-            mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
-            temp_labels = onp.array(mini_batch['label'])
-            target_labels = onp.concatenate([target_labels, onp.array(mini_batch['label'])], axis=0)
-            temp_logits = apply_mobilenet(params, None, mini_batch)
-            logits = onp.concatenate([logits, temp_logits], axis=0)
-            argmax_results = onp.argmax(temp_logits, axis=-1)
-            correct_count += sum(argmax_results == onp.squeeze(temp_labels))
-            incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
-        if (j == 0):
-            logits_full = onp.expand_dims(logits, axis=0)
-            target_labels_full = onp.expand_dims(target_labels, axis=0)
-        else:
-            logits_full = onp.concatenate([onp.expand_dims(logits, axis=0), logits_full], axis=0)
-            target_labels_full = onp.concatenate([onp.expand_dims(target_labels, axis=0), target_labels_full], axis=0)
-        accuracy.append(correct_count / (correct_count + incorrect_count))
-    pred_result, target = logits_full, target_labels_full
+        out, _ = my_parameter_mapper(calculate_accuracy, 0, masking=True)
+        accuracy.append(sum(out[0]/(sum(out[0])+sum(out[1]))))
+
+        # logits = onp.empty(shape=(0, 10))
+        # target_labels = onp.empty(shape=(0, 1))
+        # for i in range(train_images.shape[0] // batch_size):  # go over minibatch of training data
+        #     mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
+        #     temp_labels = onp.array(mini_batch['label'])
+        #     target_labels = onp.concatenate([target_labels, onp.array(mini_batch['label'])], axis=0)
+        #     temp_logits = apply_mobilenet(params, None, mini_batch)
+        #     logits = onp.concatenate([logits, temp_logits], axis=0)
+        #     argmax_results = onp.argmax(temp_logits, axis=-1)
+        #     correct_count += sum(argmax_results == onp.squeeze(temp_labels))
+        #     incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
+        # if (j == 0):
+        #     logits_full = onp.expand_dims(logits, axis=0)
+        #     target_labels_full = onp.expand_dims(target_labels, axis=0)
+        # else:
+        #     logits_full = onp.concatenate([onp.expand_dims(logits, axis=0), logits_full], axis=0)
+        #     target_labels_full = onp.concatenate([onp.expand_dims(target_labels, axis=0), target_labels_full], axis=0)
+        # accuracy.append(correct_count / (correct_count + incorrect_count))
+    # pred_result, target = logits_full, target_labels_full
     if plot:
         plt.plot(onp.arange(1, len(accuracy) + 1, step=1), accuracy)
         plt.xlabel("num of sampled params")
         plt.ylabel("accuracy "+validation*"validation"+(not validation)*"training")
         plt.savefig(fig_name)
         plt.show()
-    return pred_result, target
+    # return pred_result, target
 
 use_alias = True
 if use_alias:
@@ -294,7 +307,9 @@ if use_alias:
     params = tree_map(lambda x: onp.array(x[0]), results['w'])
 
     training_loader = NumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
+    param_loader = NumpyDataLoader(results)
     evaluate_model(results, training_loader, validation=False)
+    # evaluate_model(results, param_loader, validation=False)
     validation_loader = NumpyDataLoader(image=test_images[5000:, :, :, :],
                                       label=test_labels[5000:, :])
     evaluate_model(results, validation_loader, validation=True)

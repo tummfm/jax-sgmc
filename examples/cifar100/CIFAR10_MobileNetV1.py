@@ -5,7 +5,7 @@ import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('2')  # needs to stay before importing jax
+os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad, tree_map, numpy as onp
@@ -36,27 +36,18 @@ num_classes = 10
 weight_decay = 5.e-4
 
 # parameters
-iterations = int(1e+4)
-adam_iterations = 900
+iterations = int(5e+5)
+adam_iterations = 200
 batch_size = 2048 * 2
-burn_in_size = int(7e+3)
+burn_in_size = int(4e+5)
 lr_first = 0.001
 lr_last = 5e-8
 temperature_param = 1
 accepted_samples = 40
 
-CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
-CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
-
 # Load dataset
 (train_images, train_labels), (test_images, test_labels) = \
     tf.keras.datasets.cifar10.load_data()
-
-train_mean = np.mean(np.true_divide(train_images, 255, dtype=np.float32), axis=(0, 1, 2))
-train_std = np.std(np.true_divide(train_images, 255, dtype=np.float32), axis=(0, 1, 2))
-
-test_mean = np.mean(np.true_divide(test_images, 255, dtype=np.float32), axis=(0, 1, 2))
-test_std = np.std(np.true_divide(test_images, 255, dtype=np.float32), axis=(0, 1, 2))
 
 # Use tensorflow dataset directly. The 'id' must be excluded as text is not
 # supported by jax
@@ -82,7 +73,6 @@ train_batch_init, train_batch_get, _ = train_batch_fn
 
 init_train_data_state = train_batch_init()
 
-# zeros_init_batch = train_loader.initializer_batch(batch_size)
 batch_state, batch_data = train_batch_get(init_train_data_state, information=True)
 init_batch, info_batch = batch_data
 test_init_state, test_init_batch = test_batch_get(test_batch_init(), information=True)
@@ -91,7 +81,6 @@ val_init_state, val_init_batch = test_batch_get(val_batch_init(), information=Tr
 
 # MobileNet Model
 def init_mobilenet():
-    # @hk.without_apply_rng
     @hk.transform
     def mobilenetv1(batch, is_training=True):
         images = batch["image"].astype(jnp.float32)
@@ -103,7 +92,7 @@ def init_mobilenet():
 
 
 init, apply_mobilenet = init_mobilenet()
-# apply_mobilenet = jit(apply_mobilenet)
+apply_mobilenet = jit(apply_mobilenet)
 init_params = init(key, init_batch)
 
 # sanity-check prediction
@@ -119,7 +108,7 @@ def likelihood(sample, observations):
     return log_likelihood
 
 
-max_likelihood = False
+max_likelihood = True
 if max_likelihood:
     # loss is negative log_likelihood
     def loss_fn(params, batch):
@@ -155,53 +144,28 @@ if max_likelihood:
     plt.ylabel("Loss")
     plt.savefig('mobilenet_adam_1.png')
     plt.show()
-    training_loader = NumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
-    train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches,
-                                                                                  batch_size)
-    temp = train_batch_init(shuffle=False, in_epochs=False)
-    first_batch_state, first_batch_data = train_batch_get(temp, information=True)
-    first_batch, first_info_batch = first_batch_data
-    logits = apply_mobilenet(params, None, init_batch)
-    target_labels = onp.array(init_batch['label'])
-    mini_batch_state = first_batch_state
-    accuracy = []
-    correct_count = 0
-    incorrect_count = 0
-    for i in range(train_images.shape[0] // batch_size):  # go over minibatch of training data
-        mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
-        temp_labels = onp.array(mini_batch['label'])
-        temp_logits = apply_mobilenet(params, None, mini_batch, is_training=False)
-        argmax_results = onp.argmax(temp_logits, axis=-1)
-        correct_count += sum(argmax_results == onp.squeeze(temp_labels))
-        incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
-    accuracy.append(np.true_divide(correct_count, (correct_count + incorrect_count)))
-    print("Training accuracy=" + str(accuracy[0]))
-    training_loader = NumpyDataLoader(image=test_images[5000:, :, :, :],
-                                      label=test_labels[5000:, :])  # in practice it's a validation loader
-    train_batch_init, train_batch_get, train_release = data.random_reference_data(training_loader, cached_batches,
-                                                                                  batch_size)
-    temp = train_batch_init(shuffle=True, in_epochs=True)
-    first_batch_state, first_batch_data = train_batch_get(temp, information=True)
-    first_batch, first_info_batch = first_batch_data
-    logits = apply_mobilenet(params, None, init_batch)
-    target_labels = onp.array(init_batch['label'])
-    mini_batch_state = first_batch_state
-    accuracy = []
-    correct_count = 0
-    incorrect_count = 0
-    for i in range(5000 // batch_size):  # go over minibatch of training data
-        mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
-        temp_labels = onp.array(mini_batch['label'])
-        temp_logits = apply_mobilenet(params, None, mini_batch, is_training=False)
-        argmax_results = onp.argmax(temp_logits, axis=-1)
-        correct_count += sum(argmax_results == onp.squeeze(temp_labels))
-        incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
-    accuracy.append(np.true_divide(correct_count, (correct_count + incorrect_count)))
-    print("Validation accuracy=" + str(accuracy[0]))
-    sys.exit()
+
+
+    def evaluate_model(params, loader, validation=True):
+        my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
+
+        @jit
+        def calculate_accuracy(batch, mask, carry):
+            temp_labels = onp.array(batch['label'])
+            temp_logits = apply_mobilenet(params, None, batch, is_training=False)
+            argmax_results = onp.argmax(temp_logits, axis=-1)
+            correct_count = sum(argmax_results == onp.squeeze(temp_labels))
+            incorrect_count = sum(argmax_results != onp.squeeze(temp_labels))
+            return [correct_count, incorrect_count], carry + 1
+
+        out, _ = my_parameter_mapper(calculate_accuracy, 0, masking=True)
+        accuracy = (sum(out[0] / (sum(out[0]) + sum(out[1]))))
+        print("Validation"*validation+"Training"*(not validation)+" accuracy = "+str(accuracy))
+
+    evaluate_model(params, train_loader, validation=False)
+    evaluate_model(params, val_loader)
 
 prior_scale = 10.
-
 
 def gaussian_prior(sample):
     prior_params = sample["w"]
@@ -210,6 +174,7 @@ def gaussian_prior(sample):
     return tree_math.Vector(priors).sum()
 
 
+# imporper prior
 def prior(sample):
     return jnp.array(1.0, dtype=jnp.float32)
 
@@ -230,65 +195,6 @@ test_prior = gaussian_prior(sample)
 
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
-def evaluate_model(results, loader, model="SGLD", validation=True, plot=True, fig_name="model1e+5iters"):
-    my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
-
-
-    # train_batch_init, train_batch_get, train_release = data.random_reference_data(loader, cached_batches,
-    #                                                                               batch_size)
-    # if (validation):
-    #     temp = train_batch_init(shuffle=True, in_epochs=True)
-    # else:
-    #     if (model=="SGLD"):
-    #         temp = train_batch_init(shuffle=False, in_epochs=False)
-    #     else:
-    #         temp = train_batch_init(shuffle=True, in_epochs=False)
-    #
-    # first_batch_state, first_batch_data = train_batch_get(temp, information=True)
-    # mini_batch_state = first_batch_state
-    accuracy = []
-
-    @jit
-    def calculate_accuracy(batch, mask, carry):
-        temp_labels = onp.array(batch['label'])
-        temp_logits = apply_mobilenet(params, None, batch, is_training=False)
-        argmax_results = onp.argmax(temp_logits, axis=-1)
-        correct_count = sum(argmax_results == onp.squeeze(temp_labels))
-        incorrect_count = sum(argmax_results != onp.squeeze(temp_labels))
-        return [correct_count, incorrect_count], carry+1
-
-    for j in range(accepted_samples):  # go over parameter samples
-        params = tree_map(lambda x: onp.array(x[j]), results['w'])
-        out, _ = my_parameter_mapper(calculate_accuracy, 0, masking=True)
-        accuracy.append(sum(out[0]/(sum(out[0])+sum(out[1]))))
-
-        # logits = onp.empty(shape=(0, 10))
-        # target_labels = onp.empty(shape=(0, 1))
-        # for i in range(train_images.shape[0] // batch_size):  # go over minibatch of training data
-        #     mini_batch_state, mini_batch = train_batch_get(mini_batch_state, information=False)
-        #     temp_labels = onp.array(mini_batch['label'])
-        #     target_labels = onp.concatenate([target_labels, onp.array(mini_batch['label'])], axis=0)
-        #     temp_logits = apply_mobilenet(params, None, mini_batch)
-        #     logits = onp.concatenate([logits, temp_logits], axis=0)
-        #     argmax_results = onp.argmax(temp_logits, axis=-1)
-        #     correct_count += sum(argmax_results == onp.squeeze(temp_labels))
-        #     incorrect_count += sum(argmax_results != onp.squeeze(temp_labels))
-        # if (j == 0):
-        #     logits_full = onp.expand_dims(logits, axis=0)
-        #     target_labels_full = onp.expand_dims(target_labels, axis=0)
-        # else:
-        #     logits_full = onp.concatenate([onp.expand_dims(logits, axis=0), logits_full], axis=0)
-        #     target_labels_full = onp.concatenate([onp.expand_dims(target_labels, axis=0), target_labels_full], axis=0)
-        # accuracy.append(correct_count / (correct_count + incorrect_count))
-    # pred_result, target = logits_full, target_labels_full
-    if plot:
-        plt.plot(onp.arange(1, len(accuracy) + 1, step=1), accuracy)
-        plt.xlabel("num of sampled params")
-        plt.ylabel("accuracy "+validation*"validation"+(not validation)*"training")
-        plt.savefig(fig_name)
-        plt.show()
-    # return pred_result, target
-
 use_alias = True
 if use_alias:
     sampler = alias.sgld(potential_fn=potential_fn,
@@ -306,10 +212,35 @@ if use_alias:
     results = results['samples']['variables']
     params = tree_map(lambda x: onp.array(x[0]), results['w'])
 
-    training_loader = NumpyDataLoader(image=train_images[:-10000, :, :, :], label=train_labels[:-10000, :])
-    param_loader = NumpyDataLoader(results)
-    evaluate_model(results, training_loader, validation=False)
-    # evaluate_model(results, param_loader, validation=False)
+
+    def evaluate_model(results, loader, validation=True, plot=True, fig_name="mod1e+5iters"):
+        my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
+        accuracy = []
+
+        @jit
+        def calculate_accuracy(batch, mask, carry):
+            temp_labels = onp.array(batch['label'])
+            temp_logits = apply_mobilenet(params, None, batch, is_training=False)
+            argmax_results = onp.argmax(temp_logits, axis=-1)
+            correct_count = sum(argmax_results == onp.squeeze(temp_labels))
+            incorrect_count = sum(argmax_results != onp.squeeze(temp_labels))
+            return [correct_count, incorrect_count], carry + 1
+
+        for j in range(accepted_samples):  # go over parameter samples
+            params = tree_map(lambda x: onp.array(x[j]), results['w'])
+            out, _ = my_parameter_mapper(calculate_accuracy, 0, masking=True)
+            accuracy.append(sum(out[0] / (sum(out[0]) + sum(out[1]))))
+
+        if plot:
+            plt.plot(onp.arange(1, len(accuracy) + 1, step=1), accuracy)
+            plt.xlabel("Number of sampled parameters")
+            plt.ylabel(validation * "Validation" + (not validation) * "Training" + " accuracy")
+            plt.savefig(fig_name+validation * "Validation" + (not validation) * "Training" )
+            plt.show()
+
+
+    training_loader = NumpyDataLoader(image=train_images[:, :, :, :], label=train_labels[:, :])
+    evaluate_model(results, training_loader, validation=False, fig_name="mobilenet_5e+5_lr5e-3")
     validation_loader = NumpyDataLoader(image=test_images[5000:, :, :, :],
-                                      label=test_labels[5000:, :])
-    evaluate_model(results, validation_loader, validation=True)
+                                        label=test_labels[5000:, :])
+    evaluate_model(results, validation_loader, validation=True, fig_name="mobilenet_5e+5_lr5e-3")

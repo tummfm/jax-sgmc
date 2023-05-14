@@ -12,7 +12,7 @@ Access of (random) data in **JaxSGMC** consists of two steps:
 The Data Loaders determines where the data is stored and how it is passed
 to the device (e. g. shuffled in epochs).
 
-The Callback Wrappers requests new batches from the Data Loader and pass them
+The Callback Wrappers requests new batches from the Data Loader and passes them
 to the device via Jax's Host-Callback module. Therefore, only a subset of the
 data is stored in the device memory.
 
@@ -23,7 +23,7 @@ data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
 .. note::
     When using multiple Data Loaders sequentially in a single script, the
     release function should be called after the Callback Wrapper has been used in
-    the last computation. After this, the reference to the Data Loader hs been
+    the last computation. After this, the reference to the Data Loader will be
     discarded and the Data Loader can be deleted.
 
 Important Notes
@@ -32,7 +32,7 @@ Important Notes
 Getting shape and dtype of the data
 ____________________________________
 
-Some models needs to now the shape and dtype of the reference data. Therefore,
+Some models need to know the shape and dtype of the reference data. Therefore,
 an all-zero batch can be drawn from every Data Loader.
 
   ::
@@ -42,7 +42,7 @@ an all-zero batch can be drawn from every Data Loader.
                  [0., 0.],
                  [0., 0.]], dtype=float32)}
 
-If no batch size is specified a single observation is returned (all leaves
+If no batch size is specified a single observation is returned (all leaves'
 shapes are reduced by the first axis).
 
   ::
@@ -67,10 +67,10 @@ the same cache state (verified by a token) from a single chain.
 For example, if g is pmapped to 5 devices, f is also going to run on 5 devices
 and hence 5 times the same cache state is requested from a chain.
 
-JaxSGMC resolved this issue by caching all requested states on the host for a
+**JaxSGMC** resolved this issue by caching all requested states on the host for a
 specified number of requests.
 
-In the above example, the Callback Wrapper used in f should be called like:
+In the above example, the Callback Wrapper used in f should be called like this:
 
   ::
 
@@ -90,7 +90,7 @@ Numpy Data Loader
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
-First we set up the dataset. This is very simply, as each array can be assigned
+First we set up the dataset. This is very simple, as each array can be assigned
 as a keyword argument to the dataloader. The keywords of the single arrays form
 the keys of the pytree-dict, bundling all observations.
 
@@ -108,7 +108,7 @@ has an increased device memory consumption.
 
   >>> rd_init, rd_batch, _ = data.random_reference_data(data_loader, 100, 2)
 
-The Numpy Data Loader accepts keyword arguments in
+The ``NumpyDataLoader`` accepts keyword arguments in
 the init function to determine the starting points of the chains.
 
   >>> rd_state = rd_init(seed=0)
@@ -124,7 +124,7 @@ the init function to determine the starting points of the chains.
 Random Data Access
 ___________________
 
-The NumpyDataLoader provides three different methods to randomly select
+The ``NumpyDataLoader`` provides three different methods to randomly select
 observations:
 
 - Independent draw (default): Draw from all samples with replacement.
@@ -133,8 +133,8 @@ observations:
 - Shuffling in epochs: Draw from all samples without replacement and return mask
   to mark invalid samples at the end of the epoch.
 
-This is illustrated at a small toy-dataset, which observation count is not a
-multiplicity of the batch size:
+This is illustrated at a small toy-dataset, where the observation count is not a
+multiple of the batch size:
 
 .. doctest::
 
@@ -171,7 +171,7 @@ Mapping over Full Dataset
 __________________________
 
 It is also possible to map a function over the complete dataset provided by a
-Data Loader. In each iteration, the function is mapped over a batch of data to
+``DataLoader``. In each iteration, the function is mapped over a batch of data to
 speed up the calculation but limit the memory consumption.
 
 In this toy example, the dataset consists of the potential bases
@@ -251,7 +251,7 @@ such that it is possible to compute the results for multiple exponents in a
   [ 10  45 285]
 
 It is also possible to store the ``CacheStates`` in the host memory, such that
-it is not necessary to carry the ``data state`` through all function calls.
+it is not necessary to carry the ``data_state`` through all function calls.
 The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
 its usage is a little bit simpler:
 

@@ -9,16 +9,12 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str('2')  # needs to stay before importing 
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, value_and_grad, tree_map
-from jax_sgmc import data, potential, adaption, scheduler, integrator, solver, io, alias
+from jax_sgmc import data, potential, alias
 import tensorflow as tf
-import tensorflow_datasets as tfds
 import haiku as hk
 import optax
 import tree_math
-import h5py
-import matplotlib.pyplot as plt
 from jax_sgmc.data.numpy_loader import NumpyDataLoader
-import jax
 from functools import partial
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,41 +30,33 @@ config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 cached_batches = 10
 num_classes = 10
 
-
-
 # Load dataset
 (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.cifar10.load_data()
 train_images = tf.image.resize(
     train_images,
-    (112,112),
+    (168,168),
     method=tf.image.ResizeMethod.BILINEAR,
     preserve_aspect_ratio=True
 )
 test_images = tf.image.resize(
     test_images,
-    (112,112),
+    (168,168),
     method=tf.image.ResizeMethod.BILINEAR,
     preserve_aspect_ratio=True
 )
 
 # parameters
-batch_size = 32*4
-epochs = 1000
+batch_size = 256
+epochs = 15
 iterations_per_epoch = int(train_images.shape[0]
                            / batch_size)
 iterations = epochs*iterations_per_epoch
 burn_in_size = iterations-100
+# lr_first = 0.0005
 lr_first = 0.005
-lr_last = 5e-4
 gamma = 0.55
 lr_last = lr_first * (iterations) ** (-gamma)
 accepted_samples = 20
-
-# CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
-# CIFAR10_STD = jnp.array([0.2023, 0.1994, 0.2010])
-# Use tensorflow dataset directly. The 'id' must be excluded as text is not supported by jax
-# dataset, train_info = tfds.load('Cifar10', split=['train[:70%]', 'test[70%:]'], with_info=True)
-# train_dataset, test_dataset = dataset
 
 train_loader = NumpyDataLoader(image=train_images, label=np.squeeze(train_labels))
 train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
@@ -170,7 +158,7 @@ if max_likelihood:
     train_data_state = init_train_data_state
     opt_state = optimizer.init(init_params)
     loss_list = []
-    for i in range(epochs):
+    for i in range(iterations):
         train_data_state, batch = train_batch_get(train_data_state, information=False)
 
         loss, grad = value_and_grad(loss_fn)(params, batch)
@@ -250,8 +238,6 @@ if use_alias:
     results_original = sampler(sample, iterations=iterations)
     results = results_original[0]
     results = results['samples']['variables']
-    # params = tree_map(lambda x: jnp.array(x[0]), results['w'])
-
 
     def evaluate_model(results, loader, validation=True, plot=True, fig_name="mod1e+7iters"):
         my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
@@ -279,5 +265,5 @@ if use_alias:
             plt.show()
 
 
-    evaluate_model(results, train_loader, validation=False, fig_name="new")
-    evaluate_model(results, val_loader, validation=True, fig_name="new")
+    evaluate_model(results, train_loader, validation=False, fig_name="15epochs_lr_5e-3_bs256_resize168")
+    evaluate_model(results, val_loader, validation=True, fig_name="15epochs_lr_5e-3_bs256_resize168")

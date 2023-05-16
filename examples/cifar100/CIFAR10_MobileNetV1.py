@@ -34,13 +34,13 @@ num_classes = 10
 (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.cifar10.load_data()
 train_images = tf.image.resize(
     train_images,
-    (168,168),
+    (112,112),
     method=tf.image.ResizeMethod.BILINEAR,
     preserve_aspect_ratio=True
 )
 test_images = tf.image.resize(
     test_images,
-    (168,168),
+    (112,112),
     method=tf.image.ResizeMethod.BILINEAR,
     preserve_aspect_ratio=True
 )
@@ -53,7 +53,7 @@ iterations_per_epoch = int(train_images.shape[0]
 iterations = epochs*iterations_per_epoch
 burn_in_size = iterations-100
 # lr_first = 0.0005
-lr_first = 0.005
+lr_first = 0.001
 gamma = 0.55
 lr_last = lr_first * (iterations) ** (-gamma)
 accepted_samples = 20
@@ -140,7 +140,7 @@ def count_params(params):
 
 print("Model has " + str(count_params(init_params)) + " parameters")
 
-max_likelihood = True
+max_likelihood = False
 if max_likelihood:
     # loss is negative log_likelihood
     def loss_fn(params, batch):
@@ -223,7 +223,7 @@ sample = {"w": init_params}
 
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
-use_alias = False
+use_alias = True
 if use_alias:
     sampler = alias.sgld(potential_fn=potential_fn,
                          data_loader=train_loader,
@@ -239,30 +239,59 @@ if use_alias:
     results = results_original[0]
     results = results['samples']['variables']
 
-    def evaluate_model(results, loader, validation=True, plot=True, fig_name="mod1e+7iters"):
+    def evaluate_model(results, loader, evaluation="hard", validation=True, plot=True, fig_name="mod1e+7iters"):
         my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
-        accuracy = []
 
-        @jit
-        def calculate_accuracy(batch, mask, carry):
-            temp_labels = jnp.array(batch['label'])
+        # @jit
+        def fetch_logits(batch, mask, carry):
             temp_logits = apply_mobilenet(params, None, batch, is_training=False)
-            argmax_results = jnp.argmax(temp_logits, axis=-1)
-            correct_count = sum(argmax_results == jnp.squeeze(temp_labels))
-            incorrect_count = sum(argmax_results != jnp.squeeze(temp_labels))
-            return [correct_count, incorrect_count], carry + 1
+            return temp_logits, carry + 1
 
+        if validation:
+            logits_all = np.empty((accepted_samples, 5000, num_classes))
+        else:
+            logits_all = np.empty((accepted_samples, train_labels.shape[0], num_classes))
         for j in range(accepted_samples):  # go over parameter samples
             params = tree_map(lambda x: jnp.array(x[j]), results['w'])
-            out, _ = my_parameter_mapper(calculate_accuracy, 0, masking=True)
-            accuracy.append(sum(out[0] / (sum(out[0]) + sum(out[1]))))
+            out, _ = my_parameter_mapper(fetch_logits, 0, masking=True)
+            logits_all[j,:,:] = out.reshape(-1,10)
+        if evaluation=="hard":
+            class_predictions = np.argmax(logits_all, axis=-1)
+            hard_class_predictions = np.apply_along_axis(lambda x: np.bincount(x, minlength=10).argmax(), 0, class_predictions)
+            if validation:
+                accuracy = sum(hard_class_predictions== np.squeeze(test_labels[5000:, :]))/5000
+            else:
+                accuracy = sum(hard_class_predictions== np.squeeze(train_labels))/train_labels.shape[0]
+            print(validation*"Validation" + (not validation)* "Training" + " Hard-Voting Accuracy: "+str(accuracy*100)+"%")
+        # else:
+        probabilities = np.exp(logits_all)
+        mean_probabilities = np.mean(probabilities, axis=0)
+        soft_class_predictions = np.argmax(mean_probabilities, axis=-1)
+        if validation:
+            accuracy = sum(soft_class_predictions == np.squeeze(test_labels[5000:, :])) / 5000
+            random_samples = np.random.randint(0, 4999, 5)
+        else:
+            accuracy = sum(soft_class_predictions == np.squeeze(train_labels)) / train_labels.shape[0]
+            random_samples = np.random.randint(0, 49999, 5)
+        print(validation * "Validation" + (not validation) * "Training" + " Soft-Voting Accuracy: " + str(accuracy * 100) + "%")
 
-        if plot:
-            plt.plot(jnp.arange(1, len(accuracy) + 1, step=1), accuracy)
-            plt.xlabel("Number of sampled parameters")
-            plt.ylabel(validation * "Validation" + (not validation) * "Training" + " accuracy")
-            plt.savefig(fig_name + validation * "_Validation" + (not validation) * "_Training")
-            plt.show()
+
+        fig, ax = plt.subplots(1, 5, figsize=(13, 4))
+        for i in range(len(random_samples)):
+            ax[i].boxplot(probabilities[:,random_samples[i],:])
+            ax[i].set_title("Sample "+str(random_samples[i]))
+
+
+        fig.tight_layout(pad=0.2)
+        plt.savefig("UQ_CIFAR10_"+validation * "Validation" + (not validation) * "Training", format="pdf")
+        plt.show()            # accuracy.append(sum(out[0] / (sum(out[0]) + sum(out[1]))))
+
+        # if plot:
+        #     plt.plot(jnp.arange(1, len(accuracy) + 1, step=1), accuracy)
+        #     plt.xlabel("Number of sampled parameters")
+        #     plt.ylabel(validation * "Validation" + (not validation) * "Training" + " accuracy")
+        #     plt.savefig(fig_name + validation * "_Validation" + (not validation) * "_Training")
+        #     plt.show()
 
 
     evaluate_model(results, train_loader, validation=False, fig_name="15epochs_lr_5e-3_bs256_resize168")

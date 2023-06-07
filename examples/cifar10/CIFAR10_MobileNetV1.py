@@ -128,105 +128,96 @@ sample = {"w": init_params}
 
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
-use_alias = True
-if use_alias:
-    sampler = alias.sgld(potential_fn=potential_fn,
-                         data_loader=train_loader,
-                         cache_size=cached_batches,
-                         batch_size=batch_size,
-                         first_step_size=lr_first,
-                         last_step_size=lr_last,
-                         burn_in=burn_in_size,
-                         accepted_samples=accepted_samples,
-                         rms_prop=True,
-                         progress_bar=True)
-    results_original = sampler(sample, iterations=iterations)
-    results = results_original[0]
-    results = results['samples']['variables']
+sampler = alias.sgld(potential_fn=potential_fn,
+                     data_loader=train_loader,
+                     cache_size=cached_batches,
+                     batch_size=batch_size,
+                     first_step_size=lr_first,
+                     last_step_size=lr_last,
+                     burn_in=burn_in_size,
+                     accepted_samples=accepted_samples,
+                     rms_prop=True,
+                     progress_bar=True)
 
+results_original = sampler(sample, iterations=iterations)
+results = results_original[0]
+results = results['samples']['variables']
 
-    def evaluate_model(results, loader, evaluation="hard", dataset="training"):
-        my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
+def evaluate_model(results, loader, evaluation="hard", dataset="training"):
+    my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
+    @jit
+    def fetch_logits(batch, mask, carry):
+        temp_logits = apply_mobilenet(params, None, batch, is_training=False)
+        return temp_logits, carry + 1
 
-        # @jit
-        def fetch_logits(batch, mask, carry):
-            temp_logits = apply_mobilenet(params, None, batch, is_training=False)
-            return temp_logits, carry + 1
+    if dataset == "validation" or dataset == "test":
+        logits_all = np.empty((accepted_samples, test_labels.shape[0]//2, num_classes))
+    else:
+        logits_all = np.empty((accepted_samples, train_labels.shape[0], num_classes))
+    for j in range(accepted_samples):  # go over parameter samples
+        params = tree_map(lambda x: jnp.array(x[j]), results['w'])
+        out, _ = my_parameter_mapper(fetch_logits, 0, masking=True)
+        logits_all[j, :, :] = out.reshape(-1, 10)
 
-        if dataset == "validation" or dataset == "test":
-            logits_all = np.empty((accepted_samples, test_labels.shape[0]//2, num_classes))
-        else:
-            logits_all = np.empty((accepted_samples, train_labels.shape[0], num_classes))
-
-        for j in range(accepted_samples):  # go over parameter samples
-            params = tree_map(lambda x: jnp.array(x[j]), results['w'])
-            out, _ = my_parameter_mapper(fetch_logits, 0, masking=True)
-            logits_all[j, :, :] = out.reshape(-1, 10)
-
-        # evaluation using hard-voting: obtain predicted class labels from each model and use the most frequently predicted class
-        if evaluation == "hard":
-            class_predictions = np.argmax(logits_all, axis=-1)
-            hard_class_predictions = np.apply_along_axis(lambda x: np.bincount(x, minlength=10).argmax(), 0,
-                                                         class_predictions)
-
-            if dataset == "validation":
-                accuracy = sum(hard_class_predictions == np.squeeze(test_labels[test_labels.shape[0]//2:, :])) / test_labels.shape[0]//2
-            elif dataset == "test":
-                accuracy = sum(hard_class_predictions == np.squeeze(test_labels[:test_labels.shape[0]//2, :])) / test_labels.shape[0]//2
-            else:
-                accuracy = sum(hard_class_predictions == np.squeeze(train_labels)) / train_labels.shape[0]
-            print((dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
-                        dataset == "test") * "Test" + " Hard-Voting Accuracy: " + str(
-                accuracy * 100) + "%")
-
-            certainty = np.count_nonzero(class_predictions == hard_class_predictions, axis=0) / accepted_samples
-            accuracy_over_certainty = []
-            for k in range(6):
-                if dataset == "validation":
-                    accuracy_over_certainty.append(
-                        sum((certainty >= (0.5 + 0.1 * k)) * hard_class_predictions == np.squeeze(
-                            test_labels[test_labels.shape[0]//2:, :])) / sum(certainty >= (0.5 + 0.1 * k)) * 100)
-                elif dataset == "test":
-                    accuracy_over_certainty.append(
-                        sum((certainty >= (0.5 + 0.1 * k)) * hard_class_predictions == np.squeeze(
-                            test_labels[:test_labels.shape[0]//2, :])) / sum(certainty >= (0.5 + 0.1 * k)) * 100)
-                else:
-                    accuracy_over_certainty.append(
-                        sum((certainty >= (0.5 + 0.1 * k)) * hard_class_predictions == np.squeeze(train_labels)) / sum(
-                            certainty >= (0.5 + 0.1 * k)) * 100)
-
-            print((dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
-                        dataset == "test") * "Test" + " Hard-Voting Accuracy-Over-Certainty: " + str(
-                accuracy_over_certainty) + "%")
-
-
-        # evaluation using soft-voting: obtain predicted probabilities from each model use the mean of these probabilities to pick a class
-        probabilities = np.exp(logits_all)
-        mean_probabilities = np.mean(probabilities, axis=0)
-        soft_class_predictions = np.argmax(mean_probabilities, axis=-1)
+    # evaluation using hard-voting: obtain predicted class labels from each model and use the most frequently predicted class
+    if evaluation == "hard":
+        class_predictions = np.argmax(logits_all, axis=-1)
+        hard_class_predictions = np.apply_along_axis(lambda x: np.bincount(x, minlength=10).argmax(), 0,
+                                                     class_predictions)
         if dataset == "validation":
-            accuracy = sum(soft_class_predictions == np.squeeze(test_labels[test_labels.shape[0]//2:, :])) / test_labels.shape[0]//2
-            random_samples = np.random.randint(0, test_labels.shape[0]//2-1, 5)
+            accuracy = sum(hard_class_predictions == np.squeeze(test_labels[test_labels.shape[0]//2:, :])) / (test_labels.shape[0]//2)
         elif dataset == "test":
-            accuracy = sum(soft_class_predictions == np.squeeze(test_labels[:test_labels.shape[0]//2, :])) / test_labels.shape[0]//2
-            random_samples = np.random.randint(0, test_labels.shape[0]//2-1, 5)
+            accuracy = sum(hard_class_predictions == np.squeeze(test_labels[:test_labels.shape[0]//2, :])) / (test_labels.shape[0]//2)
         else:
-            accuracy = sum(soft_class_predictions == np.squeeze(train_labels)) / train_labels.shape[0]
-            random_samples = np.random.randint(0, train_labels.shape[0]-1, 5)
+            accuracy = sum(hard_class_predictions == np.squeeze(train_labels)) / train_labels.shape[0]
         print((dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
-                    dataset == "test") * "Test" + " Soft-Voting Accuracy: " + str(accuracy * 100) + "%")
+                    dataset == "test") * "Test" + " Hard-Voting Accuracy: " + str(
+            accuracy * 100) + "%")
+        certainty = np.count_nonzero(class_predictions == hard_class_predictions, axis=0) / accepted_samples
+        accuracy_over_certainty = []
+        for k in range(6):
+            if dataset == "validation":
+                accuracy_over_certainty.append(
+                    sum((certainty >= (0.5 + 0.1 * k)) * hard_class_predictions == np.squeeze(
+                        test_labels[test_labels.shape[0]//2:, :])) / sum(certainty >= (0.5 + 0.1 * k)) * 100)
+            elif dataset == "test":
+                accuracy_over_certainty.append(
+                    sum((certainty >= (0.5 + 0.1 * k)) * hard_class_predictions == np.squeeze(
+                        test_labels[:test_labels.shape[0]//2, :])) / sum(certainty >= (0.5 + 0.1 * k)) * 100)
+            else:
+                accuracy_over_certainty.append(
+                    sum((certainty >= (0.5 + 0.1 * k)) * hard_class_predictions == np.squeeze(train_labels)) / sum(
+                        certainty >= (0.5 + 0.1 * k)) * 100)
+        print((dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
+                    dataset == "test") * "Test" + " Hard-Voting Accuracy-Over-Certainty: " + str(
+            accuracy_over_certainty) + "%")
 
-        fig, ax = plt.subplots(1, 5, figsize=(13, 4))
-        for i in range(len(random_samples)):
-            ax[i].boxplot(probabilities[:, random_samples[i], :])
-            ax[i].set_title("Sample " + str(random_samples[i]))
-            ax[i].set_xticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+    # evaluation using soft-voting: obtain predicted probabilities from each model use the mean of these probabilities to pick a class
+    probabilities = np.exp(logits_all)
+    mean_probabilities = np.mean(probabilities, axis=0)
+    soft_class_predictions = np.argmax(mean_probabilities, axis=-1)
+    if dataset == "validation":
+        accuracy = sum(soft_class_predictions == np.squeeze(test_labels[test_labels.shape[0]//2:, :])) / (test_labels.shape[0]//2)
+        random_samples = np.random.randint(0, test_labels.shape[0]//2-1, 5)
+    elif dataset == "test":
+        accuracy = sum(soft_class_predictions == np.squeeze(test_labels[:test_labels.shape[0]//2, :])) / (test_labels.shape[0]//2)
+        random_samples = np.random.randint(0, test_labels.shape[0]//2-1, 5)
+    else:
+        accuracy = sum(soft_class_predictions == np.squeeze(train_labels)) / train_labels.shape[0]
+        random_samples = np.random.randint(0, train_labels.shape[0]-1, 5)
+    print((dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
+                dataset == "test") * "Test" + " Soft-Voting Accuracy: " + str(accuracy * 100) + "%")
 
-        fig.tight_layout(pad=0.2)
-        plt.savefig("UQ_CIFAR10_" + (dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
-                    dataset == "test") * "Test" + ".pdf", format="pdf")
-        plt.show()
+    fig, ax = plt.subplots(1, 5, figsize=(13, 4))
+    for i in range(len(random_samples)):
+        ax[i].boxplot(probabilities[:, random_samples[i], :])
+        ax[i].set_title("Sample " + str(random_samples[i]))
+        ax[i].set_xticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+    fig.tight_layout(pad=0.2)
+    plt.savefig("UQ_CIFAR10_" + (dataset == "training") * "Training" + (dataset == "validation") * "Validation" + (
+                dataset == "test") * "Test" + ".pdf", format="pdf")
+    plt.show()
 
-    evaluate_model(results, train_loader, dataset="training")
-    evaluate_model(results, val_loader, dataset="validation")
-    evaluate_model(results, test_loader, dataset="test")
+evaluate_model(results, train_loader, dataset="training")
+evaluate_model(results, val_loader, dataset="validation")
+evaluate_model(results, test_loader, dataset="test")

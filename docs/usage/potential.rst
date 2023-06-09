@@ -3,9 +3,17 @@ Compute Potential from Likelihood
 ==================================
 
 Stochastic Gradient MCMC evaluates the potential and the model
-for a multiple of observations or all observations. The likelihood might be
-written for only a single sample or a batch of data. Therefore, this module acts
-as an interface between the different likelihoods and the integrators.
+for a subset of observations or all observations. Therefore, this module
+acts as an interface between the different likelihoods and the integrators.
+The likelihood can be implemented for only a single sample or a batch of data.
+
+Setup DataLoaders
+-------------------
+
+For demonstration purposes, we setup a data loader to compute the potential for
+a random batch of data as well as for the full dataset. Note that the keyword
+arguments selected to initialize the data (here 'mean') have to be used to
+access the data of the observations in the likelihood.
 
 .. doctest::
 
@@ -22,17 +30,13 @@ as an interface between the different likelihoods and the integrators.
   >>> test_sample = {'mean': jnp.zeros(5), 'std': jnp.ones(1)}
 
 
-Setup Data Loaders
--------------------
-
-For demonstration purposes, we setup a data loader to compute the potential for
-a random batch of data as well as for the full dataset.
-
 Stochastic Potential
 _____________________
 
-The stochastic potential is an estimation of the true potential. It is
-calculated over a small dataset and rescaled to the full dataset.
+The stochastic potential is an estimate of the true potential. It is
+calculated over a mini-batch and rescaled to the full dataset.
+To this end, we need to initialize functions that retreive mini-batches of the
+data.
 
   >>> batch_init, batch_get, _ = data.random_reference_data(data_loader,
   ...                                                       cached_batches_count=50,
@@ -61,11 +65,16 @@ Unbatched Likelihood
 In the simplest case, the likelihood and model function only accept a single
 observation and parameter set.
 Therefore, this module maps the evaluation over the mini-batch or even all
-observations by making use of Jax's tools ``map``, ``vmap`` and ``pmap``.
+observations by making use of the Jax tools ``map``, ``vmap`` and ``pmap``.
 
 The likelihood can be written for a single observation. The
 :mod:`jax_sgmc.potential` module then evaluates the likelihood for a batch of
-reference data sequentially via ``map`` or parallel via ``vmap`` or ``pmap``.
+reference data sequentially via ``map`` or in parallel via ``vmap`` or ``pmap``.
+The first input to the likelihood function is the sample, i.e. the model
+parameters. You can access all parameters of the dict via the keywords defined
+in the initial sample (e.g. 'test_sample' above). The second input is the
+observation from the dataset, where the data can be accessed with the same
+keyword arguments used during the initialization of the DataLoader.
 
   >>> def likelihood(sample, observation):
   ...   likelihoods = jscp.stats.norm.logpdf(observation['mean'],
@@ -78,8 +87,8 @@ reference data sequentially via ``map`` or parallel via ``vmap`` or ``pmap``.
 Stochastic Potential
 ______________________
 
-The stochastic potential is computed automatically from the likelihood of a
-single observation.
+The stochastic potential is computed automatically from the prior and likelihood
+of a single observation.
 
   >>>
   >>> stochastic_potential_fn = potential.minibatch_potential(prior,
@@ -90,6 +99,10 @@ single observation.
   >>>
   >>> print(round(potential_eval))
   838
+
+For debugging purposes, it is recommended to check with a test sample and a test
+observation whether the potential is evaluated correctly. This simplifies the
+search for bugs without the overhead from the SG-MCMC sampler.
 
 Full Potential
 _______________

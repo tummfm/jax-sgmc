@@ -4,24 +4,26 @@ Saving of Samples
 Seting up Saving
 -----------------
 
-**JaxSGMC** supports saving and checkpointing inside of jit-compiled
-functions. Saving data consists of two parts:
+**JaxSGMC** supports saving inside of jit-compiled
+functions. Additionally, checkpointing can also be provided (if this is a
+priority for you, please open a feature request on GitHub).
+Saving data consists of two parts:
 
 Data Collector
 _______________
 
 The data collector serializes the data and writes it to the disk and or keeps
-it in memory. Every data collector following the interface works.
+it in memory. Every data collector following this interface works.
 
 Saving
 ________
 
-The function save initializes the interface between the data collector and the
+The function 'save' initializes the interface between the data collector and the
 jit-compiled function.
 
 If the device memory is large, it is possible to use
 :func:`jax_sgmc.io.no_save`. This function has the same signature towards the
-jit-compiled function but keeps the all collected data in the device memory.
+jit-compiled function but keeps all collected samples in the device memory.
 
 
 Extending Saveable PyTree Types

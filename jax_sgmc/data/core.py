@@ -415,7 +415,7 @@ class _Requests:
   def __call__(self,
                chain_id: int,
                token: JaxUUID,
-               device: jax.xla.Device,
+               device: jax.Device,
                callback_uuid: JaxUUID,
                device_count: int = 1,
                strict: bool = False):

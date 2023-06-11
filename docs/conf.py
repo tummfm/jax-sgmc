@@ -102,6 +102,17 @@ nb_render_priority = {
   )
 }
 
+# -- MathJax ------------------------------------------------------------------
+
+mathjax3_config = {
+  "tex": {
+    "inlineMath": [['$', '$'], ['\\(', '\\)']]
+  },
+  "svg": {
+    "fontCache": 'global'
+  }
+}
+
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for

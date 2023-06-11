@@ -96,7 +96,7 @@ logits = apply_mobilenet(init_params, None, init_batch)
 
 
 # Initialize potential with log-likelihood
-def likelihood(sample, observations):
+def log_likelihood(sample, observations):
     logits = apply_mobilenet(sample["w"], None, observations)
     # Log-likelihood is negative cross entropy
     log_likelihood = -optax.softmax_cross_entropy_with_integer_labels(logits, observations["label"])
@@ -105,9 +105,7 @@ def likelihood(sample, observations):
 
 # Set gaussian prior
 prior_scale = 10.
-
-
-def gaussian_prior(sample):
+def log_gaussian_prior(sample):
     prior_params = sample["w"]
     gaussian = partial(jscipy.stats.norm.logpdf, loc=0., scale=prior_scale)
     priors = tree_map(gaussian, prior_params)
@@ -118,15 +116,16 @@ def gaussian_prior(sample):
 # The likelihood signature changes from:   (Sample, Data) -> Likelihood
 #                                   to :   (State, Sample, Data) -> Likelihood, NewState
 # if has_state is set to true.
-potential_fn = potential.minibatch_potential(prior=gaussian_prior,
-                                             likelihood=likelihood,
+# Construct potential
+potential_fn = potential.minibatch_potential(prior=log_gaussian_prior,
+                                             likelihood=log_likelihood,
                                              is_batched=True,
                                              strategy='vmap')
 
 # Define sample (of model parameters)
 sample = {"w": init_params}
 
-# Construct potential
+# Sanity-check likelihoods
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
 # Create pSGLD sampler (with RMSProp precodntioner)

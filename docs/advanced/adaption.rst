@@ -16,9 +16,9 @@ Each adaption strategy is expected to return three functions
 The decorator :func:`adaption` wraps all three functions to flatten pytrees to
 1D-arrays and unflatten the results of :func:`get_adaption`.
 
-The rule is that all arguments which are passed by position are expected
+The rule is that all arguments that are passed by position are expected
 to have the same shape as the sample pytree and are flattened to 1D-arrays.
-Arguments which should not be raveled should be passed by keyword.
+Arguments that should not be raveled have to be passed by keyword.
 
 1. :func:`init_adaption`
 
@@ -32,7 +32,7 @@ Arguments which should not be raveled should be passed by keyword.
     def init_adaption(sample, momentum, parameter = 0.5):
       ...
 
-  In the above example, the sample and the momentum are 1D-arrays with size
+  In the example above, the sample and the momentum are 1D-arrays with size
   equal to the latent variable count. Parameter is a scalar and will not be
   raveled.
 

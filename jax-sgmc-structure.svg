@@ -2,6 +2,7 @@
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
 <svg width="100%" height="100%" viewBox="0 0 389 255" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:square;stroke-linejoin:round;stroke-miterlimit:2;">
     <g>
+        <rect width="100%" height="100%" fill="white"></rect>
         <path d="M144,11.382C144,9.175 142.208,7.382 140,7.382L49.931,7.382C47.724,7.382 45.931,9.175 45.931,11.382L45.931,148.528C45.931,150.736 47.724,152.528 49.931,152.528L140,152.528C142.208,152.528 144,150.736 144,148.528L144,11.382Z" style="fill:rgb(153,213,202);"/>
         <path d="M144,11.382C144,9.175 142.208,7.382 140,7.382L49.931,7.382C47.724,7.382 45.931,9.175 45.931,11.382L45.931,148.528C45.931,150.736 47.724,152.528 49.931,152.528L140,152.528C142.208,152.528 144,150.736 144,148.528L144,11.382Z" style="fill:none;stroke:rgb(54,131,116);stroke-width:2.5px;"/>
         <rect x="46.368" y="7.037" width="97.632" height="7.397" style="fill:rgb(54,130,116);"/>

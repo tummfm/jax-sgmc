@@ -4,27 +4,27 @@ Data Loading
 Steps for Setting up a Data Chain
 ---------------------------------
 
-Access of (random) data in **JaxSGMC** consists of two steps:
+Access of data in **JaxSGMC** consists of two steps:
 
 - Setup Data Loader
 - Setup Callback Wrappers
 
-The Data Loaders determines where the data is stored and how it is passed
+The DataLoader determines where the data is stored and how it is passed
 to the device (e. g. shuffled in epochs).
 
-The Callback Wrappers requests new batches from the Data Loader and passes them
+The Callback Wrappers requests new batches from the DataLoader and pass them
 to the device via Jax's Host-Callback module. Therefore, only a subset of the
 data is stored in the device memory.
 
-The combination of a Data Loader and Callback Wrappers determines how the data is
+The combination of a DataLoader and Callback Wrappers determines how the data is
 passed to the computation. Therefore, this guide presents different methods of
 data access with ``NumpyDataLoader`` and ``TensorflowDataLoader``.
 
 .. note::
-    When using multiple Data Loaders sequentially in a single script, the
+    When using multiple DataLoaders sequentially in a single script, the
     release function should be called after the Callback Wrapper has been used in
-    the last computation. After this, the reference to the Data Loader will be
-    discarded and the Data Loader can be deleted.
+    the last computation. After this, the reference to the DataLoader has been
+    discarded and the DataLoader can be deleted.
 
 Important Notes
 ----------------
@@ -32,8 +32,8 @@ Important Notes
 Getting shape and dtype of the data
 ____________________________________
 
-Some models need to know the shape and dtype of the reference data. Therefore,
-an all-zero batch can be drawn from every Data Loader.
+Some models needs to now the shape and dtype of the reference data. Therefore,
+an all-zero batch can be drawn from every DataLoader.
 
   ::
 
@@ -42,7 +42,7 @@ an all-zero batch can be drawn from every Data Loader.
                  [0., 0.],
                  [0., 0.]], dtype=float32)}
 
-If no batch size is specified a single observation is returned (all leaves'
+If no batch size is specified, a single observation is returned (all leaves'
 shapes are reduced by the first axis).
 
   ::
@@ -50,36 +50,6 @@ shapes are reduced by the first axis).
     print(data_loader.initializer_batch())
     {'x_r': Array(0, dtype=int32), 'y_r': Array([0., 0.], dtype=float32)}
 
-Combining ``pmap`` and ``jit``
-______________________________
-
-.. warning::
-   Jit-compiling a function including pmap requires adjustments of the Callback
-   Wrapper functions, which can lead to memory leaks if not done correctly.
-
-   Additionally, combining ``jit`` and ``pmap`` can lead to inefficient data
-   movement. See `<https://github.com/google/jax/issues/2926>`_.
-
-When jitting a function f including a pmap function g, also the parts of f
-outside of g are run on all involved devices. This causes all devices to request
-the same cache state (verified by a token) from a single chain.
-
-For example, if g is pmapped to 5 devices, f is also going to run on 5 devices
-and hence 5 times the same cache state is requested from a chain.
-
-**JaxSGMC** resolved this issue by caching all requested states on the host for a
-specified number of requests.
-
-In the above example, the Callback Wrapper used in f should be called like this:
-
-  ::
-
-  ... = full_data_map(to_map_fn, data_state, carry, device_count=5)
-
-
-It is important to note that providing a device count larger than the actual
-number of calling devices causes a memory leak, as all requested cache states
-will remain on the host until the program has finished.
 
 Numpy Data Loader
 ------------------
@@ -90,9 +60,10 @@ Numpy Data Loader
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
-First we set up the dataset. This is very simple, as each array can be assigned
+First, we set up the dataset. This is very simple, as each array can be assigned
 as a keyword argument to the dataloader. The keywords of the single arrays form
-the keys of the pytree-dict, bundling all observations.
+the keys of the pytree-dict, bundling all observations. Note that you can access
+the data supplied to the likelihood via the same keywords.
 
   >>> # The arrays must have the same length along the first dimension,
   >>> # corresponding to the total observation count
@@ -103,7 +74,7 @@ the keys of the pytree-dict, bundling all observations.
 
 The host callback wrappers cache some data in the device memory to reduce the
 number of calls to the host. The cache size equals the number of batches stored
-on the device. A bigger cache size is more effective in computation time, but
+on the device. A larger cache size is more efficient in computation time, but
 has an increased device memory consumption.
 
   >>> rd_init, rd_batch, _ = data.random_reference_data(data_loader, 100, 2)
@@ -133,8 +104,8 @@ observations:
 - Shuffling in epochs: Draw from all samples without replacement and return mask
   to mark invalid samples at the end of the epoch.
 
-This is illustrated at a small toy-dataset, where the observation count is not a
-multiple of the batch size:
+This is illustrated for a small toy-dataset, for which the observation count is
+not a multiple of the batch size:
 
 .. doctest::
 
@@ -171,8 +142,8 @@ Mapping over Full Dataset
 __________________________
 
 It is also possible to map a function over the complete dataset provided by a
-``DataLoader``. In each iteration, the function is mapped over a batch of data to
-speed up the calculation but limit the memory consumption.
+DataLoader. In each iteration, the function is mapped over a batch of data to
+speed up the calculation, but limit the memory consumption.
 
 In this toy example, the dataset consists of the potential bases
 :math:`\mathcal{D} = \left\{i \mid i = 0, \ldots, 10 \right\}`. In a scan loop,
@@ -190,8 +161,8 @@ the sum of the potentials with given exponents is calculated:
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
-First, the data loader must be set up. The mini batch size is not required to
-truly divide the total observation count. This is realized by filling up the
+First, the data loader must be set up. The batch size is not required to
+divide the total observation count. This is realized by filling up the
 last batch with some values, which are sorted out either automatically or
 directly by the user with the provided mask.
 
@@ -233,7 +204,7 @@ memory consumption.
   >>> print(f"Result: {summed_result : d}")
   Result:  285
 
-The full data map can be used in ``jit``-compiled functions, e. g. in a scan loop,
+The full data map can be used in ``jit``-compiled functions, e.g. in a scan loop,
 such that it is possible to compute the results for multiple exponents in a
 ``lax.scan``-loop.
 
@@ -274,7 +245,7 @@ Tensorflow Data Loader
 Random Access
 _______________________
 
-The tensorflow data loader is a great choice for many standard datasets
+The tensorflow DataLoader is a great choice for many standard datasets
 available on tensorflow_datasets.
 
 .. doctest::
@@ -292,8 +263,8 @@ available on tensorflow_datasets.
   ...   for key, item in data.items():
   ...     print(f"{key} with shape {item.shape} and dtype {item.dtype}")
 
-The pipeline returned by tfds load can be directly passed to the data loader.
-However, not all tensorflow data types can be transformed to jax data types, for
+The pipeline returned by tfds load can be directly passed to the DataLoader.
+However, not all tensorflow data types can be transformed to Jax data types, for
 example the feature 'id', which is a string. Those keys can be simply excluded
 via the keyword argument `exclude_keys`.
 
@@ -317,8 +288,7 @@ via the keyword argument `exclude_keys`.
 
 The host callback wrappers cache some data in the device memory to reduce the
 number of calls to the host. The cache size equals the number of batches stored
-on the device. A bigger cache size is more effective in computation time, but
-has an increased device memory consumption.
+on the device.
 
   >>> data_init, data_batch, _ = data.random_reference_data(data_loader, 100, 1000)
   >>>
@@ -327,3 +297,34 @@ has an increased device memory consumption.
   >>> show_data(batch)
   image with shape (1000, 32, 32, 3) and dtype uint8
   label with shape (1000,) and dtype int32
+
+Combining ``pmap`` and ``jit``
+______________________________
+
+.. warning::
+   Jit-compiling a function including pmap requires adjustments of the Callback
+   Wrapper functions, which can lead to memory leaks if not done correctly.
+
+   Additionally, combining ``jit`` and ``pmap`` can lead to inefficient data
+   movement. See `<https://github.com/google/jax/issues/2926>`_.
+
+When jitting a function f that includes a pmap function g, also the parts of f
+outside of g are run on all involved devices. This causes all devices to request
+the same cache state (verified by a token) from a single chain.
+
+For example, if g is pmapped to 5 devices, f is also going to run on 5 devices
+and hence 5 times the same cache state is requested from a chain.
+
+JaxSGMC resolved this issue by caching all requested states on the host for a
+specified number of requests.
+
+In the above example, the Callback Wrapper used in f should be called like:
+
+  ::
+
+  ... = full_data_map(to_map_fn, data_state, carry, device_count=5)
+
+
+It is important to note that providing a device count larger than the actual
+number of calling devices causes a memory leak, as all requested cache states
+will remain on the host until the program has finished.

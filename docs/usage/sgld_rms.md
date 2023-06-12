@@ -6,12 +6,10 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.13.7
+    jupytext_version: 1.14.4
 kernelspec:
   display_name: Python 3
   name: python3
-mystnb:
-  execution_timeout: 600
 ---
 
 ```{raw-cell}
@@ -35,6 +33,9 @@ limitations under the License.
 
 ```{code-cell} ipython3
 :tags: [hide-cell]
+
+import warnings
+warnings.filterwarnings('ignore')
 
 import h5py
 import matplotlib.pyplot as plt

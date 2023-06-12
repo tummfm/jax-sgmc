@@ -48,14 +48,14 @@ schedulers.
 
 Static information is returned in addition to the scheduler state, e.g.
 the total number of iterations or the expected number of collected samples.
-This information is necessary e.g. for the ``io``-module to allocate sufficient
-memory for the samples to be saved.
+This information is necessary, e.g., for the ``io``-module to allocate
+sufficient memory for the samples to be saved.
 
   >>> print(static_information)
   static_information(samples_collected=10)
 
-In this example we can see that the temperature parameter has been assigned to a
-default value of 1.0 and the different step size schedules are updated with
+In this example, we can see that the temperature parameter has been assigned to
+a default value of 1.0 and the different step size schedules are updated with
 different gamma parameters:
 
   >>> curr_sched_a = get_fn(sched_a)

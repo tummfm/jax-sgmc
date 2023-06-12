@@ -4,7 +4,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jax-sgmc"
-version = "0.1.1"
 authors = [
     {name = "Paul Fuchs", email = "paul.fuchs@tum.de"},
     {name = "Stephan Thaler", email = "stephan.thaler@tum.de"},
@@ -29,6 +28,7 @@ dependencies = [
     "jaxlib >= 0.1.52",
     "dataclasses",
 ]
+dynamic = ["version"]
 
 [project.urls]
 "Documentation" = "https://jax-sgmc.readthedocs.io/en/latest/"
@@ -59,3 +59,6 @@ dependencies = [
 
 [tool.setuptools.packages]
 find = {namespaces = false}
+
+[tool.setuptools.dynamic]
+version = {attr = "jax_sgmc.version.__version__"}

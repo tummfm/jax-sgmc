@@ -21,7 +21,7 @@ jit-compiled function.
 
 If the device memory is large, it is possible to use
 :func:`jax_sgmc.io.no_save`. This function has the same signature towards the
-jit-compiled function but keeps the all collected data in the device memory.
+jit-compiled function but keeps the all collected data in the device's working memory.
 
 
 Extending Saveable PyTree Types
@@ -33,7 +33,7 @@ By default, transformations are defined for some default types:
   - dict
   - (named)tuple
 
-Additionally, transformation for the following optional libraries are
+Additionally, transformations for the following optional libraries are
 implemented:
 
   - haiku._src.data_structures.FlatMapping

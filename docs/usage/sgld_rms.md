@@ -109,7 +109,7 @@ y = jnp.matmul(x, w) + noise
 ```
 
 The NumpyDataLoader assembles batches randomly by drawing from the the complete
-dataset with and without replacement (shuffeling).
+dataset with and without replacement (shuffling).
 It also provides the possibility to start the batching from a defined state, 
 controlled via the seed.
 
@@ -155,11 +155,13 @@ def model(sample, observations):
 ```
 
 **JaxSGMC** supports samples in the form of pytrees, so no flattering of e.g.
-Neural Net parameters is necessary. In our case we can separate the standard
+neural network parameters is necessary. In our case we can separate the standard
 deviation, which is only part of the likelihood, from the weights by using a
 dictionary:
 
 ```{code-cell} ipython3
+sample = {"log_sigma": jnp.array(1.0), "w": jnp.zeros((N, 1))}
+
 def likelihood(sample, observations):
     sigma = jnp.exp(sample["log_sigma"])
     y = observations["y"]

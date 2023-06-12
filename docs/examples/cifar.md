@@ -1,24 +1,46 @@
 ---
 jupytext:
+  formats: examples///ipynb,docs//examples//md:myst
+  main_language: python
   text_representation:
-    extension: .mystnb
+    extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.14.6
+    jupytext_version: 1.14.4
 kernelspec:
   display_name: Python 3
   language: python
   name: python3
 ---
 
+```{raw-cell}
+
+---
+Copyright 2021 Multiscale Modeling of Fluid Materials, TU Munich
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+---
+```
+
 # Image Classification on CIFAR-10
 
 In this example we will show how _JaxSGMC_ can be used to set up and train a neural network. The objective is to perform image classification on the dataset [CIFAR10](https://www.cs.toronto.edu/~kriz/cifar.html) which consists of 60000 32x32 images. We will use the [MobileNet](https://arxiv.org/abs/1704.04861) architecture implemented by [Haiku](https://github.com/deepmind/dm-haiku).
 
++++
+
 We import the necessary libraries, and ignore certain warnings.
 
-```{code-cell} ipython2
-:tags: [hide-cell]
+```{code-cell} ipython3
 import os
 import warnings
 
@@ -41,7 +63,7 @@ import matplotlib.pyplot as plt
 
 We set a seed for each library where we will use stochastic functionalities.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 onp.random.seed(123)
 tf.random.set_seed(123)
 key = random.PRNGKey(123)
@@ -49,7 +71,7 @@ key = random.PRNGKey(123)
 
 On our machine it is necessary to further configure the GPU before training; this might not be necessary depending on individual machine and GPU/CUDA settings.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
 config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -60,7 +82,7 @@ Now we continue by loading the data, setting hyper-parameters and rescaling the 
 We try to balance between a large and a small (mini-)batch size since a larger choice usually leads to more robust updates while a smaller one leads to faster computation, in our view a (mini-)batch size of 256 is suitable. We wish to go over the full dataset 200 times, thus we calculate how many iterations are necessary depending on the chosen (mini-)batch size (here 39000 iterations). We set the burn-in phase to cover 90% of the iterations and only consider samples from the final 10% of the iterations (here 35100 burn-in iterations). Here also thinning will be applied so that a fixed number of parameters is accepted - in our case 20 parameters are accepted.
 For the learning rate we start with 0.001 (common choice for deep learning models) and calculate a final learning rate with a decay of 0.33.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Configuration parameters
 cached_batches = 10
 num_classes = 10
@@ -96,19 +118,18 @@ accepted_samples = 20
 
 Now we split the data. 50000, 5000 and 5000 images are used as training, validation and test datasets.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Split data and organize into DataLoaders
 train_loader = NumpyDataLoader(image=train_images, label=onp.squeeze(train_labels))
 test_loader = NumpyDataLoader(image=test_images[:test_labels.shape[0] // 2, :, :, :],
                               label=test_labels[:test_labels.shape[0] // 2, :])
 val_loader = NumpyDataLoader(image=test_images[test_labels.shape[0] // 2:, :, :, :],
                              label=test_labels[test_labels.shape[0] // 2:, :])
-
 ```
 
 Now we need to obtain an initial batch of data such that the neural network can be initialized with a batch. The `random_reference_data` function initialized data access and allows randomly drawing mini-batches; it returns functions for initialization of a new reference data state, for getting a minibatch from the data state and for releasing the DataLoader once all computations have been done.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
 val_batch_init, val_batch_get, val_release = data.random_reference_data(val_loader, cached_batches, batch_size)
 test_batch_init, test_batch_get, test_release = data.random_reference_data(test_loader, cached_batches, batch_size)
@@ -123,7 +144,7 @@ test_init_state, test_init_batch = test_batch_get(test_batch_init(), information
 
 Now the MobileNet architecture can be defined using the Haiku syntax.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 def init_mobilenet():
     @hk.transform
     def mobilenetv1(batch, is_training=True):
@@ -135,7 +156,7 @@ def init_mobilenet():
     return mobilenetv1.init, mobilenetv1.apply
 ```
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 init, apply_mobilenet = init_mobilenet()
 apply_mobilenet = jit(apply_mobilenet)
 init_params = init(key, init_batch)
@@ -143,7 +164,7 @@ init_params = init(key, init_batch)
 
 At this point we stop to see if we can apply the Mobilenet network to a minibatch of data and if the obtained logits make sense.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Sanity-check prediction
 logits = apply_mobilenet(init_params, None, init_batch)
 print(logits)
@@ -151,7 +172,7 @@ print(logits)
 
 Now we define the log-likelihood and log-prior. For multiclass classification the log-likelihood is the negative cross entropy. We set a log gaussian prior centered at 0 and with a standard deviation of 10 on the weights.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Initialize potential with log-likelihood
 def log_likelihood(sample, observations):
     logits = apply_mobilenet(sample["w"], None, observations)
@@ -178,7 +199,7 @@ if `has_state` is set to true.
 
 We want to sample the neural network parameters; we denote them as `'w'` and use the initial parameters as a starting sample.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 potential_fn = potential.minibatch_potential(prior=log_gaussian_prior,
                                              likelihood=log_likelihood,
                                              is_batched=True,
@@ -193,7 +214,7 @@ _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 
 Now we use the `alias.py` module to set up a [pSGLD sampler with an RMSProp preconditioner](https://arxiv.org/abs/1512.07666). The potential function, DataLoader for training, and a set of hyperparameters need to be passed in order to initialize the sampler. In this case a polynomial step size scheduler is used to control the learning rate and thinning is applied to accept only a fixed number of parameters.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Create pSGLD sampler (with RMSProp precodntioner)
 sampler = alias.sgld(potential_fn=potential_fn,
                      data_loader=train_loader,
@@ -209,7 +230,7 @@ sampler = alias.sgld(potential_fn=potential_fn,
 
 The sampler can now be used to sample parameters. We provide the number of iterations and run the MCMC sampling algorithm. We take the first (and only) chain indexed by `[0]` and from this we obtain the sampled variables.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Perform sampling
 results = sampler(sample, iterations=iterations)
 results = results[0]['samples']['variables']
@@ -223,7 +244,7 @@ Furthermore, we are interested in investigating if ensemble certainty correlates
 
 Finally, we observe how the ensemble predictions provide a gateway to UQ when making individual predictions. We take five images drawn at random from the dataset and plot the predicted probabilities as box-plots. This gives an insight into the uncertainty in the prediction.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 def evaluate_model(results, loader, evaluation="hard", dataset="training"):
     my_parameter_mapper, sth_to_remove = data.full_data_mapper(loader, 1, 1000)
 
@@ -317,7 +338,7 @@ def evaluate_model(results, loader, evaluation="hard", dataset="training"):
 
 We perform evaluation for the training, validation and test set separately.
 
-```{code-cell} ipython2
+```{code-cell} ipython3
 # Model evaluation
 evaluate_model(results, train_loader, dataset="training")
 evaluate_model(results, val_loader, dataset="validation")

@@ -9,7 +9,7 @@ jupytext:
     jupytext_version: 1.14.4
 kernelspec:
   display_name: Python 3
-  name: python3ci 
+  name: python3
 ---
 
 ```{raw-cell}
@@ -31,6 +31,6 @@ limitations under the License.
 ---
 ```
 
-# Cifar 10
+# Molecular Modeling: Force Matching
 
 Code coming soon.

@@ -45,7 +45,7 @@ To get started quickly using SGMCMC samplers, JaxSGMC provides some popular pre-
    :caption: Examples
 
    examples/cifar
-   examples/force_matching
+   examples/molecular_modeling
 
 
 .. toctree::

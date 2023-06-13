@@ -1,3 +1,15 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,mystnb,md,py
+#     text_representation:
+#       extension: .py
+#       format_name: light
+#       format_version: '1.5'
+#       jupytext_version: 1.14.6
+# ---
+
 import os
 import warnings
 
@@ -56,9 +68,9 @@ accepted_samples = 20
 # Split data and organize into DataLoaders
 train_loader = NumpyDataLoader(image=train_images, label=onp.squeeze(train_labels))
 train_batch_fn = data.random_reference_data(train_loader, cached_batches, batch_size)
-test_loader = NumpyDataLoader(image=test_images[:test_labels.shape[0] // 2, :, :, :],
+test_loader = NumpyDataLoader(image=test_images[:test_labels.shape[0] // 2, ::],
                               label=test_labels[:test_labels.shape[0] // 2, :])
-val_loader = NumpyDataLoader(image=test_images[test_labels.shape[0] // 2:, :, :, :],
+val_loader = NumpyDataLoader(image=test_images[test_labels.shape[0] // 2:, ::],
                              label=test_labels[test_labels.shape[0] // 2:, :])
 test_batch_init, test_batch_get, test_release = data.random_reference_data(test_loader, cached_batches, batch_size)
 val_batch_init, val_batch_get, val_release = data.random_reference_data(val_loader, cached_batches, batch_size)
@@ -108,11 +120,6 @@ def log_gaussian_prior(sample):
     priors = tree_map(gaussian, prior_params)
     return tree_math.Vector(priors).sum()
 
-
-# The likelihood accepts a batch of data, so no batching strategy is required, instead, is_batched must be set to true.
-# The likelihood signature changes from:   (Sample, Data) -> Likelihood
-#                                   to :   (State, Sample, Data) -> Likelihood, NewState
-# if has_state is set to true.
 # Construct potential
 potential_fn = potential.minibatch_potential(prior=log_gaussian_prior,
                                              likelihood=log_likelihood,

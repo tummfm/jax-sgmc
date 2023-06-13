@@ -167,11 +167,6 @@ def log_gaussian_prior(sample):
 
 We have defined the log-likelihood to accept a batch of data, and we take care to set the `is_batched=True` when calling `minibatch_potential`.
 
-It should be noted that it is possible to provide an additional state and then the log-likelihood signature would also consider a state parameter:
-The log-likelihood signature changes from:   (Sample, Data) -> Likelihood
-                                     to :   (State, Sample, Data) -> Likelihood, NewState
-if `has_state` is set to true.
-
 We want to sample the neural network parameters; we denote them as `'w'` and use the initial parameters as a starting sample.
 
 ```{code-cell} ipython3

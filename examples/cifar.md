@@ -114,9 +114,9 @@ Now we split the data. 50000, 5000 and 5000 images are used as training, validat
 ```{code-cell} ipython3
 # Split data and organize into DataLoaders
 train_loader = NumpyDataLoader(image=train_images, label=onp.squeeze(train_labels))
-test_loader = NumpyDataLoader(image=test_images[:test_labels.shape[0] // 2, :, :, :],
+test_loader = NumpyDataLoader(image=test_images[:test_labels.shape[0] // 2, ::],
                               label=test_labels[:test_labels.shape[0] // 2, :])
-val_loader = NumpyDataLoader(image=test_images[test_labels.shape[0] // 2:, :, :, :],
+val_loader = NumpyDataLoader(image=test_images[test_labels.shape[0] // 2:, ::],
                              label=test_labels[test_labels.shape[0] // 2:, :])
 ```
 

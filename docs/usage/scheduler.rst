@@ -1,7 +1,7 @@
 Setup Schedulers
 ==================
 
-A scheduler can be a combination of specific schedulers, which control only a single
+A scheduler is a combination of specific schedulers, which control only a single
 parameter, for example the step size.
 Specific schedulers for different variables are combined into a basic
 scheduler via :func:`jax_sgmc.scheduler.init_scheduler`, which updates all

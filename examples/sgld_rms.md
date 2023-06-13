@@ -1,6 +1,6 @@
 ---
 jupytext:
-  formats: examples///ipynb,docs//usage//md:myst
+  formats: examples///ipynb,examples///md:myst,docs//usage//ipynb
   main_language: python
   text_representation:
     extension: .md
@@ -60,7 +60,7 @@ and applies it to the same problem as described in {doc}`/quickstart/`.
 
 Schematically, a solver in **JaxSGMC** has the structure:
 
-![Structure of JaxSGMC](../../jax-sgmc-structure.svg)
+![Structure of JaxSGMC](https://raw.githubusercontent.com/tummfm/jax-sgmc/main/jax-sgmc-structure.svg)
 
 The SGLD solver with RMSprop adaption will make use of all modules.
 It is set up in these steps:

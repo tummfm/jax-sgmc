@@ -1,6 +1,6 @@
 ---
 jupytext:
-  formats: examples///ipynb,docs///md:myst
+  formats: examples///ipynb,examples///md:myst,docs///ipynb
   main_language: python
   text_representation:
     extension: .md

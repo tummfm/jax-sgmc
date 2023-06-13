@@ -44,7 +44,7 @@ To get started quickly using SGMCMC samplers, JaxSGMC provides some popular pre-
    :maxdepth: 2
    :caption: Examples
 
-   examples/cifar
+   examples/cifar.ipynb
    examples/molecular_modeling
 
 

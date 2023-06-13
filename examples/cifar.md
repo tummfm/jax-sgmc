@@ -1,6 +1,6 @@
 ---
 jupytext:
-  formats: examples///ipynb,docs//examples//md:myst
+  formats: examples///ipynb,examples///md:myst,docs//examples//ipynb
   main_language: python
   text_representation:
     extension: .md
@@ -9,7 +9,7 @@ jupytext:
     jupytext_version: 1.14.4
 kernelspec:
   display_name: Python 3
-  name: python3ci 
+  name: python3ci
 ---
 
 ```{raw-cell}

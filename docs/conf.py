@@ -66,6 +66,26 @@ intersphinx_mapping = {
     'jax': ('https://jax.readthedocs.io/en/latest/', None)
 }
 
+# -- MathJax ------------------------------------------------------------------
+
+mathjax3_config = {
+  "tex": {
+    "inlineMath": [['$', '$'], ['\\(', '\\)']]
+  },
+  "svg": {
+    "fontCache": 'global'
+  }
+}
+
+# -- MystNB ------------------------------------------------------------------
+
+myst_heading_anchors = 3
+
+nb_execution_excludepatterns = [
+  # Require long computations
+  'examples/*',
+]
+
 nb_render_priority = {
   "html": (
             "application/vnd.jupyter.widget-view+json",
@@ -100,17 +120,6 @@ nb_render_priority = {
             "text/latex",
             "text/plain",
   )
-}
-
-# -- MathJax ------------------------------------------------------------------
-
-mathjax3_config = {
-  "tex": {
-    "inlineMath": [['$', '$'], ['\\(', '\\)']]
-  },
-  "svg": {
-    "fontCache": 'global'
-  }
 }
 
 # -- Options for HTML output -------------------------------------------------

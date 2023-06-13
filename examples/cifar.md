@@ -149,8 +149,8 @@ train_batch_init, train_batch_get, _ = data.random_reference_data(
   train_loader, cached_batches, batch_size)
   
 init_train_data_state = train_batch_init()
-batch_state, (init_batch, info_batch) = train_batch_get(
-init_train_data_state, information=True)
+batch_data = train_batch_get(init_train_data_state, information=True)
+batch_state, (init_batch, info_batch) = batch_data
 
 # Do the same for the valdation and test data
 val_batch_init, val_batch_get, val_release = data.random_reference_data(
@@ -306,18 +306,18 @@ prediction.
 :tags: [hide-cell]
 
 # This function get the logits for a batch of images
-def fetch_logits(batch, mask, carry):
+def fetch_logits(batch, mask, carry, params=None):
   temp_logits = apply_mobilenet(params, None, batch, is_training=False)
   return temp_logits, carry + 1
   
 # Helper function to evaluate the accuracy for predictions which are more
 # certain than a given threshold 
-def threshold_accuracy(hard_class_pred, certainty, labels, certainty_threshold)
+def threshold_accuracy(hard_class_pred, certainty, labels, certainty_threshold):
   # Get the predictions with certainty above the threshold
   selected = onp.asarray(certainty >= certainty_threshold)
-  sel_hard_pred = hard_class_predictions[selected]
+  sel_hard_pred = hard_class_pred[selected]
   sel_labels = onp.squeeze(labels[selected])
-  return onp.sum(sel_hard_pred == self_labels) / onp.sum(selected)
+  return onp.sum(sel_hard_pred == sel_labels) / onp.sum(selected)
 
 def evaluate_model(results, loader, evaluation="hard", dataset="training"):
   # The full_data_mapper can apply the fetch_logits function to get the logits
@@ -337,7 +337,8 @@ def evaluate_model(results, loader, evaluation="hard", dataset="training"):
   for j in range(accepted_samples):
     params = tree_map(lambda x: jnp.array(x[j]), results['w'])
     # Collect logits
-    out, _ = my_parameter_mapper(fetch_logits, 0, masking=True)
+    out, _ = my_parameter_mapper(
+     partial(fetch_logits, params=params), 0, masking=True)
     logits_all[j, :, :] = out.reshape(-1, 10)
 
   # We now investigate the logits using the hard voting or soft voting approach.
@@ -368,7 +369,7 @@ def evaluate_model(results, loader, evaluation="hard", dataset="training"):
 
     # Evaluating accuracy when certainty is above a fixed threshold
     accuracy_over_certainty = []
-    for threshold in np.linspace(0.5, 1.0, 6):
+    for threshold in onp.linspace(0.5, 1.0, 6):
       # Select the correct labels
       if dataset == "validation":
         labels = test_labels[test_labels.shape[0] // 2:, :]

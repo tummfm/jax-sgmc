@@ -3,8 +3,8 @@ import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+# os.environ["CUDA_VISIBLE_DEVICES"] = str('0')  # needs to stay before importing jax
+# os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
 from jax import jit, random, numpy as jnp, scipy as jscipy, tree_map
 from jax_sgmc import data, potential, alias
@@ -21,9 +21,9 @@ onp.random.seed(123)
 tf.random.set_seed(123)
 key = random.PRNGKey(123)
 
-physical_devices = tf.config.experimental.list_physical_devices('GPU')
-assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
+# physical_devices = tf.config.experimental.list_physical_devices('GPU')
+# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+# config = tf.config.experimental.set_memory_growth(physical_devices[0], True)
 # Configuration parameters
 cached_batches = 10
 num_classes = 10

@@ -106,7 +106,7 @@ def mcmc(solver,
       saving_state,
       keep,
       solver_get(new_state),
-      scheduler_state=scheduler_states,  # why are the kwargs provided here? I think they're not used
+      scheduler_state=scheduler_states,
       solver_state=solver_state)
     # Update the scheduler with additional information from the integrator, such
     # as the acceptance ratio of AMAGOLD

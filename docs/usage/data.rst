@@ -42,7 +42,7 @@ an all-zero batch can be drawn from every DataLoader.
                  [0., 0.],
                  [0., 0.]], dtype=float32)}
 
-If no batch size is specified, a single observation is returned (all leaves
+If no batch size is specified, a single observation is returned (all leaves'
 shapes are reduced by the first axis).
 
   ::
@@ -60,7 +60,7 @@ Numpy Data Loader
   >>> from jax_sgmc import data
   >>> from jax_sgmc.data.numpy_loader import NumpyDataLoader
 
-First, we set up the dataset. This is very simply, as each array can be assigned
+First, we set up the dataset. This is very simple, as each array can be assigned
 as a keyword argument to the dataloader. The keywords of the single arrays form
 the keys of the pytree-dict, bundling all observations. Note that you can access
 the data supplied to the likelihood via the same keywords.
@@ -79,7 +79,7 @@ has an increased device memory consumption.
 
   >>> rd_init, rd_batch, _ = data.random_reference_data(data_loader, 100, 2)
 
-The Numpy Data Loader accepts keyword arguments in
+The ``NumpyDataLoader`` accepts keyword arguments in
 the init function to determine the starting points of the chains.
 
   >>> rd_state = rd_init(seed=0)
@@ -95,7 +95,7 @@ the init function to determine the starting points of the chains.
 Random Data Access
 ___________________
 
-The NumpyDataLoader provides three different methods to randomly select
+The ``NumpyDataLoader`` provides three different methods to randomly select
 observations:
 
 - Independent draw (default): Draw from all samples with replacement.
@@ -222,7 +222,7 @@ such that it is possible to compute the results for multiple exponents in a
   [ 10  45 285]
 
 It is also possible to store the ``CacheStates`` in the host memory, such that
-it is not necessary to carry the ``data state`` through all function calls.
+it is not necessary to carry the ``data_state`` through all function calls.
 The :func:`jax_sgmc.data.core.full_data_mapper` function does this, such that
 its usage is a little bit simpler:
 

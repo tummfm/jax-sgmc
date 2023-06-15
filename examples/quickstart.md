@@ -71,7 +71,7 @@ y^{(i)} \sim \mathcal{N}\left(\sum_{j=1}^d w_jx_j^{(i)}, \sigma^2\right)
 
 where $d \ll N$ such that we have a large amount of reference data.
 
-The reference data is generated such that the weights are correlated:
+The reference data are generated such that the weights are correlated:
 
 ```{math}
 u_1, u_2, u_3, u_4 \sim \mathcal{U}\left(-1, 1 \right)
@@ -123,8 +123,8 @@ when they are required.
 Therefore, reference data must be stored in a ``DataLoader`` class, which
 also takes care of batching and shuffling. 
 
-If the data fits into the host memory and is available as numpy arrays, then the
-``NumpyDataLoader`` can be used. It expects a single or multiple arrays where
+If the data fit into memory and are available as numpy arrays, then the
+``NumpyDataLoader`` can be used. It expects a single array or multiple arrays where
 all observations are concatenated along the first dimension. The arrays are
 passed as keyword-arguments and the batches are returned as a flat dictionary
 with the corresponding keys.
@@ -153,7 +153,7 @@ print(data_loader.initializer_batch(2))
 Note that the returned dictionary has the keys ``x`` and ``y``, just like the
 arrays have been passed to the ``NumpyDataLoader``.
 
-## Likelihood and Prior
+## (Log-)Likelihood and (Log-)Prior
 
 The model is connected to the solver via the (log-)prior and (log-)likelihood
 function. The model for our problem is:
@@ -165,7 +165,7 @@ def model(sample, observations):
     return jnp.dot(predictors, weights)
 ```
 
-**JaxSGMC** supports samples in the form of pytrees, so no flattering of e.g.
+**JaxSGMC** supports samples in the form of pytrees, so no flattening of e.g.
 Neural Net parameters is necessary. In our case we can separate the standard
 deviation, which is only part of the likelihood, from the weights by using a
 dictionary:
@@ -182,9 +182,9 @@ def prior(sample):
     
 ```
 
-The prior and likelihood are not passed to the solver directly, but 
+The (log-)prior and (log-)likelihood are not passed to the solver directly, but are
 first transformed into a (stochastic) potential.
-This allowed us to formulate the model and so the likelihood with only a single 
+This allowed us to formulate the model and also the log-likelihood with only a single 
 observation in mind and let **JaxSGMC** take care of evaluating it for a batch
 of observations. As the model is not computationally demanding, we let 
 **JaxSGMC** vectorize the evaluation of the likelihood:
@@ -196,7 +196,7 @@ potential_fn = potential.minibatch_potential(prior=prior,
 ```
 
 For more complex models it is also possible to sequentially evaluate the
-likelihood via ``"map"`` or to make use of multiple accelerators via ``"pmap"``.
+likelihood via ``strategy="map"`` or to make use of multiple accelerators via ``strategy="pmap"``.
 
 Note that it is also possible to write the likelihood for a batch of
 observations and that **JaxSGMC** also supports stateful models (see 
@@ -249,7 +249,7 @@ different modules.
 
 ## Comparison with NumPyro
 
-In the following section, we plot the results of the solver and compare it with
+In the following section, we plot the results of the solver and compare them with
 a solution returned by [NumPyro](https://github.com/pyro-ppl/numpyro).
 
 ### NumPyro Solution
@@ -279,10 +279,17 @@ w_npy = mcmc.get_samples()["weights"]
 ```{code-cell} ipython3
 :tags: [hide-input]
 
-plt.figure()
-plt.title("Sigma")
+w_npy = mcmc.get_samples()["weights"]
 
-plt.plot(onp.exp(results["log_sigma"]), label="RMSprop")
+fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(13, 6))
+
+ax1.set_title("σ")
+
+ax1.plot(onp.exp(results["log_sigma"]), label="RMSprop σ")
+ax1.plot([sigma]*onp.shape(results["log_sigma"])[0], label="True σ")
+ax1.set_xlabel("Sample Number")
+ax1.set_ylim([0.4, 0.6])
+ax1.legend()
 
 w_rms = results["w"]
 
@@ -299,14 +306,14 @@ p12d = onp.vstack([W1d.ravel(), W2d.ravel()])
 Z12d = onp.reshape(w12(p12d).T, W1d.shape)
 Z12d /= Z12d.max()
 
-plt.figure()
-plt.title("w_1 vs w_2 (rms)")
-
-plt.xlim([0.07, 0.12])
-plt.ylim([-0.525, -0.450])
-plt.contour(W1d, W2d, Z12d, levels, colors='red', linewidths=0.5)
-plt.plot(w_rms[:, 0], w_rms[:, 1], 'o', alpha=0.5, markersize=0.5, zorder=-1)
-
+ax2.set_xlabel("$w_1$")
+ax2.set_ylabel("$w_2$")
+ax2.set_title("$w_1$ vs $w_2$")
+ax2.set_xlim([0.07, 0.12])
+ax2.set_ylim([-0.515, -0.455])
+ax2.contour(W1d, W2d, Z12d, levels, colors='red', linewidths=0.5, label="Numpyro")
+ax2.plot(w_rms[:, 0], w_rms[:, 1], 'o', alpha=0.5, markersize=1, zorder=-1, label="RMSprop")
+ax2.legend()
 # w3 vs w4
 
 w34 = gaussian_kde(jnp.squeeze(w_npy[:, 2:4].transpose()))
@@ -317,8 +324,14 @@ p34d = onp.vstack([W3d.ravel(), W4d.ravel()])
 Z34d = onp.reshape(w34(p34d).T, W3d.shape)
 Z34d /= Z34d.max()
 
-plt.figure()
-plt.title("w_3 vs w_4 (rms)")
-plt.contour(W3d, W4d, Z34d, levels, colors='red', linewidths=0.5)
-plt.plot(w_rms[:, 2], w_rms[:, 3], 'o', alpha=0.5, markersize=0.5, zorder=-1)
+ax3.set_xlabel("$w_3$")
+ax3.set_ylabel("$w_4$")
+ax3.set_title("$w_3$ vs $w_4$")
+ax3.set_xlim([-0.27, -0.06])
+ax3.set_ylim([-0.70, -0.58])
+ax3.contour(W3d, W4d, Z34d, levels, colors='red', linewidths=0.5, label="Numpyro")
+ax3.plot(w_rms[:, 2], w_rms[:, 3], 'o', alpha=0.5, markersize=1, zorder=-1, label="RMSprop")
+ax3.legend()
+fig.tight_layout(pad=0.3)
+plt.show()
 ```

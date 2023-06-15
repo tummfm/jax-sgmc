@@ -35,7 +35,7 @@ By default, transformations are defined for some default types:
   - dict
   - (named)tuple
 
-Additionally, transformation for the following optional libraries are
+Additionally, transformations for the following optional libraries are
 implemented:
 
   - haiku._src.data_structures.FlatMapping

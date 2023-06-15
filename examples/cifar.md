@@ -30,15 +30,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ---
 ```
-# Image Classification on CIFAR-10
 
-In this example we will show how _JaxSGMC_ can be used to set up and train a 
-neural network. The objective is to perform image classification on the dataset 
-[CIFAR10](https://www.cs.toronto.edu/~kriz/cifar.html) which consists of 60000 
-32x32 images. We will use the [MobileNet](https://arxiv.org/abs/1704.04861) 
-architecture implemented by [Haiku](https://github.com/deepmind/dm-haiku).
+```{code-cell} ipython3
+:tags: [hide-cell]
 
-```python tags=["hide-cell"]
 import os
 import warnings
 
@@ -56,9 +51,18 @@ import numpy as onp
 import matplotlib.pyplot as plt
 ```
 
+# Image Classification on CIFAR-10
+
+In this example we will show how _JaxSGMC_ can be used to set up and train a 
+neural network. The objective is to perform image classification on the dataset 
+[CIFAR10](https://www.cs.toronto.edu/~kriz/cifar.html) which consists of 60000 
+32x32 images. We will use the [MobileNet](https://arxiv.org/abs/1704.04861) 
+architecture implemented by [Haiku](https://github.com/deepmind/dm-haiku).
+
+
 We set a seed for each library where we will use stochastic functionalities.
 
-```python
+```{code-cell} ipython3
 onp.random.seed(123)
 tf.random.set_seed(123)
 key = random.PRNGKey(123)
@@ -67,7 +71,7 @@ key = random.PRNGKey(123)
 Due to conflicts between JAX and TensorFlow we make sure that TensorFlow cannot 
 see any GPU devices.
 
-```python
+```{code-cell} ipython3
 tf.config.set_visible_devices([], device_type="GPU")
 ```
 
@@ -88,7 +92,7 @@ parameters is accepted - in our case 20 parameters are accepted.
 For the learning rate (step size) we start with 0.001 (common choice for deep 
 learning models) and calculate a final learning rate with a decay of 0.33.
 
-```python
+```{code-cell} ipython3
 # Configuration parameters
 cached_batches = 10
 num_classes = 10
@@ -125,7 +129,7 @@ accepted_samples = 20
 Now we split the data. 50000, 5000 and 5000 images are used as training, 
 validation and test datasets.
 
-```python
+```{code-cell} ipython3
 # Split data and organize into DataLoaders
 train_loader = NumpyDataLoader(image=train_images, label=onp.squeeze(train_labels))
 test_loader = NumpyDataLoader(image=test_images[:test_labels.shape[0] // 2, ::],
@@ -140,7 +144,7 @@ data access and allows randomly drawing mini-batches; it returns functions for
 initialization of a new reference data state, for getting a minibatch from the 
 data state and for releasing the DataLoader once all computations have been done.
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 # Initialize the random access to the training data
 train_batch_init, train_batch_get, _ = data.random_reference_data(
   train_loader, cached_batches, batch_size)
@@ -161,11 +165,9 @@ test_init_state, test_init_batch = test_batch_get(
   test_batch_init(), information=True)
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 Now the MobileNet architecture can be defined using the Haiku syntax.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 def init_mobilenet():
   @hk.transform
   def mobilenetv1(batch, is_training=True):
@@ -176,31 +178,27 @@ def init_mobilenet():
   return mobilenetv1.init, mobilenetv1.apply
 ```
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 init, apply_mobilenet = init_mobilenet()
 apply_mobilenet = jit(apply_mobilenet)
 init_params = init(key, init_batch)
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 At this we test whether we can apply the Mobilenet network to a minibatch of 
 data and if the obtained logits make sense.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 # Sanity-check prediction
 logits = apply_mobilenet(init_params, None, init_batch)
 print(logits)
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 Now we define the log-likelihood and log-prior.
 For multiclass classification the log-likelihood is the negative cross entropy.
 We set a log gaussian prior centered at 0 and with a standard deviation of 10 
 on the weights.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 # Initialize potential with log-likelihood
 def log_likelihood(sample, observations):
   logits = apply_mobilenet(sample["w"], None, observations)
@@ -221,15 +219,13 @@ def log_gaussian_prior(sample):
   return tree_math.Vector(priors).sum()
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 We have defined the log-likelihood to accept a batch of data, and we take care 
 to set the `is_batched=True` when calling `minibatch_potential`.
 
 We want to sample the neural network parameters; we denote them as `'w'` and use
 the initial parameters as a starting sample.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 potential_fn = potential.minibatch_potential(prior=log_gaussian_prior,
                                              likelihood=log_likelihood,
                                              is_batched=True,
@@ -242,16 +238,14 @@ sample = {"w": init_params}
 _, returned_likelihoods = potential_fn(sample, batch_data, likelihoods=True)
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 Now we use the `alias.py` module to set up a 
 [pSGLD sampler with an RMSProp preconditioner](https://arxiv.org/abs/1512.07666).
 The potential function, DataLoader for training, and a set of hyperparameters
 need to be passed in order to initialize the sampler.
 In this case a polynomial step size scheduler is used to control the learning
 rate and thinning is applied to accept only a fixed number of parameters.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
 # Create pSGLD sampler (with RMSProp preconditioner)
 sampler = alias.sgld(potential_fn=potential_fn,
                      data_loader=train_loader,
@@ -265,20 +259,19 @@ sampler = alias.sgld(potential_fn=potential_fn,
                      progress_bar=True)
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 The sampler can now be used to sample parameters.
 We provide the number of iterations and run the MCMC sampling algorithm.
 We take the first (and only) chain indexed by `[0]` and from this we obtain the
 sampled variables.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
+:tags: [hide-output]
+
 # Perform sampling
 results = sampler(sample, iterations=iterations)
 results = results[0]['samples']['variables']
 ```
 
-<!-- #region pycharm={"name": "#%% md\n"} -->
 Now the obtained samples provide 20 neural networks which we wish to evaluate.
 We define a function which performs the evaluation.
 Within this function we use the `full_data_mapper` from _JaxSGMC_ to map over
@@ -311,9 +304,10 @@ making individual predictions.
 We take five images drawn at random from the dataset and plot the predicted
 probabilities as box-plots. This gives an insight into the uncertainty in the
 prediction.
-<!-- #endregion -->
 
-```python pycharm={"name": "#%%\n"}
+```{code-cell} ipython3
+:tags: [hide-cell]
+
 # This function get the logits for a batch of images
 def fetch_logits(batch, mask, carry, params=None):
   temp_logits = apply_mobilenet(params, None, batch, is_training=False)
@@ -439,7 +433,7 @@ def evaluate_model(results, loader, evaluation="hard", dataset="training"):
 
 We perform evaluation for the training, validation and test set separately.
 
-```python
+```{code-cell} ipython3
 # Model evaluation
 evaluate_model(results, train_loader, dataset="training")
 evaluate_model(results, val_loader, dataset="validation")

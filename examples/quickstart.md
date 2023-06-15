@@ -247,12 +247,12 @@ For a full list of ready to use solvers see {doc}`/api/jax_sgmc.alias`.
 Moreover, it is possible to construct custom solvers by the combination of
 different modules.
 
-## Comparison with numpyro
+## Comparison with NumPyro
 
 In the following section, we plot the results of the solver and compare them with
-a solution returned by numpyro.
+a solution returned by [NumPyro](https://github.com/pyro-ppl/numpyro).
 
-### Numpyro Solution
+### NumPyro Solution
 
 ```{code-cell} ipython3
 def numpyro_model(y_obs=None):
@@ -293,7 +293,7 @@ ax1.legend()
 
 w_rms = results["w"]
 
-# Contours of numpyro solution
+# Contours of NumPyro solution
 
 levels = onp.linspace(0.1, 1.0, 5)
 
@@ -335,4 +335,3 @@ ax3.legend()
 fig.tight_layout(pad=0.3)
 plt.show()
 ```
-![Evaluation](linear_regression_results.jpg)

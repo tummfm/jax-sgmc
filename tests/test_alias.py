@@ -23,8 +23,6 @@ from scipy import stats as scpstats
 
 import pytest
 
-import matplotlib.pyplot as plt
-
 from jax_sgmc import data
 from jax_sgmc import potential
 from jax_sgmc import alias
@@ -42,7 +40,7 @@ def kolmogorov_smirnov_setup():
   x = sigma * random.normal(key, (samples, ))
 
   # No need for reference data
-  data_loader = data.numpy_loader.DeviceNumpyDataLoader(x=jnp.zeros((1, 1)))
+  data_loader = data.numpy_loader.DeviceNumpyDataLoader(x=jnp.zeros((2, 1)))
   batch_fn = data.random_reference_data(data_loader, 1, 1, verify_calls=True)
 
   def likelihood_fn(sample, _):
@@ -65,7 +63,6 @@ def kolmogorov_smirnov_setup():
     )
 
   return data_loader, batch_fn, potential_fn, full_potential_fn, x[0], check_fn
-
 
 
 @pytest.fixture
@@ -223,6 +220,30 @@ class TestAliasKolmogorovSmirnov:
     sampled = solver(init_sample, iterations=500)[0]["samples"]["variables"]
     assert_fn(sampled)
 
+  @pytest.mark.solver
+  def test_sghmc(self, kolmogorov_smirnov_setup):
+    data_loader, batch_fn, potential_fn, _, init_sample, assert_fn =\
+      kolmogorov_smirnov_setup
+
+    solver = alias.sghmc(
+      potential_fn,
+      data_loader,
+      cache_size=1,
+      batch_size=1,
+      integration_steps=5,
+      first_step_size=0.5,
+      last_step_size=0.1,
+      friction=0.995,
+      burn_in=100,
+      accepted_samples=100,
+      adapt_noise_model=False,
+    )
+
+    sampled = solver(init_sample, iterations=500)[0]["samples"]["variables"]
+
+    assert_fn(sampled)
+
+
 class TestAliasLinearRegression:
 
   @pytest.mark.solver
@@ -327,6 +348,30 @@ class TestAliasLinearRegression:
     )
 
     results = solver(w_init, iterations=50000)
+
+    # Check that the standard deviation is close
+    assert jnp.all(
+      jnp.abs(results[0]["samples"]["variables"]["sigma"] - 0.5) < 0.5)
+
+  @pytest.mark.solver
+  def test_sghmc(self, problem):
+    data_loader, batch_fn, potential_fn, _, w, w_init = problem
+
+    solver = alias.sghmc(
+      potential_fn,
+      data_loader,
+      cache_size=512,
+      batch_size=10,
+      integration_steps=5,
+      first_step_size=0.05,
+      last_step_size=0.001,
+      friction=0.5,
+      burn_in=5000,
+      adapt_noise_model=True,
+      diagonal_noise=False,
+    )
+
+    results = solver(w_init, iterations=10000)
 
     # Check that the standard deviation is close
     assert jnp.all(

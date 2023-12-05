@@ -917,7 +917,9 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
   # The information about the batches need to be static.
   mb_info = MiniBatchInformation(
     observation_count=total_observations,
-    batch_size=mb_size)
+    batch_size=mb_size,
+    mask=onp.ones(mb_size),
+  )
 
   def init_fn(offset: jnp.ndarray = 0):
     if offset >= total_observations:
@@ -929,7 +931,9 @@ def _full_reference_data_device(data_loader: DeviceDataLoader,
     return init_state
 
   def batch_fn(data_state: CacheState,
-               information: bool = False):
+               information: bool = False,
+               device_count: int = 1):
+    del device_count
     indices = jnp.mod(jnp.arange(mb_size) + data_state.current_line,
                       total_observations)
 

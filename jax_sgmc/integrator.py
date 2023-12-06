@@ -650,9 +650,8 @@ def friction_leapfrog(potential_fn: StochasticPotential,
       scaled_noise = tree_scale(jnp.sqrt(2 * parameters.step_size), reduced_noise)
     else:
       noise_state = None
-      scaled_noise = tree_scale(
-        jnp.sqrt(2 * friction * parameters.step_size),
-        noise)
+      scaled_noise = tree_scale(jnp.sqrt(2 * parameters.step_size), noise)
+      scaled_noise = tree_multiply(friction, scaled_noise)
     new_momentum = tree_add(new_momentum, scaled_noise)
 
     new_state = LeapfrogState(

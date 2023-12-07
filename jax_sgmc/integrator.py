@@ -606,21 +606,29 @@ def friction_leapfrog(potential_fn: StochasticPotential,
                 friction: PyTree,
                 mass: MassMatrix):
     del step
+    # Update the position with the momentum
     scaled_momentum = tensor_matmul(mass.inv, state.momentum)
     position_update = tree_scale(parameters.step_size, scaled_momentum)
     new_positions = tree_add(state.positions, position_update)
 
+    # Update the momentum in three steps
+    # 1. Momentum decays from friction
+    scaled_friction = tree_scale(-parameters.step_size, friction)
+    momentum_decay = tree_multiply(scaled_friction, scaled_momentum)
+    new_momentum = tree_add(state.momentum, momentum_decay)
+
+    # 2. Momentum changes due to forces (gradient of stochastic potential)
     data_state, mini_batch = get_data(state.data_state, information=True)
     (pot, model_state), gradient = stochastic_gradient(
       new_positions,
       mini_batch,
       state=state.model_state)
     scaled_gradient = tree_scale(-parameters.step_size, gradient)
-    scaled_friction = tree_scale(-parameters.step_size, friction)
-    decayed_momentum = tree_multiply(scaled_friction, scaled_momentum)
+    new_momentum = tree_add(new_momentum, scaled_gradient)
 
+    # 3. Injection of noise
     key, split = random.split(state.key)
-    noise = random_tree(split, decayed_momentum)
+    noise = random_tree(split, state.momentum)
     if noise_model:
       noise_state = update_noise_model(
         state.extra_fields,
@@ -629,9 +637,6 @@ def friction_leapfrog(potential_fn: StochasticPotential,
         friction,
         mini_batch=mini_batch,
         step_size=parameters.step_size)
-
-      key, split = random.split(state.key)
-      extra_noise = random_tree(split, decayed_momentum)
 
       noise_correction = get_noise_model(
         noise_state,
@@ -642,18 +647,12 @@ def friction_leapfrog(potential_fn: StochasticPotential,
         step_size=parameters.step_size,
         model_state=state.model_state)
       reduced_noise = tensor_matmul(noise_correction.cb_diff_sqrt, noise)
-      extra_noise = tensor_matmul(noise_correction.b_sqrt, extra_noise)
-      unscaled_noise = tree_add(reduced_noise, extra_noise)
-      scaled_noise = tree_scale(jnp.sqrt(2 * parameters.step_size), unscaled_noise)
+      scaled_noise = tree_scale(jnp.sqrt(2 * parameters.step_size), reduced_noise)
     else:
       noise_state = None
-      scaled_noise = tree_scale(
-        jnp.sqrt(2 * friction * parameters.step_size),
-        noise)
-
-    new_momentum = tree_add(
-      tree_add(decayed_momentum, scaled_gradient),
-      scaled_noise)
+      scaled_noise = tree_scale(jnp.sqrt(2 * parameters.step_size), noise)
+      scaled_noise = tree_multiply(friction, scaled_noise)
+    new_momentum = tree_add(new_momentum, scaled_noise)
 
     new_state = LeapfrogState(
       potential=pot,

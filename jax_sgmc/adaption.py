@@ -439,22 +439,19 @@ def fisher_information(minibatch_potential: Callable = None,
       # Apply the corrections to b
       b_corrected = friction - positive_correction
 
-      noise_scale_sqrt = jnp.sqrt(positive_correction)
-      scale_sqrt = jnp.sqrt(b_corrected)
+      noise_scale = jnp.sqrt(positive_correction)
+      scale = jnp.sqrt(b_corrected)
     else:
       v = 1 / (n - 1) * ssq
       b = 0.5 * step_size * v
-      eigw_cb, eigv_cb = jnp.linalg.eigh(jnp.diag(friction) - b)
-      noise_scale_sqrt = jnp.matmul(
-        jnp.transpose(eigv_cb),
-        jnp.matmul(jnp.diag(jnp.sqrt(eigw_cb)), eigv_cb))
 
-      eigw_b, eigv_b = jnp.linalg.eigh(b)
-      # Todo: More effective computation
-      scale_sqrt = jnp.matmul(
-        jnp.transpose(eigv_b),
-        jnp.matmul(jnp.diag(jnp.sqrt(eigw_b)), eigv_b))
+      # Using svd also works for positive semi-definite matrices
+      u_cb, s_cb, _ = jnp.linalg.svd(jnp.diag(friction) - b)
+      u, s, _ = jnp.linalg.svd(b)
 
-    return noise_scale_sqrt, scale_sqrt
+      noise_scale = jnp.dot(u_cb, jnp.sqrt(s_cb))
+      scale = jnp.dot(u, jnp.sqrt(s))
+
+    return noise_scale, scale
 
   return init, update, get

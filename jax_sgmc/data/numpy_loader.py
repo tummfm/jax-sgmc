@@ -62,6 +62,11 @@ class NumpyBase(DataLoader):
       self._observation_count = 0
 
   @property
+  def reference_data(self):
+    """Returns the reference data as a dictionary."""
+    return self._reference_data
+
+  @property
   def _format(self):
     """Returns shape and dtype of a single observation. """
     mb_format = {}

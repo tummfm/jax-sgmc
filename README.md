@@ -1,11 +1,11 @@
 # Modular Stochastic Gradient MCMC for Jax
 
-**[Introduction](#introduction) |
+**[Paper](https://www.sciencedirect.com/science/article/pii/S2352711024000931) | [Introduction](#introduction) |
 [Implemented Solvers](#quickstart-with-solvers-from-aliaspy) |
 [Features](#features) | [Installation](#installation) |
 [Contributing](#contributing)**
 
-[![CI](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml)
+[![CI](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tummfm/jax-sgmc/actions/workflows/ci.yml)
 [![Documentation Status](https://readthedocs.org/projects/jax-sgmc/badge/?version=latest)](https://jax-sgmc.readthedocs.io/en/latest/?badge=latest)
 [![PyPI version](https://badge.fury.io/py/jax-sgmc.svg)](https://badge.fury.io/py/jax-sgmc)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -131,3 +131,22 @@ make -C docs html
 
 Contributions are always welcome! Please open a pull request to discuss the code
 additions.
+
+## Citation
+
+If you use **JaxSGMC** in your own work, please consider citing
+
+```
+@article{jaxsgmc2024,
+title = {JaxSGMC: Modular stochastic gradient MCMC in JAX},
+journal = {SoftwareX},
+volume = {26},
+pages = {101722},
+year = {2024},
+issn = {2352-7110},
+doi = {https://doi.org/10.1016/j.softx.2024.101722},
+url = {https://www.sciencedirect.com/science/article/pii/S2352711024000931},
+author = {Stephan Thaler and Paul Fuchs and Ana Cukarska and Julija Zavadlav},
+}
+```
+

@@ -670,8 +670,6 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # and can be called via the host_callback.call function
   # The format of the mini batch is static.
 
-  print(f"Use the new host callback call.")
-
   hcb_format, mb_information = data_loader.batch_format(
     cached_batches_count, mb_size=mb_size)
   mask_shape = (cached_batches_count, mb_size)
@@ -1057,7 +1055,7 @@ def full_data_mapper(data_loader: DataLoader = None,
   def _free_cache_state(cache_state: CacheState, results: PyTree) -> Array:
     # Loop-through the results to hinder XLA to remove the tap call
     jxp.io_callback(
-      lambda cs, _: _helper.free_cache_state(cs),
+      lambda cs: _helper.free_cache_state(cs),
       None,
       cache_state
     )

@@ -38,7 +38,7 @@ from typing import Tuple, Any, Callable, Union, NamedTuple, Dict, Protocol, List
 import jax
 from jax import tree_util, lax
 import jax.numpy as jnp
-from jax.experimental import host_callback as hcb
+import jax.experimental as jxp
 
 import numpy as onp
 
@@ -415,7 +415,6 @@ class _Requests:
   def __call__(self,
                chain_id: int,
                token: JaxUUID,
-               device: jax.Device,
                callback_uuid: JaxUUID,
                device_count: int = 1,
                strict: bool = False):
@@ -439,12 +438,12 @@ class _Requests:
       # Check if token is invalid
       elif current_token != token.as_uuid and current_token is not None:
         if strict:
-          raise RuntimeError(f"Device {device} made an invalid request for "
+          raise RuntimeError(f"Invalid request for "
                              f"chain {chain_id}. This might be due to using a "
                              f"pmap in a jitted function. See "
                              f"usage/data.html#combining-pmap-and-jit in the "
                              f"docs.")
-        warnings.warn(f"Device {device} made an invalid request for chain "
+        warnings.warn(f"Invalid request for chain "
                       f"{chain_id}. This might be due to using a pmap in a "
                       f"jitted function. If the preservation ")
 
@@ -671,6 +670,8 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # and can be called via the host_callback.call function
   # The format of the mini batch is static.
 
+  print(f"Use the new host callback call.")
+
   hcb_format, mb_information = data_loader.batch_format(
     cached_batches_count, mb_size=mb_size)
   mask_shape = (cached_batches_count, mb_size)
@@ -679,12 +680,12 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   # of the returned data must be known before the first call. The chain id
   # determines whether the data is collected randomly or sequentially.
 
-  def get_data(req, device):
+  def get_data(req):
     chain_id, callback_uuid, token, device_count = req
     # The data request class takes care of assigning the request to the right
     # data loader and verifies it.
     (new_data, mask), new_token = _data_requests(
-      chain_id, token, device, callback_uuid, device_count,
+      chain_id, token, callback_uuid, device_count,
       strict=verify_calls)
     if mask is None:
       # Assume all samples to be valid. It is important to perform the creation
@@ -695,14 +696,22 @@ def _hcb_wrapper(data_loader: HostDataLoader,
   def _new_cache_fn(req: Tuple[CacheState, int]) -> CacheState:
     """This function is called if the cache must be refreshed."""
     state, device_count = req
-    new_data, masks, token = hcb.call(
-      get_data,
-      (state.chain_id, state.callback_uuid, state.token, device_count),
-      result_shape=(
+
+    result_shape_dtypes = tree_util.tree_map(
+      lambda x: jax.ShapeDtypeStruct(
+        shape=x.shape, dtype=jax.dtypes.canonicalize_dtype(x.dtype)
+      ),
+      (
         hcb_format,
         jax.ShapeDtypeStruct(shape=mask_shape, dtype=jnp.bool_),
-        JaxUUID()),
-      call_with_device=True)
+        JaxUUID()
+      )
+    )
+    new_data, masks, token = jxp.io_callback(
+      get_data,
+      result_shape_dtypes,
+      (state.chain_id, state.callback_uuid, state.token, device_count),
+    )
     new_state = CacheState(
       cached_batches_count=state.cached_batches_count,
       cached_batches=new_data,
@@ -1038,18 +1047,20 @@ def full_data_mapper(data_loader: DataLoader = None,
 
   # Helper functions to load/save the CacheStates on the host via host_callback
   def _get_state() -> CacheState:
-    cache_state = hcb.call(
+    cache_state = jxp.io_callback(
       lambda _: _helper.get_cache_state(),
-      jnp.array(1.0),
-      result_shape=_helper.get_cache_state_format)
+      _helper.get_cache_state_format,
+      jnp.array(1.0)
+    )
     return cache_state
 
   def _free_cache_state(cache_state: CacheState, results: PyTree) -> Array:
     # Loop-through the results to hinder XLA to remove the tap call
-    results = hcb.id_tap(
+    jxp.io_callback(
       lambda cs, _: _helper.free_cache_state(cs),
-      cache_state,
-      result=results)
+      None,
+      cache_state
+    )
     return results
 
   def mapper_fn(fun: Union[MaskedMappedFunction, UnmaskedMappedFunction],

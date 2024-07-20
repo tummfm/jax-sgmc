@@ -1056,7 +1056,7 @@ def full_data_mapper(data_loader: DataLoader = None,
     # Loop-through the results to hinder XLA to remove the tap call
     jxp.io_callback(
       lambda cs: _helper.free_cache_state(cs),
-      None,
+      jnp.array(1.0),
       cache_state
     )
     return results
